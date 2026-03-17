@@ -1,0 +1,93 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+<section class="mb-3">
+    <h2 class="panel-title fs-5 mb-1">{{ form_title }}</h2>
+    <p class="panel-muted mb-0">{{ form_subtitle }}</p>
+</section>
+
+<section class="panel-card">
+    {% if form.non_field_errors %}
+        <div class="alert alert-danger" role="alert">
+            {% for error in form.non_field_errors %}
+                {{ error }}
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <form method="post" novalidate>
+        {% csrf_token %}
+
+        <div class="row g-3">
+            <div class="col-12 col-lg-6">
+                <label for="{{ form.provider.id_for_label }}" class="form-label fw-semibold">{{ form.provider.label }}</label>
+                {{ form.provider }}
+                {% for error in form.provider.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+
+            <div class="col-12 col-lg-6">
+                <label for="{{ form.name.id_for_label }}" class="form-label fw-semibold">{{ form.name.label }}</label>
+                {{ form.name }}
+                {% for error in form.name.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+
+            <div class="col-12 col-lg-6">
+                <label for="{{ form.slug.id_for_label }}" class="form-label fw-semibold">{{ form.slug.label }}</label>
+                {{ form.slug }}
+                {% for error in form.slug.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+
+            <div class="col-12 col-lg-6">
+                <label for="{{ form.context_window.id_for_label }}" class="form-label fw-semibold">{{ form.context_window.label }}</label>
+                {{ form.context_window }}
+                {% for error in form.context_window.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+
+            <div class="col-12 col-lg-6">
+                <label for="{{ form.input_cost_per_1k.id_for_label }}" class="form-label fw-semibold">{{ form.input_cost_per_1k.label }}</label>
+                {{ form.input_cost_per_1k }}
+                {% for error in form.input_cost_per_1k.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+
+            <div class="col-12 col-lg-6">
+                <label for="{{ form.output_cost_per_1k.id_for_label }}" class="form-label fw-semibold">{{ form.output_cost_per_1k.label }}</label>
+                {{ form.output_cost_per_1k }}
+                {% for error in form.output_cost_per_1k.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+
+            <div class="col-12">
+                <label for="{{ form.description.id_for_label }}" class="form-label fw-semibold">{{ form.description.label }}</label>
+                {{ form.description }}
+                {% for error in form.description.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="form-check form-switch my-4">
+            {{ form.is_active }}
+            <label for="{{ form.is_active.id_for_label }}" class="form-check-label">{{ form.is_active.label }}</label>
+            {% for error in form.is_active.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+        </div>
+
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-dark">{{ submit_label }}</button>
+            <a href="{% url 'models_catalog:list' %}" class="btn btn-outline-secondary">Voltar</a>
+        </div>
+    </form>
+</section>
+{% endblock %}
