@@ -1,0 +1,44 @@
+<aside class="admin-sidebar" id="adminSidebar">
+    <div class="sidebar-logo">
+        <span class="logo-mark">N</span>
+        <div>
+            <strong>NEF IA</strong>
+            <small>Admin Panel</small>
+        </div>
+    </div>
+
+    <nav class="sidebar-nav">
+        <a class="sidebar-link {% if active_menu == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">
+            <i class="bi bi-grid-1x2"></i>
+            <span>Dashboard</span>
+        </a>
+        <a class="sidebar-link {% if active_menu == 'providers' %}active{% endif %}" href="#">
+            <i class="bi bi-diagram-3"></i>
+            <span>Providers</span>
+        </a>
+        <a class="sidebar-link {% if active_menu == 'modelos' %}active{% endif %}" href="#">
+            <i class="bi bi-boxes"></i>
+            <span>Modelos</span>
+        </a>
+        <a class="sidebar-link {% if active_menu == 'credenciais' %}active{% endif %}" href="#">
+            <i class="bi bi-key"></i>
+            <span>Credenciais</span>
+        </a>
+        <a class="sidebar-link {% if active_menu == 'operacoes' %}active{% endif %}" href="#">
+            <i class="bi bi-gear-wide-connected"></i>
+            <span>Operações</span>
+        </a>
+        <a class="sidebar-link {% if active_menu == 'execucoes' %}active{% endif %}" href="#">
+            <i class="bi bi-play-circle"></i>
+            <span>Execuções</span>
+        </a>
+        <a class="sidebar-link {% if active_menu == 'arquivos' %}active{% endif %}" href="#">
+            <i class="bi bi-folder2-open"></i>
+            <span>Arquivos</span>
+        </a>
+        <a class="sidebar-link {% if active_menu == 'configuracoes' %}active{% endif %}" href="#">
+            <i class="bi bi-sliders"></i>
+            <span>Configurações</span>
+        </a>
+    </nav>
+</aside>

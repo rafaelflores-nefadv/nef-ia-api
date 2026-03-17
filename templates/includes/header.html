@@ -1,0 +1,44 @@
+{% load admin_extras %}
+<header class="admin-header">
+    <div class="header-left">
+        <button class="btn btn-outline-secondary d-lg-none" type="button" data-sidebar-toggle>
+            <i class="bi bi-list"></i>
+        </button>
+        <h1 class="header-title">{{ page_title|default:"Painel Administrativo" }}</h1>
+    </div>
+
+    <div class="header-right">
+        <div class="dropdown">
+            <button class="header-icon-btn" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-bell"></i>
+                <span class="notification-dot"></span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0">
+                <li><h6 class="dropdown-header">Notificações</h6></li>
+                <li><span class="dropdown-item-text">Fila de execuções estável</span></li>
+                <li><span class="dropdown-item-text">Sem alertas críticos</span></li>
+            </ul>
+        </div>
+
+        <div class="dropdown">
+            <button class="user-trigger" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                <span class="avatar-circle">{{ request.user|initials }}</span>
+                <span class="d-none d-sm-inline">{{ request.user.get_full_name|default:request.user.username }}</span>
+                <i class="bi bi-chevron-down small"></i>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0">
+                <li><a class="dropdown-item" href="#">Meu perfil</a></li>
+                <li><a class="dropdown-item" href="#">Alterar senha</a></li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item text-danger" href="#" onclick="event.preventDefault(); document.getElementById('logoutForm').submit();">
+                        Logout
+                    </a>
+                    <form id="logoutForm" action="{% url 'logout' %}" method="post" class="d-none">
+                        {% csrf_token %}
+                    </form>
+                </li>
+            </ul>
+        </div>
+    </div>
+</header>
