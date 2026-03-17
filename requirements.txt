@@ -1,0 +1,17 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic-settings==2.10.1
+SQLAlchemy==2.0.42
+alembic==1.16.4
+psycopg[binary]==3.2.9
+redis==6.2.0
+python-json-logger==3.3.0
+pytest==8.4.1
+httpx==0.28.1
+bcrypt==4.3.0
+PyJWT==2.10.1
+python-multipart==0.0.20
+dramatiq[redis]==1.18.0
+openpyxl==3.1.5
+pypdf==5.9.0
+cryptography==44.0.1

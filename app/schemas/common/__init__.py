@@ -1,0 +1,2 @@
+"""Common shared schemas."""
+

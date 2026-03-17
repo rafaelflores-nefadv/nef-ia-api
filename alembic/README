@@ -1,0 +1,6 @@
+Single-database Alembic configuration for NEF IA API.
+
+Important:
+- Alembic targets only API-owned tables (metadata from OperationalBase).
+- Shared general-system tables are intentionally excluded from migrations.
+
