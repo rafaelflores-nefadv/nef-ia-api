@@ -6,9 +6,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import get_settings
 
 settings = get_settings()
+shared_database_url = settings.resolved_shared_database_url
 
 shared_engine = create_engine(
-    settings.resolved_shared_database_url,
+    shared_database_url,
     pool_pre_ping=True,
     echo=settings.sqlalchemy_echo,
 )
@@ -37,4 +38,3 @@ def check_shared_database() -> bool:
 
 def dispose_shared_engine() -> None:
     shared_engine.dispose()
-

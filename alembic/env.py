@@ -2,6 +2,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine import make_url
 
 from app.core.config import get_settings
 from app.db.base import OperationalBase
@@ -9,7 +10,14 @@ from app.models import operational  # noqa: F401
 
 settings = get_settings()
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+
+resolved_database_url = settings.resolved_database_url
+if not isinstance(resolved_database_url, str) or not resolved_database_url.strip():
+    raise RuntimeError("Database URL for Alembic must be a non-empty string.")
+
+resolved_database_url = resolved_database_url.strip()
+make_url(resolved_database_url)
+config.set_main_option("sqlalchemy.url", resolved_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

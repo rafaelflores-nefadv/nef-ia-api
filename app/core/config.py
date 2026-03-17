@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     @property
     def resolved_database_url(self) -> str:
         if self.database_url and self.database_url.strip():
-            return self.database_url
+            return self.database_url.strip()
         return self._build_pg_url(
             host=self.db_host,
             port=self.db_port,
@@ -107,7 +107,7 @@ class Settings(BaseSettings):
     @property
     def resolved_shared_database_url(self) -> str:
         if self.shared_database_url and self.shared_database_url.strip():
-            return self.shared_database_url
+            return self.shared_database_url.strip()
 
         if all(
             [

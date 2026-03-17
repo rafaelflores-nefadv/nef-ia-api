@@ -6,9 +6,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import get_settings
 
 settings = get_settings()
+database_url = settings.resolved_database_url
 
 engine = create_engine(
-    settings.database_url,
+    database_url,
     pool_pre_ping=True,
     echo=settings.sqlalchemy_echo,
 )
@@ -32,4 +33,3 @@ def check_operational_database() -> bool:
 
 def dispose_operational_engine() -> None:
     engine.dispose()
-
