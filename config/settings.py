@@ -17,6 +17,7 @@ INSTALLED_APPS = [
     "accounts",
     "providers",
     "models_catalog",
+    "credentials",
 ]
 
 MIDDLEWARE = [
