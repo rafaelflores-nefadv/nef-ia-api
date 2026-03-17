@@ -17,7 +17,7 @@ if not isinstance(resolved_database_url, str) or not resolved_database_url.strip
 
 resolved_database_url = resolved_database_url.strip()
 make_url(resolved_database_url)
-config.set_main_option("sqlalchemy.url", resolved_database_url)
+config.set_main_option("sqlalchemy.url", resolved_database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
