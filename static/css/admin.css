@@ -251,6 +251,30 @@ body {
     color: #991b1b;
 }
 
+.status-neutral {
+    background: #e5e7eb;
+    color: #374151;
+}
+
+.admin-table th {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7280;
+    background: #fafafa;
+    border-bottom-width: 1px;
+}
+
+.admin-table td,
+.admin-table th {
+    border-color: var(--border-color);
+    padding: 0.88rem 0.9rem;
+}
+
+.admin-messages .alert {
+    border-radius: 12px;
+}
+
 .sidebar-backdrop {
     position: fixed;
     inset: 0;

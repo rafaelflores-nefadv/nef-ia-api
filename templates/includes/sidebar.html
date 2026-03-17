@@ -1,4 +1,4 @@
-<aside class="admin-sidebar" id="adminSidebar">
+﻿<aside class="admin-sidebar" id="adminSidebar">
     <div class="sidebar-logo">
         <span class="logo-mark">N</span>
         <div>
@@ -12,7 +12,7 @@
             <i class="bi bi-grid-1x2"></i>
             <span>Dashboard</span>
         </a>
-        <a class="sidebar-link {% if active_menu == 'providers' %}active{% endif %}" href="#">
+        <a class="sidebar-link {% if active_menu == 'providers' %}active{% endif %}" href="{% url 'providers:list' %}">
             <i class="bi bi-diagram-3"></i>
             <span>Providers</span>
         </a>
@@ -26,11 +26,11 @@
         </a>
         <a class="sidebar-link {% if active_menu == 'operacoes' %}active{% endif %}" href="#">
             <i class="bi bi-gear-wide-connected"></i>
-            <span>Operações</span>
+            <span>Operacoes</span>
         </a>
         <a class="sidebar-link {% if active_menu == 'execucoes' %}active{% endif %}" href="#">
             <i class="bi bi-play-circle"></i>
-            <span>Execuções</span>
+            <span>Execucoes</span>
         </a>
         <a class="sidebar-link {% if active_menu == 'arquivos' %}active{% endif %}" href="#">
             <i class="bi bi-folder2-open"></i>
@@ -38,7 +38,7 @@
         </a>
         <a class="sidebar-link {% if active_menu == 'configuracoes' %}active{% endif %}" href="#">
             <i class="bi bi-sliders"></i>
-            <span>Configurações</span>
+            <span>Configuracoes</span>
         </a>
     </nav>
 </aside>
