@@ -1,0 +1,127 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "files_admin:list" as files_list_url %}
+{% include "includes/page_header.html" with header_title="Arquivos" header_subtitle=page_subtitle breadcrumb_current="Arquivos" header_side_text=list_counter_label %}
+
+<section class="mb-3 d-flex flex-column gap-2">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+        {% include "includes/data_origin_badge.html" with source=integration_source %}
+    </div>
+    {% if integration_source == "api" %}
+        <small class="admin-note">Origem atual: dados reais de arquivos agregados da FastAPI.</small>
+    {% else %}
+        <small class="admin-note">Origem atual: fallback local para manter a operacao do painel.</small>
+    {% endif %}
+</section>
+
+{% if integration_warnings %}
+    <section class="panel-card mb-3">
+        <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle">
+            <strong class="d-block mb-1">Avisos de integracao</strong>
+            <ul class="mb-0 small">
+                {% for warning in integration_warnings %}
+                    <li>{{ warning }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </section>
+{% endif %}
+
+<section class="panel-card mb-3">
+    <form method="get" class="row g-2">
+        <div class="col-12 col-md-6 col-lg-3">
+            <label class="form-label small fw-semibold mb-1">Status</label>
+            <select name="status" class="form-select">
+                {% for value, label in status_options %}
+                    <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-6 col-lg-3">
+            <label class="form-label small fw-semibold mb-1">Tipo</label>
+            <select name="tipo" class="form-select">
+                <option value="">Todos os tipos</option>
+                {% for type_value in type_options %}
+                    <option value="{{ type_value }}" {% if selected_type == type_value %}selected{% endif %}>{{ type_value|upper }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-6 col-lg-3">
+            <label class="form-label small fw-semibold mb-1">Execucao</label>
+            <select name="execucao" class="form-select">
+                <option value="">Todas as execucoes</option>
+                {% for execution_id in execution_options %}
+                    <option value="{{ execution_id }}" {% if selected_execution == execution_id %}selected{% endif %}>{{ execution_id }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-6 col-lg-3">
+            <label class="form-label small fw-semibold mb-1">Busca</label>
+            <input
+                type="text"
+                name="q"
+                class="form-control"
+                placeholder="ID ou nome do arquivo"
+                value="{{ search_query }}"
+            >
+        </div>
+        <div class="col-12 d-flex gap-2">
+            <button type="submit" class="btn btn-dark">Filtrar</button>
+            <a href="{{ files_list_url }}" class="btn btn-outline-secondary">Limpar</a>
+        </div>
+    </form>
+</section>
+
+<section class="panel-card p-0 overflow-hidden">
+    {% if files %}
+        <div class="table-responsive">
+            <table class="table admin-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Arquivo</th>
+                        <th>Tipo</th>
+                        <th>Tamanho</th>
+                        <th>Execucao</th>
+                        <th>Status</th>
+                        <th>Origem</th>
+                        <th>Criado em</th>
+                        <th class="text-end">Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for file_item in files %}
+                        <tr>
+                            <td><code>{{ file_item.id }}</code></td>
+                            <td>
+                                <div class="fw-semibold">{{ file_item.name|default:"-" }}</div>
+                                <small class="text-secondary">{{ file_item.summary|default:"-"|truncatechars:70 }}</small>
+                            </td>
+                            <td>{{ file_item.type|default:"-"|upper }}</td>
+                            <td>{{ file_item.size_display|default:"-" }}</td>
+                            <td><code>{{ file_item.execution_id|default:"-" }}</code></td>
+                            <td><span class="status-pill {{ file_item.status_css_class }}">{{ file_item.status_label }}</span></td>
+                            <td>{{ file_item.source|default:"-" }}</td>
+                            <td>{{ file_item.created_at|date:"d/m/Y H:i:s"|default:"-" }}</td>
+                            <td class="text-end">
+                                <div class="table-actions">
+                                    <a href="{% url 'files_admin:detail' file_item.id %}" class="btn btn-sm btn-outline-secondary">Ver detalhe</a>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="p-2">
+            {% if total_count > 0 %}
+                {% include "includes/empty_state.html" with empty_icon="bi bi-funnel" empty_title="Nenhum arquivo com os filtros atuais" empty_message="Ajuste os filtros aplicados para encontrar os arquivos desejados." empty_action_url=files_list_url empty_action_label="Limpar filtros" empty_action_icon="bi bi-arrow-counterclockwise" %}
+            {% else %}
+                {% include "includes/empty_state.html" with empty_icon="bi bi-folder2-open" empty_title="Nenhum arquivo disponivel" empty_message="Ainda nao existem arquivos para exibir nesta integracao." %}
+            {% endif %}
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

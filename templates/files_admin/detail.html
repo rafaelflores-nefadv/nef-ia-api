@@ -1,0 +1,108 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "files_admin:list" as files_list_url %}
+{% include "includes/page_header.html" with header_title="Detalhe do arquivo" header_subtitle=file_item.id breadcrumb_parent_label="Arquivos" breadcrumb_parent_url=files_list_url breadcrumb_current="Detalhe" header_action_url=files_list_url header_action_label="Voltar para listagem" header_action_variant="btn-outline-secondary" %}
+
+<section class="mb-3 d-flex flex-column gap-2">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+        {% include "includes/data_origin_badge.html" with source=integration_source %}
+    </div>
+    {% if integration_source == "api" %}
+        <small class="admin-note">Detalhe construido com dados reais retornados pela FastAPI.</small>
+    {% else %}
+        <small class="admin-note">Detalhe exibido em fallback local para manter continuidade operacional.</small>
+    {% endif %}
+</section>
+
+{% if integration_limitation or integration_warnings %}
+    <section class="panel-card mb-3">
+        {% if integration_limitation %}
+            <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle mb-2">
+                <span class="small">{{ integration_limitation }}</span>
+            </div>
+        {% endif %}
+        {% if integration_warnings %}
+            <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle">
+                <strong class="d-block mb-1">Avisos de integracao</strong>
+                <ul class="mb-0 small">
+                    {% for warning in integration_warnings %}
+                        <li>{{ warning }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+    </section>
+{% endif %}
+
+<section class="row g-3 mb-3">
+    <div class="col-12 col-md-6 col-xl-3">
+        <article class="metric-card">
+            <p class="metric-label">Status</p>
+            <h3 class="metric-value"><span class="status-pill {{ file_item.status_css_class }}">{{ file_item.status_label }}</span></h3>
+        </article>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <article class="metric-card">
+            <p class="metric-label">Tipo</p>
+            <h3 class="metric-value">{{ file_item.type|default:"-"|upper }}</h3>
+        </article>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <article class="metric-card">
+            <p class="metric-label">Tamanho</p>
+            <h3 class="metric-value">{{ file_item.size_display|default:"-" }}</h3>
+        </article>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <article class="metric-card">
+            <p class="metric-label">Execucao relacionada</p>
+            <h3 class="metric-value"><code>{{ file_item.execution_id|default:"-" }}</code></h3>
+        </article>
+    </div>
+</section>
+
+<section class="row g-3">
+    <div class="col-12 col-xl-8">
+        <article class="panel-card h-100">
+            <div class="panel-title-wrap">
+                <h3 class="panel-title">Informacoes do arquivo</h3>
+            </div>
+            <dl class="row mb-0">
+                <dt class="col-sm-4 text-secondary">Nome</dt>
+                <dd class="col-sm-8">{{ file_item.name|default:"-" }}</dd>
+
+                <dt class="col-sm-4 text-secondary">Origem</dt>
+                <dd class="col-sm-8">{{ file_item.source|default:"-" }}</dd>
+
+                <dt class="col-sm-4 text-secondary">Criado em</dt>
+                <dd class="col-sm-8">{{ file_item.created_at|date:"d/m/Y H:i:s"|default:"-" }}</dd>
+
+                <dt class="col-sm-4 text-secondary">Path tecnico</dt>
+                <dd class="col-sm-8"><code>{{ file_item.storage_path|default:"-" }}</code></dd>
+            </dl>
+        </article>
+    </div>
+
+    <div class="col-12 col-xl-4">
+        <article class="panel-card h-100">
+            <div class="panel-title-wrap">
+                <h3 class="panel-title">Resumo e acoes</h3>
+            </div>
+            <p class="mb-3">{{ file_item.summary|default:"-" }}</p>
+            <button type="button" class="btn btn-outline-secondary w-100 mb-3" disabled>Download (simulado)</button>
+
+            {% if file_item.has_error %}
+                <div class="border rounded-3 p-2 border-danger-subtle bg-danger-subtle">
+                    <strong class="d-block mb-1">Erro</strong>
+                    <span class="small">{{ file_item.error_message }}</span>
+                </div>
+            {% else %}
+                <div class="border rounded-3 p-2 border-success-subtle bg-success-subtle">
+                    <span class="small">Sem erro tecnico associado a este arquivo.</span>
+                </div>
+            {% endif %}
+        </article>
+    </div>
+</section>
+{% endblock %}

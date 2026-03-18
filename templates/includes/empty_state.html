@@ -1,0 +1,18 @@
+<section class="panel-card admin-empty-state">
+    <div class="empty-state-icon">
+        <i class="{{ empty_icon|default:'bi bi-inboxes' }}"></i>
+    </div>
+    <h3 class="empty-state-title">{{ empty_title|default:"Sem registros" }}</h3>
+    <p class="empty-state-message mb-0">{{ empty_message|default:"Nenhum dado encontrado no momento." }}</p>
+
+    {% if empty_action_url and empty_action_label %}
+        <div class="mt-3">
+            <a href="{{ empty_action_url }}" class="btn btn-dark">
+                {% if empty_action_icon %}
+                    <i class="{{ empty_action_icon }} me-1"></i>
+                {% endif %}
+                {{ empty_action_label }}
+            </a>
+        </div>
+    {% endif %}
+</section>

@@ -24,15 +24,15 @@
             <i class="bi bi-key"></i>
             <span>Credenciais</span>
         </a>
-        <a class="sidebar-link {% if active_menu == 'operacoes' %}active{% endif %}" href="#">
+        <a class="sidebar-link {% if active_menu == 'operacoes' %}active{% endif %}" href="{% url 'operations:status' %}">
             <i class="bi bi-gear-wide-connected"></i>
             <span>Operacoes</span>
         </a>
-        <a class="sidebar-link {% if active_menu == 'execucoes' %}active{% endif %}" href="#">
+        <a class="sidebar-link {% if active_menu == 'execucoes' %}active{% endif %}" href="{% url 'executions:list' %}">
             <i class="bi bi-play-circle"></i>
             <span>Execucoes</span>
         </a>
-        <a class="sidebar-link {% if active_menu == 'arquivos' %}active{% endif %}" href="#">
+        <a class="sidebar-link {% if active_menu == 'arquivos' %}active{% endif %}" href="{% url 'files_admin:list' %}">
             <i class="bi bi-folder2-open"></i>
             <span>Arquivos</span>
         </a>

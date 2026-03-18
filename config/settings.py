@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 
@@ -18,6 +19,9 @@ INSTALLED_APPS = [
     "providers",
     "models_catalog",
     "credentials",
+    "operations",
+    "executions",
+    "files_admin",
 ]
 
 MIDDLEWARE = [
@@ -80,6 +84,10 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://127.0.0.1:8000")
+FASTAPI_TIMEOUT_SECONDS = float(os.getenv("FASTAPI_TIMEOUT_SECONDS", "2.5"))
+FASTAPI_ADMIN_TOKEN = os.getenv("FASTAPI_ADMIN_TOKEN", "")
 
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard"

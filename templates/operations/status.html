@@ -1,0 +1,104 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% include "includes/page_header.html" with header_title="Operacoes" header_subtitle=page_subtitle breadcrumb_current="Operacoes" %}
+
+<section class="mb-4">
+    <div class="d-flex flex-wrap gap-2 mb-3">
+        <span class="status-pill {{ health_overall.status_css_class }}">Saude geral: {{ health_overall.status_label }}</span>
+        <span class="status-pill {{ health_live.status_css_class }}">Live: {{ health_live.status_label }}</span>
+        <span class="status-pill {{ health_ready.status_css_class }}">Ready: {{ health_ready.status_label }}</span>
+    </div>
+
+    {% if health_errors %}
+        <p class="admin-note mb-3">Integracao em degradacao: {{ health_errors|join:", " }}</p>
+    {% else %}
+        <p class="admin-note mb-3">Dados de saude consultados em tempo real na FastAPI.</p>
+    {% endif %}
+
+    <div class="row g-3">
+        {% for card in summary_cards %}
+            <div class="col-12 col-md-6 col-xl-4">
+                <article class="metric-card">
+                    <p class="metric-label">{{ card.label }}</p>
+                    <h3 class="metric-value">{{ card.value }}</h3>
+                </article>
+            </div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="row g-3 mb-3">
+    <div class="col-12 col-xl-6">
+        <article class="panel-card h-100">
+            <div class="panel-title-wrap">
+                <h3 class="panel-title">Saude do catalogo</h3>
+            </div>
+            <div class="d-grid gap-2">
+                {% for item in catalog_health %}
+                    <div class="d-flex align-items-center justify-content-between border rounded-3 p-2">
+                        <span class="text-secondary small">{{ item.label }}</span>
+                        {% if item.value > 0 %}
+                            <span class="status-pill status-warning">{{ item.value }}</span>
+                        {% else %}
+                            <span class="status-pill status-success">0</span>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            </div>
+        </article>
+    </div>
+
+    <div class="col-12 col-xl-6">
+        <article class="panel-card h-100">
+            <div class="panel-title-wrap">
+                <h3 class="panel-title">Status operacional do ambiente</h3>
+            </div>
+            <div class="d-grid gap-2">
+                {% for item in environment_status %}
+                    <div class="d-flex align-items-center justify-content-between border rounded-3 p-2">
+                        <div class="pe-2">
+                            <div class="fw-semibold">{{ item.service }}</div>
+                            {% if item.detail %}
+                                <small class="text-secondary">{{ item.detail }}</small>
+                            {% endif %}
+                        </div>
+                        <span class="status-pill {{ item.status_css_class }}">{{ item.status_label }}</span>
+                    </div>
+                {% endfor %}
+            </div>
+            {% if health_errors %}
+                <small class="text-secondary d-block mt-2">Falhas de integracao: {{ health_errors|join:", " }}</small>
+            {% else %}
+                <small class="text-secondary d-block mt-2">Dados de health consultados em tempo real na FastAPI.</small>
+            {% endif %}
+        </article>
+    </div>
+</section>
+
+<section class="row g-3">
+    <div class="col-12 col-xl-8">
+        <article class="panel-card h-100">
+            <div class="panel-title-wrap">
+                <h3 class="panel-title">Alertas operacionais</h3>
+            </div>
+            <div class="d-grid gap-2">
+                {% for alert in alerts %}
+                    <div class="border rounded-3 p-2 {% if alert.level == 'danger' %}border-danger-subtle bg-danger-subtle{% elif alert.level == 'warning' %}border-warning-subtle bg-warning-subtle{% else %}border-success-subtle bg-success-subtle{% endif %}">
+                        <span class="small">{{ alert.message }}</span>
+                    </div>
+                {% endfor %}
+            </div>
+        </article>
+    </div>
+
+    <div class="col-12 col-xl-4">
+        <article class="panel-card h-100">
+            <div class="panel-title-wrap">
+                <h3 class="panel-title">Ultima atualizacao</h3>
+            </div>
+            <p class="mb-0">{{ last_updated|date:"d/m/Y H:i:s" }}</p>
+        </article>
+    </div>
+</section>
+{% endblock %}

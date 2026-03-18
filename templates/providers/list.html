@@ -1,67 +1,57 @@
 {% extends "layouts/base_admin.html" %}
 
 {% block content %}
-<section class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-3">
-    <div>
-        <h2 class="panel-title fs-5 mb-1">Providers</h2>
-        <p class="panel-muted mb-0">{{ page_subtitle }}</p>
-    </div>
-    <a href="{% url 'providers:create' %}" class="btn btn-dark">
-        <i class="bi bi-plus-lg me-1"></i>
-        Novo provider
-    </a>
-</section>
+{% url "providers:create" as provider_create_url %}
+{% include "includes/page_header.html" with header_title="Providers" header_subtitle=page_subtitle breadcrumb_current="Providers" header_action_url=provider_create_url header_action_label="Novo provider" header_action_icon="bi bi-plus-lg" %}
 
-<section class="panel-card p-0 overflow-hidden">
-    <div class="table-responsive">
-        <table class="table admin-table align-middle mb-0">
-            <thead>
-                <tr>
-                    <th>Nome</th>
-                    <th>Slug</th>
-                    <th>Descricao</th>
-                    <th>Status</th>
-                    <th>Atualizado em</th>
-                    <th class="text-end">Acoes</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for provider in providers %}
+{% if providers %}
+    <section class="panel-card p-0 overflow-hidden">
+        <div class="table-responsive">
+            <table class="table admin-table align-middle mb-0">
+                <thead>
                     <tr>
-                        <td class="fw-semibold">{{ provider.name }}</td>
-                        <td><code>{{ provider.slug }}</code></td>
-                        <td class="text-muted">{{ provider.description|default:"-"|truncatechars:90 }}</td>
-                        <td>
-                            {% if provider.is_active %}
-                                <span class="status-pill status-success">Ativo</span>
-                            {% else %}
-                                <span class="status-pill status-neutral">Inativo</span>
-                            {% endif %}
-                        </td>
-                        <td>{{ provider.updated_at|date:"d/m/Y H:i" }}</td>
-                        <td class="text-end">
-                            <div class="d-flex justify-content-end gap-2">
-                                <a href="{% url 'providers:edit' provider.id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
-                                <form method="post" action="{% url 'providers:toggle_status' provider.id %}">
-                                    {% csrf_token %}
-                                    {% if provider.is_active %}
-                                        <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
-                                    {% else %}
-                                        <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
-                                    {% endif %}
-                                </form>
-                            </div>
-                        </td>
+                        <th>Nome</th>
+                        <th>Slug</th>
+                        <th>Descricao</th>
+                        <th>Status</th>
+                        <th>Atualizado em</th>
+                        <th class="text-end">Acoes</th>
                     </tr>
-                {% empty %}
-                    <tr>
-                        <td colspan="6" class="text-center text-muted py-4">
-                            Nenhum provider cadastrado ate o momento.
-                        </td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</section>
+                </thead>
+                <tbody>
+                    {% for provider in providers %}
+                        <tr>
+                            <td class="fw-semibold">{{ provider.name }}</td>
+                            <td><code>{{ provider.slug }}</code></td>
+                            <td class="text-muted">{{ provider.description|default:"-"|truncatechars:90 }}</td>
+                            <td>
+                                {% if provider.is_active %}
+                                    <span class="status-pill status-success">Ativo</span>
+                                {% else %}
+                                    <span class="status-pill status-neutral">Inativo</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ provider.updated_at|date:"d/m/Y H:i" }}</td>
+                            <td class="text-end">
+                                <div class="table-actions">
+                                    <a href="{% url 'providers:edit' provider.id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
+                                    <form method="post" action="{% url 'providers:toggle_status' provider.id %}">
+                                        {% csrf_token %}
+                                        {% if provider.is_active %}
+                                            <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
+                                        {% else %}
+                                            <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
+                                        {% endif %}
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+{% else %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-diagram-3" empty_title="Nenhum provider cadastrado" empty_message="Cadastre o primeiro provider para liberar o catalogo de modelos e credenciais." empty_action_url=provider_create_url empty_action_label="Criar provider" empty_action_icon="bi bi-plus-lg" %}
+{% endif %}
 {% endblock %}

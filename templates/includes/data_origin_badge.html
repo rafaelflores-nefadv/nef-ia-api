@@ -1,0 +1,7 @@
+{% if source == "api" %}
+    <span class="status-pill status-success">Dados reais da API</span>
+{% elif source == "api_hibrido" %}
+    <span class="status-pill status-warning">Integracao parcial</span>
+{% else %}
+    <span class="status-pill status-danger">Fallback local</span>
+{% endif %}

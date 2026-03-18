@@ -1,0 +1,133 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "executions:list" as executions_list_url %}
+{% include "includes/page_header.html" with header_title="Execucoes" header_subtitle=page_subtitle breadcrumb_current="Execucoes" header_side_text=list_counter_label %}
+
+<section class="mb-3 d-flex flex-column gap-2">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+        {% include "includes/data_origin_badge.html" with source=integration_source %}
+    </div>
+    {% if integration_source == "api" %}
+        <small class="admin-note">Origem atual: dados reais consumidos da FastAPI administrativa.</small>
+    {% elif integration_source == "api_hibrido" %}
+        <small class="admin-note">Origem atual: integracao parcial, combinando API real com fallback local.</small>
+    {% else %}
+        <small class="admin-note">Origem atual: fallback local devido a indisponibilidade da API.</small>
+    {% endif %}
+</section>
+
+{% if integration_warnings %}
+    <section class="panel-card mb-3">
+        <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle">
+            <strong class="d-block mb-1">Avisos de integracao</strong>
+            <ul class="mb-0 small">
+                {% for warning in integration_warnings %}
+                    <li>{{ warning }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </section>
+{% endif %}
+
+<section class="panel-card mb-3">
+    <form method="get" class="row g-2">
+        <div class="col-12 col-md-6 col-lg-3">
+            <label class="form-label small fw-semibold mb-1">Status</label>
+            <select name="status" class="form-select">
+                {% for value, label in status_options %}
+                    <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-6 col-lg-3">
+            <label class="form-label small fw-semibold mb-1">Provider</label>
+            <select name="provider" class="form-select">
+                <option value="">Todos os providers</option>
+                {% for provider in provider_options %}
+                    <option value="{{ provider }}" {% if selected_provider == provider %}selected{% endif %}>{{ provider }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-6 col-lg-3">
+            <label class="form-label small fw-semibold mb-1">Periodo</label>
+            <select name="periodo" class="form-select">
+                {% for value, label in period_options %}
+                    <option value="{{ value }}" {% if selected_period == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-6 col-lg-3">
+            <label class="form-label small fw-semibold mb-1">Busca</label>
+            <input
+                type="text"
+                name="q"
+                class="form-control"
+                placeholder="ID ou automacao"
+                value="{{ search_query }}"
+            >
+        </div>
+        <div class="col-12 d-flex gap-2">
+            <button type="submit" class="btn btn-dark">Filtrar</button>
+            <a href="{{ executions_list_url }}" class="btn btn-outline-secondary">Limpar</a>
+        </div>
+    </form>
+</section>
+
+<section class="panel-card p-0 overflow-hidden">
+    {% if executions %}
+        <div class="table-responsive">
+            <table class="table admin-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Automacao</th>
+                        <th>Provider</th>
+                        <th>Modelo</th>
+                        <th>Status</th>
+                        <th>Inicio</th>
+                        <th>Fim</th>
+                        <th>Duracao</th>
+                        <th>Custo</th>
+                        <th class="text-end">Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for execution in executions %}
+                        <tr>
+                            <td><code>{{ execution.id }}</code></td>
+                            <td>{{ execution.automation_name|default:"-" }}</td>
+                            <td>{{ execution.provider|default:"-" }}</td>
+                            <td>{{ execution.model|default:"-" }}</td>
+                            <td><span class="status-pill {{ execution.status_css_class }}">{{ execution.status_label }}</span></td>
+                            <td>{{ execution.started_at|date:"d/m/Y H:i:s"|default:"-" }}</td>
+                            <td>
+                                {% if execution.finished_at %}
+                                    {{ execution.finished_at|date:"d/m/Y H:i:s" }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>{{ execution.duration_display|default:"-" }}</td>
+                            <td>{{ execution.cost_display|default:"-" }}</td>
+                            <td class="text-end">
+                                <div class="table-actions">
+                                    <a href="{% url 'executions:detail' execution.id %}" class="btn btn-sm btn-outline-secondary">Ver detalhe</a>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="p-2">
+            {% if total_count > 0 %}
+                {% include "includes/empty_state.html" with empty_icon="bi bi-funnel" empty_title="Nenhuma execucao com os filtros atuais" empty_message="Ajuste os filtros aplicados para encontrar as execucoes desejadas." empty_action_url=executions_list_url empty_action_label="Limpar filtros" empty_action_icon="bi bi-arrow-counterclockwise" %}
+            {% else %}
+                {% include "includes/empty_state.html" with empty_icon="bi bi-play-circle" empty_title="Nenhuma execucao disponivel" empty_message="Ainda nao existem execucoes para exibir nesta integracao." %}
+            {% endif %}
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

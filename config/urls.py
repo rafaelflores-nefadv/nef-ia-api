@@ -6,5 +6,8 @@ urlpatterns = [
     path("providers/", include("providers.urls")),
     path("modelos/", include("models_catalog.urls")),
     path("credenciais/", include("credentials.urls")),
+    path("operacoes/", include("operations.urls")),
+    path("execucoes/", include("executions.urls")),
+    path("arquivos/", include("files_admin.urls")),
     path("", include("core.urls")),
 ]

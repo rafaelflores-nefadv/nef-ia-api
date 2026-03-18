@@ -1,74 +1,157 @@
 {% extends "layouts/base_admin.html" %}
 
 {% block content %}
+{% include "includes/page_header.html" with header_title="Dashboard" header_subtitle="Visao consolidada de saude e catalogo da plataforma." breadcrumb_current="Dashboard" %}
+
 <section class="mb-4">
     <div class="row g-3">
         <div class="col-12 col-md-6 col-xl-4">
             <article class="metric-card">
                 <div class="metric-icon text-success"><i class="bi bi-diagram-3-fill"></i></div>
                 <p class="metric-label">Providers ativos</p>
-                <h3 class="metric-value">18</h3>
+                <h3 class="metric-value">{{ providers_active }}</h3>
             </article>
         </div>
         <div class="col-12 col-md-6 col-xl-4">
             <article class="metric-card">
                 <div class="metric-icon text-success"><i class="bi bi-box-fill"></i></div>
                 <p class="metric-label">Modelos ativos</p>
-                <h3 class="metric-value">47</h3>
+                <h3 class="metric-value">{{ models_active }}</h3>
             </article>
         </div>
         <div class="col-12 col-md-6 col-xl-4">
             <article class="metric-card">
                 <div class="metric-icon text-success"><i class="bi bi-key-fill"></i></div>
                 <p class="metric-label">Credenciais ativas</p>
-                <h3 class="metric-value">26</h3>
+                <h3 class="metric-value">{{ credentials_active }}</h3>
             </article>
         </div>
         <div class="col-12 col-md-6 col-xl-4">
             <article class="metric-card">
-                <div class="metric-icon text-warning"><i class="bi bi-hourglass-split"></i></div>
-                <p class="metric-label">Execuções em andamento</p>
-                <h3 class="metric-value">09</h3>
+                <div class="metric-icon"><i class="bi bi-heart-pulse-fill"></i></div>
+                <p class="metric-label">Health Live</p>
+                <h3 class="metric-value"><span class="status-pill {{ health_live.status_css_class }}">{{ health_live.status_label }}</span></h3>
             </article>
         </div>
         <div class="col-12 col-md-6 col-xl-4">
             <article class="metric-card">
-                <div class="metric-icon text-danger"><i class="bi bi-exclamation-triangle-fill"></i></div>
-                <p class="metric-label">Execuções com falha</p>
-                <h3 class="metric-value">02</h3>
+                <div class="metric-icon"><i class="bi bi-activity"></i></div>
+                <p class="metric-label">Health Ready</p>
+                <h3 class="metric-value"><span class="status-pill {{ health_ready.status_css_class }}">{{ health_ready.status_label }}</span></h3>
             </article>
         </div>
         <div class="col-12 col-md-6 col-xl-4">
             <article class="metric-card">
-                <div class="metric-icon text-success"><i class="bi bi-heart-pulse-fill"></i></div>
-                <p class="metric-label">Status do sistema</p>
-                <h3 class="metric-value"><span class="status-pill status-success">Health Ready</span></h3>
+                <div class="metric-icon"><i class="bi bi-hdd-network"></i></div>
+                <p class="metric-label">Status da API</p>
+                <h3 class="metric-value"><span class="status-pill {{ health_overall.status_css_class }}">{{ health_overall.status_label }}</span></h3>
             </article>
         </div>
     </div>
+</section>
+
+<section class="mb-4">
+    <article class="panel-card">
+        <div class="panel-title-wrap">
+            <h2 class="panel-title">Atalhos rapidos</h2>
+            <p class="panel-muted mb-0">Acesso direto aos modulos administrativos mais usados.</p>
+        </div>
+        <div class="row g-2">
+            <div class="col-12 col-md-6 col-xl-4">
+                <a href="{% url 'providers:list' %}" class="quick-link-card">
+                    <div>
+                        <p class="quick-link-title">Providers</p>
+                        <p class="quick-link-description">Gestao de provedores de IA</p>
+                    </div>
+                    <i class="bi bi-diagram-3"></i>
+                </a>
+            </div>
+            <div class="col-12 col-md-6 col-xl-4">
+                <a href="{% url 'models_catalog:list' %}" class="quick-link-card">
+                    <div>
+                        <p class="quick-link-title">Modelos</p>
+                        <p class="quick-link-description">Catalogo de modelos por provider</p>
+                    </div>
+                    <i class="bi bi-boxes"></i>
+                </a>
+            </div>
+            <div class="col-12 col-md-6 col-xl-4">
+                <a href="{% url 'credentials:list' %}" class="quick-link-card">
+                    <div>
+                        <p class="quick-link-title">Credenciais</p>
+                        <p class="quick-link-description">Chaves e configuracoes de acesso</p>
+                    </div>
+                    <i class="bi bi-key"></i>
+                </a>
+            </div>
+            <div class="col-12 col-md-6 col-xl-4">
+                <a href="{% url 'operations:status' %}" class="quick-link-card">
+                    <div>
+                        <p class="quick-link-title">Operacoes</p>
+                        <p class="quick-link-description">Saude operacional consolidada</p>
+                    </div>
+                    <i class="bi bi-gear-wide-connected"></i>
+                </a>
+            </div>
+            <div class="col-12 col-md-6 col-xl-4">
+                <a href="{% url 'executions:list' %}" class="quick-link-card">
+                    <div>
+                        <p class="quick-link-title">Execucoes</p>
+                        <p class="quick-link-description">Acompanhamento de processamento</p>
+                    </div>
+                    <i class="bi bi-play-circle"></i>
+                </a>
+            </div>
+            <div class="col-12 col-md-6 col-xl-4">
+                <a href="{% url 'files_admin:list' %}" class="quick-link-card">
+                    <div>
+                        <p class="quick-link-title">Arquivos</p>
+                        <p class="quick-link-description">Navegacao de entradas e saidas</p>
+                    </div>
+                    <i class="bi bi-folder2-open"></i>
+                </a>
+            </div>
+        </div>
+    </article>
 </section>
 
 <section class="row g-3">
     <div class="col-12 col-xl-8">
         <article class="panel-card h-100">
             <div class="panel-title-wrap">
-                <h2 class="panel-title">Resumo operacional</h2>
+                <h2 class="panel-title">Readiness checks</h2>
             </div>
-            <p class="panel-muted mb-3">Visão geral estática para etapa inicial do painel.</p>
-            <div class="d-flex flex-wrap gap-2">
-                <span class="status-pill status-success">Sucesso</span>
-                <span class="status-pill status-warning">Alerta</span>
-                <span class="status-pill status-danger">Erro</span>
-            </div>
+            {% if health_checks %}
+                <div class="d-grid gap-2">
+                    {% for check in health_checks %}
+                        <div class="d-flex align-items-center justify-content-between border rounded-3 p-2">
+                            <span>{{ check.label }}</span>
+                            <span class="status-pill {{ check.status_css_class }}">{{ check.status_label }}</span>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="panel-muted mb-0">Nenhum check detalhado retornado pelo endpoint /health/ready.</p>
+            {% endif %}
         </article>
     </div>
     <div class="col-12 col-xl-4">
         <article class="panel-card h-100">
             <div class="panel-title-wrap">
-                <h2 class="panel-title">Última sincronização</h2>
+                <h2 class="panel-title">Integracao FastAPI</h2>
             </div>
-            <p class="panel-muted mb-2">17/03/2026 15:30</p>
-            <small class="text-secondary">Dados mockados para base visual da etapa 1.</small>
+            <p class="panel-muted mb-2">{{ health_live.message }}</p>
+            <p class="panel-muted mb-2">{{ health_ready.message }}</p>
+            {% if health_errors %}
+                <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle">
+                    <small>{{ health_errors|join:", " }}</small>
+                </div>
+            {% else %}
+                <small class="text-secondary">Conexao com FastAPI operacional.</small>
+            {% endif %}
+            <div class="mt-3">
+                <small class="text-secondary">Ultima sincronizacao: {{ last_sync_at|date:"d/m/Y H:i:s" }}</small>
+            </div>
         </article>
     </div>
 </section>

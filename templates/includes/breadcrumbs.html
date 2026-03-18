@@ -1,0 +1,17 @@
+<nav class="admin-breadcrumbs" aria-label="breadcrumb">
+    <ol class="breadcrumb mb-0">
+        {% if breadcrumb_current != "Dashboard" or breadcrumb_parent_label %}
+            <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Dashboard</a></li>
+        {% endif %}
+
+        {% if breadcrumb_parent_label %}
+            {% if breadcrumb_parent_url %}
+                <li class="breadcrumb-item"><a href="{{ breadcrumb_parent_url }}">{{ breadcrumb_parent_label }}</a></li>
+            {% else %}
+                <li class="breadcrumb-item">{{ breadcrumb_parent_label }}</li>
+            {% endif %}
+        {% endif %}
+
+        <li class="breadcrumb-item active" aria-current="page">{{ breadcrumb_current|default:page_title }}</li>
+    </ol>
+</nav>

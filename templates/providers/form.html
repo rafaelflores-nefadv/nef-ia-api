@@ -1,12 +1,12 @@
 {% extends "layouts/base_admin.html" %}
 
 {% block content %}
-<section class="mb-3">
-    <h2 class="panel-title fs-5 mb-1">{{ form_title }}</h2>
-    <p class="panel-muted mb-0">{{ form_subtitle }}</p>
-</section>
+{% url "providers:list" as providers_list_url %}
+{% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Providers" breadcrumb_parent_url=providers_list_url breadcrumb_current=form_title %}
 
 <section class="panel-card">
+    <p class="admin-note mb-3">Use um slug unico e estavel para facilitar futuras integracoes via API.</p>
+
     {% if form.non_field_errors %}
         <div class="alert alert-danger" role="alert">
             {% for error in form.non_field_errors %}
@@ -52,7 +52,7 @@
 
         <div class="d-flex gap-2">
             <button type="submit" class="btn btn-dark">{{ submit_label }}</button>
-            <a href="{% url 'providers:list' %}" class="btn btn-outline-secondary">Voltar</a>
+            <a href="{{ providers_list_url }}" class="btn btn-outline-secondary">Voltar</a>
         </div>
     </form>
 </section>

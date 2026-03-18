@@ -1,0 +1,27 @@
+<section class="admin-page-header mb-3">
+    <div class="page-heading">
+        {% include "includes/breadcrumbs.html" with breadcrumb_current=breadcrumb_current breadcrumb_parent_label=breadcrumb_parent_label breadcrumb_parent_url=breadcrumb_parent_url %}
+        <h2 class="page-heading-title">{{ header_title|default:page_title }}</h2>
+        {% if header_subtitle %}
+            <p class="page-heading-subtitle">{{ header_subtitle }}</p>
+        {% endif %}
+    </div>
+
+    <div class="page-heading-actions">
+        {% if header_side_text %}
+            <small class="text-secondary">{{ header_side_text }}</small>
+        {% endif %}
+
+        {% if header_action_url and header_action_label %}
+            <a
+                href="{{ header_action_url }}"
+                class="btn {% if header_action_variant %}{{ header_action_variant }}{% else %}btn-dark{% endif %}"
+            >
+                {% if header_action_icon %}
+                    <i class="{{ header_action_icon }} me-1"></i>
+                {% endif %}
+                {{ header_action_label }}
+            </a>
+        {% endif %}
+    </div>
+</section>

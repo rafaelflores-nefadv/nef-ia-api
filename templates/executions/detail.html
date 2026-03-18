@@ -1,0 +1,118 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "executions:list" as executions_list_url %}
+{% include "includes/page_header.html" with header_title="Detalhe da execucao" header_subtitle=execution.id breadcrumb_parent_label="Execucoes" breadcrumb_parent_url=executions_list_url breadcrumb_current="Detalhe" header_action_url=executions_list_url header_action_label="Voltar para listagem" header_action_variant="btn-outline-secondary" %}
+
+<section class="mb-3 d-flex flex-column gap-2">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+        {% include "includes/data_origin_badge.html" with source=integration_source %}
+    </div>
+    {% if integration_source == "api" %}
+        <small class="admin-note">Detalhe com dados reais retornados pela FastAPI.</small>
+    {% elif integration_source == "api_hibrido" %}
+        <small class="admin-note">Detalhe com dados reais e complementos de fallback local.</small>
+    {% else %}
+        <small class="admin-note">Detalhe em fallback local por indisponibilidade da API.</small>
+    {% endif %}
+</section>
+
+{% if integration_limitation or integration_warnings %}
+    <section class="panel-card mb-3">
+        {% if integration_limitation %}
+            <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle mb-2">
+                <span class="small">{{ integration_limitation }}</span>
+            </div>
+        {% endif %}
+        {% if integration_warnings %}
+            <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle">
+                <strong class="d-block mb-1">Avisos de integracao</strong>
+                <ul class="mb-0 small">
+                    {% for warning in integration_warnings %}
+                        <li>{{ warning }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+    </section>
+{% endif %}
+
+<section class="row g-3 mb-3">
+    <div class="col-12 col-md-6 col-xl-3">
+        <article class="metric-card">
+            <p class="metric-label">Status</p>
+            <h3 class="metric-value"><span class="status-pill {{ execution.status_css_class }}">{{ execution.status_label }}</span></h3>
+        </article>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <article class="metric-card">
+            <p class="metric-label">Duracao</p>
+            <h3 class="metric-value">{{ execution.duration_display }}</h3>
+        </article>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <article class="metric-card">
+            <p class="metric-label">Custo estimado</p>
+            <h3 class="metric-value">{{ execution.cost_display }}</h3>
+        </article>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <article class="metric-card">
+            <p class="metric-label">Arquivos relacionados</p>
+            <h3 class="metric-value">{{ execution.related_files_count|default:"-" }}</h3>
+        </article>
+    </div>
+</section>
+
+<section class="row g-3">
+    <div class="col-12 col-xl-7">
+        <article class="panel-card h-100">
+            <div class="panel-title-wrap">
+                <h3 class="panel-title">Resumo da execucao</h3>
+            </div>
+            <dl class="row mb-0">
+                <dt class="col-sm-4 text-secondary">Automacao</dt>
+                <dd class="col-sm-8">{{ execution.automation_name|default:"-" }}</dd>
+
+                <dt class="col-sm-4 text-secondary">Provider</dt>
+                <dd class="col-sm-8">{{ execution.provider|default:"-" }}</dd>
+
+                <dt class="col-sm-4 text-secondary">Modelo</dt>
+                <dd class="col-sm-8">{{ execution.model|default:"-" }}</dd>
+
+                <dt class="col-sm-4 text-secondary">Iniciado em</dt>
+                <dd class="col-sm-8">{{ execution.started_at|date:"d/m/Y H:i:s"|default:"-" }}</dd>
+
+                <dt class="col-sm-4 text-secondary">Finalizado em</dt>
+                <dd class="col-sm-8">
+                    {% if execution.finished_at %}
+                        {{ execution.finished_at|date:"d/m/Y H:i:s" }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </dd>
+            </dl>
+        </article>
+    </div>
+
+    <div class="col-12 col-xl-5">
+        <article class="panel-card h-100">
+            <div class="panel-title-wrap">
+                <h3 class="panel-title">Processamento</h3>
+            </div>
+            <p class="mb-2">{{ execution.processing_summary|default:"-" }}</p>
+
+            {% if execution.has_error %}
+                <div class="border rounded-3 p-2 border-danger-subtle bg-danger-subtle">
+                    <strong class="d-block mb-1">Erro registrado</strong>
+                    <span class="small">{{ execution.error_message }}</span>
+                </div>
+            {% else %}
+                <div class="border rounded-3 p-2 border-success-subtle bg-success-subtle">
+                    <span class="small">Sem erro tecnico registrado nesta execucao.</span>
+                </div>
+            {% endif %}
+        </article>
+    </div>
+</section>
+{% endblock %}

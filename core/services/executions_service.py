@@ -1,0 +1,454 @@
+﻿from __future__ import annotations
+
+from datetime import datetime, timedelta
+from typing import Any
+
+from django.conf import settings
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+
+from .api_client import FastAPIClient
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    unique: list[str] = []
+    for item in values:
+        if item and item not in unique:
+            unique.append(item)
+    return unique
+
+
+def _status_meta(status: str) -> dict[str, str]:
+    table = {
+        "pendente": {"label": "Pendente", "css_class": "status-neutral"},
+        "em_andamento": {"label": "Em andamento", "css_class": "status-warning"},
+        "concluida": {"label": "Concluida", "css_class": "status-success"},
+        "falhou": {"label": "Falhou", "css_class": "status-danger"},
+    }
+    return table.get(status, table["pendente"])
+
+
+def _format_duration(total_seconds: int | None) -> str:
+    if total_seconds is None or total_seconds < 0:
+        return "-"
+
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    if hours > 0:
+        return f"{hours}h {minutes:02d}m"
+    if minutes > 0:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if timezone.is_aware(value):
+            return timezone.localtime(value)
+        return timezone.make_aware(value, timezone.get_current_timezone())
+    if isinstance(value, str):
+        parsed = parse_datetime(value)
+        if parsed is None:
+            return None
+        if timezone.is_aware(parsed):
+            return timezone.localtime(parsed)
+        return timezone.make_aware(parsed, timezone.get_current_timezone())
+    return None
+
+
+def _safe_float(value: Any, default: float | None = None) -> float | None:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_status(raw: str | None, fallback: str) -> str:
+    status = (raw or "").lower()
+    if status in {"failed", "error", "falhou"}:
+        return "falhou"
+    if status in {"completed", "done", "success", "concluida", "completed_success"}:
+        return "concluida"
+    if status in {"queued", "pending", "created", "pendente"}:
+        return "pendente"
+    if status in {"processing", "running", "in_progress", "generating_output", "em_andamento"}:
+        return "em_andamento"
+    return fallback
+
+
+class ExecutionsService:
+    def __init__(self):
+        self.client = FastAPIClient()
+        self.admin_token = (getattr(settings, "FASTAPI_ADMIN_TOKEN", "") or "").strip()
+
+    def _auth_headers(self) -> dict[str, str] | None:
+        if not self.admin_token:
+            return None
+        return {"Authorization": f"Bearer {self.admin_token}"}
+
+    def _mock_executions(self) -> list[dict[str, Any]]:
+        now = timezone.localtime()
+        return [
+            {
+                "id": "exec-1001",
+                "automation_name": "Extracao de notas fiscais",
+                "provider": "OpenAI",
+                "model": "gpt-4.1",
+                "status": "concluida",
+                "started_at": now - timedelta(hours=2, minutes=14),
+                "finished_at": now - timedelta(hours=2, minutes=3),
+                "estimated_cost": 3.2415,
+                "related_files_count": 18,
+                "processing_summary": "Processamento finalizado com consolidacao e validacao.",
+                "error_message": "",
+                "source": "mock",
+            },
+            {
+                "id": "exec-1002",
+                "automation_name": "Classificacao de documentos de compras",
+                "provider": "Azure OpenAI",
+                "model": "gpt-4o-mini",
+                "status": "em_andamento",
+                "started_at": now - timedelta(minutes=23),
+                "finished_at": None,
+                "estimated_cost": 0.7622,
+                "related_files_count": 9,
+                "processing_summary": "Execucao em lote com enriquecimento de metadados.",
+                "error_message": "",
+                "source": "mock",
+            },
+            {
+                "id": "exec-1003",
+                "automation_name": "Conferencia tributaria mensal",
+                "provider": "Anthropic",
+                "model": "claude-3-5-sonnet",
+                "status": "falhou",
+                "started_at": now - timedelta(hours=5, minutes=5),
+                "finished_at": now - timedelta(hours=4, minutes=58),
+                "estimated_cost": 0.2140,
+                "related_files_count": 4,
+                "processing_summary": "Execucao interrompida na etapa de reconciliacao.",
+                "error_message": "Timeout ao consultar dependencia externa.",
+                "source": "mock",
+            },
+            {
+                "id": "exec-1004",
+                "automation_name": "Validacao de planilhas de pagamento",
+                "provider": "OpenAI",
+                "model": "gpt-4.1-mini",
+                "status": "pendente",
+                "started_at": now - timedelta(minutes=4),
+                "finished_at": None,
+                "estimated_cost": 0.0,
+                "related_files_count": 27,
+                "processing_summary": "Fila aguardando worker disponivel.",
+                "error_message": "",
+                "source": "mock",
+            },
+            {
+                "id": "exec-1005",
+                "automation_name": "Resumo executivo de desempenho operacional",
+                "provider": "Google",
+                "model": "gemini-1.5-pro",
+                "status": "concluida",
+                "started_at": now - timedelta(days=1, hours=1, minutes=42),
+                "finished_at": now - timedelta(days=1, hours=1, minutes=29),
+                "estimated_cost": 1.1168,
+                "related_files_count": 11,
+                "processing_summary": "Resumo gerado e publicado no repositorio interno.",
+                "error_message": "",
+                "source": "mock",
+            },
+        ]
+
+    def _normalize_api_execution(self, row: dict[str, Any], fallback_status: str) -> dict[str, Any] | None:
+        execution_id = str(row.get("execution_id") or row.get("id") or "").strip()
+        if not execution_id:
+            return None
+
+        status = _normalize_status(str(row.get("status") or ""), fallback=fallback_status)
+        started_at = _parse_dt(row.get("started_at") or row.get("created_at"))
+        finished_at = _parse_dt(row.get("finished_at"))
+        estimated_cost = _safe_float(row.get("estimated_cost"), default=None)
+
+        automation_name = row.get("automation_name")
+        if not automation_name:
+            automation_name = row.get("automation_id") or row.get("analysis_request_id") or "-"
+
+        summary = "Dados carregados da FastAPI."
+        if status == "falhou" and row.get("error_message"):
+            summary = "Execucao com falha reportada pelo backend."
+        elif status == "em_andamento":
+            summary = "Execucao em andamento no backend."
+
+        return {
+            "id": execution_id,
+            "automation_name": str(automation_name),
+            "provider": str(row.get("provider") or "-"),
+            "model": str(row.get("model") or "-"),
+            "status": status,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "estimated_cost": estimated_cost,
+            "related_files_count": None,
+            "processing_summary": summary,
+            "error_message": str(row.get("error_message") or ""),
+            "source": "api",
+        }
+
+    def _fetch_admin_execution_list(self, endpoint: str, fallback_status: str) -> dict[str, Any]:
+        warnings: list[str] = []
+        result = self.client.get_json(
+            endpoint,
+            params={"limit": 200},
+            headers=self._auth_headers(),
+        )
+
+        if result.status_code in {401, 403} and not self.admin_token:
+            warnings.append(
+                "Configure FASTAPI_ADMIN_TOKEN para consumir endpoints administrativos reais."
+            )
+        elif result.status_code in {401, 403} and self.admin_token:
+            warnings.append("Token administrativo invalido ou sem permissao para execucoes.")
+        elif result.status_code is None:
+            warnings.append(result.error or "Falha de conexao com a FastAPI.")
+        elif result.error:
+            warnings.append(result.error)
+
+        payload_items = result.data.get("items", []) if isinstance(result.data, dict) else []
+        normalized: list[dict[str, Any]] = []
+        if isinstance(payload_items, list):
+            for raw in payload_items:
+                if not isinstance(raw, dict):
+                    continue
+                item = self._normalize_api_execution(raw, fallback_status=fallback_status)
+                if item:
+                    normalized.append(item)
+
+        return {
+            "items": normalized,
+            "warnings": warnings,
+            "status_code": result.status_code,
+        }
+
+    def _load_execution_pool(self) -> dict[str, Any]:
+        mock_items = self._mock_executions()
+
+        running = self._fetch_admin_execution_list(
+            "/api/v1/admin/executions/running",
+            fallback_status="em_andamento",
+        )
+        failed = self._fetch_admin_execution_list(
+            "/api/v1/admin/executions/failed",
+            fallback_status="falhou",
+        )
+
+        api_items = running["items"] + failed["items"]
+        warnings = _dedupe(running["warnings"] + failed["warnings"])
+
+        deduped_api: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for item in api_items:
+            if item["id"] in seen_ids:
+                continue
+            seen_ids.add(item["id"])
+            deduped_api.append(item)
+
+        if deduped_api:
+            supplemental = [
+                item
+                for item in mock_items
+                if item["status"] in {"pendente", "concluida"} and item["id"] not in seen_ids
+            ]
+            if supplemental:
+                warnings.append(
+                    "Dados de pendentes/concluidas ainda usam fallback local nesta etapa."
+                )
+            return {
+                "items": deduped_api + supplemental,
+                "source": "api_hibrido" if supplemental else "api",
+                "warnings": _dedupe(warnings),
+            }
+
+        warnings.append(
+            "Execucoes reais indisponiveis no momento. Exibindo fallback local."
+        )
+        return {
+            "items": mock_items,
+            "source": "mock",
+            "warnings": _dedupe(warnings),
+        }
+
+    def _apply_filters(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        status: str,
+        provider: str,
+        period: str,
+        query: str,
+        now: datetime,
+    ) -> list[dict[str, Any]]:
+        filtered = items
+
+        if status:
+            filtered = [item for item in filtered if item.get("status") == status]
+
+        if provider:
+            filtered = [item for item in filtered if item.get("provider") == provider]
+
+        if period:
+            period_map = {"24h": 1, "7d": 7, "30d": 30}
+            days = period_map.get(period)
+            if days:
+                cutoff = now - timedelta(days=days)
+                filtered = [
+                    item
+                    for item in filtered
+                    if item.get("started_at") and item["started_at"] >= cutoff
+                ]
+
+        if query:
+            lowered = query.lower()
+            filtered = [
+                item
+                for item in filtered
+                if lowered in str(item.get("id", "")).lower()
+                or lowered in str(item.get("automation_name", "")).lower()
+            ]
+
+        return filtered
+
+    def _build_view_item(self, execution: dict[str, Any], now: datetime) -> dict[str, Any]:
+        started_at = execution.get("started_at")
+        finished_at = execution.get("finished_at")
+
+        if isinstance(started_at, datetime) and isinstance(finished_at, datetime):
+            total_seconds = int((finished_at - started_at).total_seconds())
+        elif isinstance(started_at, datetime) and execution.get("status") in {"em_andamento", "pendente"}:
+            total_seconds = int((now - started_at).total_seconds())
+        else:
+            total_seconds = None
+
+        meta = _status_meta(str(execution.get("status") or "pendente"))
+        estimated_cost = _safe_float(execution.get("estimated_cost"), default=None)
+        cost_display = "-" if estimated_cost is None else f"US$ {estimated_cost:.4f}"
+
+        return {
+            **execution,
+            "status_label": meta["label"],
+            "status_css_class": meta["css_class"],
+            "duration_display": _format_duration(total_seconds),
+            "cost_display": cost_display,
+            "has_error": bool(execution.get("error_message")),
+        }
+
+    def _fetch_related_files_count(self, execution_id: str) -> dict[str, Any]:
+        warnings: list[str] = []
+        if not self.admin_token:
+            warnings.append(
+                "Sem FASTAPI_ADMIN_TOKEN, nao foi possivel consultar quantidade real de arquivos."
+            )
+            return {"count": None, "warnings": warnings}
+
+        result = self.client.get_json(
+            f"/api/v1/admin/executions/{execution_id}/files",
+            headers=self._auth_headers(),
+        )
+        if result.status_code is None:
+            warnings.append(result.error or "Falha ao consultar arquivos da execucao.")
+            return {"count": None, "warnings": warnings}
+        if result.error:
+            warnings.append(result.error)
+            return {"count": None, "warnings": warnings}
+
+        items = result.data.get("items", []) if isinstance(result.data, dict) else []
+        if isinstance(items, list):
+            return {"count": len(items), "warnings": warnings}
+
+        warnings.append("Resposta inesperada ao consultar arquivos da execucao.")
+        return {"count": None, "warnings": warnings}
+
+    def get_execution_list(
+        self,
+        *,
+        status: str = "",
+        provider: str = "",
+        period: str = "",
+        query: str = "",
+    ) -> dict[str, Any]:
+        now = timezone.localtime()
+        pool = self._load_execution_pool()
+
+        filtered = self._apply_filters(
+            pool["items"],
+            status=status,
+            provider=provider,
+            period=period,
+            query=query,
+            now=now,
+        )
+        prepared = [self._build_view_item(item, now) for item in filtered]
+        fallback_dt = timezone.make_aware(datetime(1970, 1, 1), timezone.get_current_timezone())
+        prepared.sort(
+            key=lambda item: item.get("started_at") or fallback_dt,
+            reverse=True,
+        )
+
+        provider_options = sorted(
+            {str(item.get("provider") or "-") for item in pool["items"] if str(item.get("provider") or "").strip()}
+        )
+
+        return {
+            "items": prepared,
+            "provider_options": provider_options,
+            "warnings": pool["warnings"],
+            "source": pool["source"],
+            "filtered_count": len(prepared),
+            "total_count": len(pool["items"]),
+        }
+
+    def get_execution_detail(self, execution_id: str) -> dict[str, Any]:
+        now = timezone.localtime()
+        pool = self._load_execution_pool()
+        warnings = list(pool["warnings"])
+
+        execution = next((item for item in pool["items"] if item.get("id") == execution_id), None)
+        if not execution:
+            return {
+                "found": False,
+                "execution": None,
+                "warnings": _dedupe(warnings),
+                "source": pool["source"],
+                "limitation_message": "Execucao nao localizada nos dados disponiveis.",
+            }
+
+        if execution.get("source") == "api" and execution.get("related_files_count") is None:
+            files_info = self._fetch_related_files_count(execution_id)
+            if files_info["count"] is not None:
+                execution["related_files_count"] = files_info["count"]
+            warnings.extend(files_info["warnings"])
+
+        prepared = self._build_view_item(execution, now)
+
+        limitation_message = None
+        if pool["source"] == "mock":
+            limitation_message = "Detalhe exibido em fallback local por indisponibilidade da API."
+        elif execution.get("source") != "api":
+            limitation_message = "Parte dos dados desta execucao ainda vem de fallback local."
+        elif prepared.get("related_files_count") is None:
+            limitation_message = "Nem todos os campos de detalhe estao disponiveis nesta integracao."
+
+        return {
+            "found": True,
+            "execution": prepared,
+            "warnings": _dedupe(warnings),
+            "source": pool["source"],
+            "limitation_message": limitation_message,
+        }
+

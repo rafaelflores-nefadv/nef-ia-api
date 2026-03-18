@@ -1,73 +1,63 @@
 {% extends "layouts/base_admin.html" %}
 
 {% block content %}
-<section class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-3">
-    <div>
-        <h2 class="panel-title fs-5 mb-1">Modelos</h2>
-        <p class="panel-muted mb-0">{{ page_subtitle }}</p>
-    </div>
-    <a href="{% url 'models_catalog:create' %}" class="btn btn-dark">
-        <i class="bi bi-plus-lg me-1"></i>
-        Novo modelo
-    </a>
-</section>
+{% url "models_catalog:create" as model_create_url %}
+{% include "includes/page_header.html" with header_title="Modelos" header_subtitle=page_subtitle breadcrumb_current="Modelos" header_action_url=model_create_url header_action_label="Novo modelo" header_action_icon="bi bi-plus-lg" %}
 
-<section class="panel-card p-0 overflow-hidden">
-    <div class="table-responsive">
-        <table class="table admin-table align-middle mb-0">
-            <thead>
-                <tr>
-                    <th>Provider</th>
-                    <th>Nome</th>
-                    <th>Slug</th>
-                    <th>Janela de contexto</th>
-                    <th>Custo input/1k</th>
-                    <th>Custo output/1k</th>
-                    <th>Status</th>
-                    <th>Atualizado em</th>
-                    <th class="text-end">Acoes</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for model in models %}
+{% if models %}
+    <section class="panel-card p-0 overflow-hidden">
+        <div class="table-responsive">
+            <table class="table admin-table align-middle mb-0">
+                <thead>
                     <tr>
-                        <td class="fw-semibold">{{ model.provider.name }}</td>
-                        <td>{{ model.name }}</td>
-                        <td><code>{{ model.slug }}</code></td>
-                        <td>{{ model.context_window|default:"-" }}</td>
-                        <td class="text-nowrap">{{ model.input_cost_per_1k|floatformat:6 }}</td>
-                        <td class="text-nowrap">{{ model.output_cost_per_1k|floatformat:6 }}</td>
-                        <td>
-                            {% if model.is_active %}
-                                <span class="status-pill status-success">Ativo</span>
-                            {% else %}
-                                <span class="status-pill status-neutral">Inativo</span>
-                            {% endif %}
-                        </td>
-                        <td>{{ model.updated_at|date:"d/m/Y H:i" }}</td>
-                        <td class="text-end">
-                            <div class="d-flex justify-content-end gap-2">
-                                <a href="{% url 'models_catalog:edit' model.id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
-                                <form method="post" action="{% url 'models_catalog:toggle_status' model.id %}">
-                                    {% csrf_token %}
-                                    {% if model.is_active %}
-                                        <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
-                                    {% else %}
-                                        <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
-                                    {% endif %}
-                                </form>
-                            </div>
-                        </td>
+                        <th>Provider</th>
+                        <th>Nome</th>
+                        <th>Slug</th>
+                        <th>Janela de contexto</th>
+                        <th>Custo input/1k</th>
+                        <th>Custo output/1k</th>
+                        <th>Status</th>
+                        <th>Atualizado em</th>
+                        <th class="text-end">Acoes</th>
                     </tr>
-                {% empty %}
-                    <tr>
-                        <td colspan="9" class="text-center text-muted py-4">
-                            Nenhum modelo cadastrado ate o momento.
-                        </td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</section>
+                </thead>
+                <tbody>
+                    {% for model in models %}
+                        <tr>
+                            <td class="fw-semibold">{{ model.provider.name }}</td>
+                            <td>{{ model.name }}</td>
+                            <td><code>{{ model.slug }}</code></td>
+                            <td>{{ model.context_window|default:"-" }}</td>
+                            <td class="text-nowrap">{{ model.input_cost_per_1k|floatformat:6 }}</td>
+                            <td class="text-nowrap">{{ model.output_cost_per_1k|floatformat:6 }}</td>
+                            <td>
+                                {% if model.is_active %}
+                                    <span class="status-pill status-success">Ativo</span>
+                                {% else %}
+                                    <span class="status-pill status-neutral">Inativo</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ model.updated_at|date:"d/m/Y H:i" }}</td>
+                            <td class="text-end">
+                                <div class="table-actions">
+                                    <a href="{% url 'models_catalog:edit' model.id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
+                                    <form method="post" action="{% url 'models_catalog:toggle_status' model.id %}">
+                                        {% csrf_token %}
+                                        {% if model.is_active %}
+                                            <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
+                                        {% else %}
+                                            <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
+                                        {% endif %}
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+{% else %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-boxes" empty_title="Nenhum modelo cadastrado" empty_message="Cadastre um modelo para disponibilizar operacoes de IA no ambiente." empty_action_url=model_create_url empty_action_label="Criar modelo" empty_action_icon="bi bi-plus-lg" %}
+{% endif %}
 {% endblock %}
