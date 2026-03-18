@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from django.conf import settings
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -83,12 +82,10 @@ class FilesService:
     def __init__(self):
         self.client = FastAPIClient()
         self.executions_service = ExecutionsService()
-        self.admin_token = (getattr(settings, "FASTAPI_ADMIN_TOKEN", "") or "").strip()
+        self.admin_token = self.client.admin_token
 
     def _auth_headers(self) -> dict[str, str] | None:
-        if not self.admin_token:
-            return None
-        return {"Authorization": f"Bearer {self.admin_token}"}
+        return self.client.get_admin_headers()
 
     def _mock_files(self) -> list[dict[str, Any]]:
         now = timezone.localtime()
@@ -255,7 +252,7 @@ class FilesService:
 
         if result.status_code in {401, 403} and not self.admin_token:
             warnings.append(
-                "Configure FASTAPI_ADMIN_TOKEN para consumir arquivos administrativos reais."
+                "Configure o token administrativo da FastAPI nas configuracoes."
             )
         elif result.status_code in {401, 403} and self.admin_token:
             warnings.append("Token administrativo inválido ou sem permissão para arquivos.")

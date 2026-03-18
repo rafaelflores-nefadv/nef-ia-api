@@ -4,7 +4,6 @@ import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from django.conf import settings
 from django.utils.text import slugify
 
 from models_catalog.catalog import get_known_models
@@ -44,12 +43,10 @@ def _to_decimal(value: Any) -> Decimal | None:
 class ProviderModelsService:
     def __init__(self):
         self.client = FastAPIClient()
-        self.admin_token = (getattr(settings, "FASTAPI_ADMIN_TOKEN", "") or "").strip()
+        self.admin_token = self.client.admin_token
 
     def _auth_headers(self) -> dict[str, str] | None:
-        if not self.admin_token:
-            return None
-        return {"Authorization": f"Bearer {self.admin_token}"}
+        return self.client.get_admin_headers()
 
     def _fallback_items(self, provider: Provider) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -78,7 +75,7 @@ class ProviderModelsService:
 
         if result.status_code in {401, 403} and not self.admin_token:
             warnings.append(
-                "Configure FASTAPI_ADMIN_TOKEN para consultar providers administrativos."
+                "Configure o token administrativo da FastAPI nas configuracoes."
             )
             return [], warnings
         if result.status_code in {401, 403} and self.admin_token:
@@ -199,7 +196,7 @@ class ProviderModelsService:
 
             if result.status_code in {401, 403} and not self.admin_token:
                 warnings.append(
-                    "Configure FASTAPI_ADMIN_TOKEN para consultar modelos disponiveis."
+                    "Configure o token administrativo da FastAPI nas configuracoes."
                 )
                 return [], None, warnings
             if result.status_code in {401, 403} and self.admin_token:

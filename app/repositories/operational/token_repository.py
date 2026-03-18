@@ -8,6 +8,7 @@ from app.models.operational import (
     DjangoAiApiToken,
     DjangoAiApiTokenLog,
     DjangoAiApiTokenPermission,
+    DjangoAiIntegrationToken,
 )
 
 
@@ -59,3 +60,44 @@ class ApiTokenRepository:
         stmt = delete(DjangoAiApiToken).where(DjangoAiApiToken.id == token_id)
         result = self.session.execute(stmt)
         return bool(result.rowcount)
+
+
+class IntegrationTokenRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def add(self, token: DjangoAiIntegrationToken) -> DjangoAiIntegrationToken:
+        self.session.add(token)
+        self.session.flush()
+        return token
+
+    def list_all(self) -> list[DjangoAiIntegrationToken]:
+        stmt = select(DjangoAiIntegrationToken).order_by(DjangoAiIntegrationToken.created_at.desc())
+        return list(self.session.execute(stmt).scalars().all())
+
+    def get_by_id(self, token_id: uuid.UUID) -> DjangoAiIntegrationToken | None:
+        stmt = select(DjangoAiIntegrationToken).where(DjangoAiIntegrationToken.id == token_id)
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def get_by_hash(self, token_hash: str) -> DjangoAiIntegrationToken | None:
+        stmt = select(DjangoAiIntegrationToken).where(DjangoAiIntegrationToken.token_hash == token_hash)
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def deactivate(self, token_id: uuid.UUID) -> DjangoAiIntegrationToken | None:
+        token = self.get_by_id(token_id)
+        if token is None:
+            return None
+        token.is_active = False
+        token.updated_at = datetime.now(timezone.utc)
+        self.session.flush()
+        return token
+
+    def touch_last_used(self, token_id: uuid.UUID) -> DjangoAiIntegrationToken | None:
+        token = self.get_by_id(token_id)
+        if token is None:
+            return None
+        now = datetime.now(timezone.utc)
+        token.last_used_at = now
+        token.updated_at = now
+        self.session.flush()
+        return token

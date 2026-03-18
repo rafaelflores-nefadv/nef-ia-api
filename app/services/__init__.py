@@ -4,6 +4,7 @@ from app.services.auth_service import AuthService
 from app.services.audit_service import AuditService
 from app.services.execution_service import ExecutionService
 from app.services.file_service import FileService
+from app.services.integration_token_service import IntegrationTokenService
 from app.services.metrics_service import MetricsService
 from app.services.provider_admin_service import ProviderAdminService
 from app.services.provider_model_discovery_service import ProviderModelDiscoveryService
@@ -17,6 +18,7 @@ __all__ = [
     "ProviderService",
     "ProviderAdminService",
     "ProviderModelDiscoveryService",
+    "IntegrationTokenService",
     "FileService",
     "AuditService",
     "ExecutionService",

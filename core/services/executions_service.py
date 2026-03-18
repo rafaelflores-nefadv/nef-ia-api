@@ -3,7 +3,6 @@
 from datetime import datetime, timedelta
 from typing import Any
 
-from django.conf import settings
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -84,12 +83,10 @@ def _normalize_status(raw: str | None, fallback: str) -> str:
 class ExecutionsService:
     def __init__(self):
         self.client = FastAPIClient()
-        self.admin_token = (getattr(settings, "FASTAPI_ADMIN_TOKEN", "") or "").strip()
+        self.admin_token = self.client.admin_token
 
     def _auth_headers(self) -> dict[str, str] | None:
-        if not self.admin_token:
-            return None
-        return {"Authorization": f"Bearer {self.admin_token}"}
+        return self.client.get_admin_headers()
 
     def _mock_executions(self) -> list[dict[str, Any]]:
         now = timezone.localtime()
@@ -211,7 +208,7 @@ class ExecutionsService:
 
         if result.status_code in {401, 403} and not self.admin_token:
             warnings.append(
-                "Configure FASTAPI_ADMIN_TOKEN para consumir endpoints administrativos reais."
+                "Configure o token administrativo da FastAPI nas configuracoes."
             )
         elif result.status_code in {401, 403} and self.admin_token:
             warnings.append("Token administrativo inválido ou sem permissão para execuções.")
@@ -352,7 +349,7 @@ class ExecutionsService:
         warnings: list[str] = []
         if not self.admin_token:
             warnings.append(
-                "Sem FASTAPI_ADMIN_TOKEN, não foi possível consultar quantidade real de arquivos."
+                "Sem token administrativo configurado, nao foi possivel consultar quantidade real de arquivos."
             )
             return {"count": None, "warnings": warnings}
 

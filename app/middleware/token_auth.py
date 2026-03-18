@@ -11,6 +11,7 @@ from app.core.exceptions import AppException
 from app.core.log_context import bind_log_context, reset_log_context
 from app.db.session import SessionLocal
 from app.services.auth_service import AuthService
+from app.services.integration_token_service import IntegrationTokenService
 from app.services.token_service import ApiTokenService
 
 logger = logging.getLogger(__name__)
@@ -42,12 +43,9 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         try:
-            bearer_token = self._extract_bearer_token(request)
             if path.startswith(self.admin_prefix):
-                with SessionLocal() as session:
-                    admin_user = AuthService(session).get_user_from_admin_jwt(bearer_token)
-                    request.state.admin_user = admin_user
-                return await call_next(request)
+                return await self._authenticate_admin_request(request, call_next)
+            bearer_token = self._extract_bearer_token(request)
             return await self._authenticate_api_token_request(request, bearer_token, call_next)
         except AppException as exc:
             return JSONResponse(
@@ -55,15 +53,82 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                 content={"error": asdict(exc.payload)},
             )
 
-    def _extract_bearer_token(self, request: Request) -> str:
+    def _extract_optional_bearer_token(self, request: Request) -> str | None:
         header = request.headers.get("Authorization")
         if not header:
-            raise AppException("Missing Authorization header.", status_code=401, code="missing_authorization_header")
+            return None
 
         scheme, _, token = header.partition(" ")
         if scheme.lower() != "bearer" or not token:
             raise AppException("Invalid Authorization header format.", status_code=401, code="invalid_authorization_header")
         return token.strip()
+
+    def _extract_bearer_token(self, request: Request) -> str:
+        token = self._extract_optional_bearer_token(request)
+        if token is None:
+            raise AppException("Missing Authorization header.", status_code=401, code="missing_authorization_header")
+        return token
+
+    def _extract_integration_token(self, request: Request) -> str | None:
+        token = request.headers.get("X-Integration-Token")
+        if not token:
+            return None
+        return token.strip() or None
+
+    async def _authenticate_admin_request(self, request: Request, call_next) -> Response:  # type: ignore[no-untyped-def]
+        integration_header_token = self._extract_integration_token(request)
+        bearer_token = None if integration_header_token else self._extract_optional_bearer_token(request)
+        integration_token_id: UUID | None = None
+
+        if not bearer_token and not integration_header_token:
+            raise AppException(
+                "Missing administrative authentication token.",
+                status_code=401,
+                code="missing_admin_authentication_token",
+            )
+
+        with SessionLocal() as session:
+            auth_service = AuthService(session)
+            integration_service = IntegrationTokenService(session)
+
+            if integration_header_token:
+                validation = integration_service.validate_token(integration_header_token)
+                request.state.admin_user = validation.user
+                request.state.integration_token = validation.token
+                request.state.admin_auth_mode = "integration"
+                integration_token_id = validation.token.id
+            elif bearer_token and bearer_token.startswith("ia_int_"):
+                validation = integration_service.validate_token(bearer_token)
+                request.state.admin_user = validation.user
+                request.state.integration_token = validation.token
+                request.state.admin_auth_mode = "integration"
+                integration_token_id = validation.token.id
+            elif bearer_token:
+                try:
+                    admin_user = auth_service.get_user_from_admin_jwt(bearer_token)
+                    request.state.admin_user = admin_user
+                    request.state.admin_auth_mode = "jwt"
+                except AppException as jwt_exc:
+                    try:
+                        validation = integration_service.validate_token(bearer_token)
+                    except AppException:
+                        raise jwt_exc
+                    request.state.admin_user = validation.user
+                    request.state.integration_token = validation.token
+                    request.state.admin_auth_mode = "integration"
+                    integration_token_id = validation.token.id
+
+        response: Response | None = None
+        try:
+            response = await call_next(request)
+            return response
+        finally:
+            if integration_token_id:
+                try:
+                    with SessionLocal() as session:
+                        IntegrationTokenService(session).touch_last_used(token_id=integration_token_id)
+                except Exception:
+                    logger.exception("Failed to update integration token last_used_at.")
 
     async def _authenticate_api_token_request(self, request: Request, raw_token: str, call_next) -> Response:  # type: ignore[no-untyped-def]
         with SessionLocal() as session:

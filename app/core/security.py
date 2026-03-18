@@ -12,6 +12,11 @@ def generate_api_token() -> str:
     return f"{settings.api_token_prefix}_{random_part}"
 
 
+def generate_integration_token() -> str:
+    random_part = secrets.token_urlsafe(48).replace("-", "").replace("_", "")
+    return f"ia_int_{random_part}"
+
+
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 

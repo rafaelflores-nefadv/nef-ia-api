@@ -13,6 +13,7 @@ from app.models.operational.tokens import (
     DjangoAiApiToken,
     DjangoAiApiTokenLog,
     DjangoAiApiTokenPermission,
+    DjangoAiIntegrationToken,
 )
 from app.models.operational import shared_refs as _shared_refs  # noqa: F401
 
@@ -22,6 +23,7 @@ __all__ = [
     "DjangoAiApiToken",
     "DjangoAiApiTokenPermission",
     "DjangoAiApiTokenLog",
+    "DjangoAiIntegrationToken",
     "DjangoAiProvider",
     "DjangoAiProviderCredential",
     "DjangoAiProviderModel",
@@ -32,4 +34,3 @@ __all__ = [
     "DjangoAiQueueJob",
     "DjangoAiAuditLog",
 ]
-

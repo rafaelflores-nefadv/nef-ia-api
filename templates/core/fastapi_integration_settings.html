@@ -1,0 +1,100 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "fastapi_integration_settings" as integration_settings_url %}
+{% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Configuracoes" breadcrumb_parent_url=integration_settings_url breadcrumb_current="Integracao FastAPI" %}
+
+<section class="panel-card mb-3">
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+        <span class="status-pill {{ connection_summary.status_css_class }}">
+            Status: {{ connection_summary.status_label }}
+        </span>
+        {% if config.last_validated_at %}
+            <small class="text-secondary">Ultima validacao: {{ config.last_validated_at|date:"d/m/Y H:i:s" }}</small>
+        {% endif %}
+    </div>
+    <p class="admin-note mb-0">{{ connection_summary.message }}</p>
+</section>
+
+<section class="panel-card">
+    <p class="admin-note mb-3">
+        Configure os dados de integracao administrativa com a FastAPI. O token sera usado automaticamente nas chamadas de endpoints administrativos.
+    </p>
+
+    {% if form.non_field_errors %}
+        <div class="alert alert-danger" role="alert">
+            {% for error in form.non_field_errors %}
+                {{ error }}
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    {% if test_result %}
+        <div class="alert {% if test_result.ok %}alert-success{% else %}alert-warning{% endif %}" role="alert">
+            <strong>{{ test_result.status_label }}:</strong> {{ test_result.message }}
+            {% if test_result.checks %}
+                <ul class="mb-0 mt-2 ps-3">
+                    {% for check in test_result.checks %}
+                        <li>
+                            {{ check.name }} -
+                            {% if check.ok %}OK{% else %}Falha{% endif %}
+                            {% if check.http_status %}(HTTP {{ check.http_status }}){% endif %}
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+    {% endif %}
+
+    <form method="post" novalidate>
+        {% csrf_token %}
+
+        <div class="mb-3">
+            <label for="{{ form.base_url.id_for_label }}" class="form-label fw-semibold">{{ form.base_url.label }}</label>
+            {{ form.base_url }}
+            <div class="form-text">Base da API (sem barra no final).</div>
+            {% for error in form.base_url.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+        </div>
+
+        <div class="mb-3">
+            <label for="{{ form.token_name.id_for_label }}" class="form-label fw-semibold">{{ form.token_name.label }}</label>
+            {{ form.token_name }}
+            <div class="form-text">Campo opcional para identificar o token em uso.</div>
+            {% for error in form.token_name.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+        </div>
+
+        <div class="mb-3">
+            <label for="{{ form.integration_token.id_for_label }}" class="form-label fw-semibold">{{ form.integration_token.label }}</label>
+            {{ form.integration_token }}
+            <div class="form-text">
+                Deixe em branco para manter o token atual.
+                {% if config.integration_token %}
+                    Token ja configurado.
+                {% else %}
+                    Nenhum token cadastrado.
+                {% endif %}
+            </div>
+            {% for error in form.integration_token.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+        </div>
+
+        <div class="form-check form-switch mb-4">
+            {{ form.is_active }}
+            <label for="{{ form.is_active.id_for_label }}" class="form-check-label">{{ form.is_active.label }}</label>
+            {% for error in form.is_active.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+        </div>
+
+        <div class="d-flex gap-2">
+            <button type="submit" name="action" value="save" class="btn btn-dark">Salvar configuracoes</button>
+            <button type="submit" name="action" value="test" class="btn btn-outline-primary">Testar conexao</button>
+        </div>
+    </form>
+</section>
+{% endblock %}

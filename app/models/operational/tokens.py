@@ -28,6 +28,23 @@ class DjangoAiApiToken(UUIDPrimaryKeyMixin, TimestampMixin, OperationalBase):
     logs: Mapped[list["DjangoAiApiTokenLog"]] = relationship(back_populates="token")
 
 
+class DjangoAiIntegrationToken(UUIDPrimaryKeyMixin, TimestampMixin, OperationalBase):
+    __tablename__ = "django_ai_integration_tokens"
+
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("django_ai_users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    created_by_user: Mapped["DjangoAiUser"] = relationship(back_populates="integration_tokens")
+
+
 class DjangoAiApiTokenPermission(UUIDPrimaryKeyMixin, TimestampMixin, OperationalBase):
     __tablename__ = "django_ai_api_token_permissions"
     __table_args__ = (
@@ -89,4 +106,3 @@ class DjangoAiApiTokenLog(UUIDPrimaryKeyMixin, TimestampMixin, OperationalBase):
     )
 
     token: Mapped[DjangoAiApiToken | None] = relationship(back_populates="logs")
-

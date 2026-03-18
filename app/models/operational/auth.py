@@ -37,4 +37,4 @@ class DjangoAiUser(UUIDPrimaryKeyMixin, TimestampMixin, OperationalBase):
 
     role: Mapped[DjangoAiRole] = relationship(back_populates="users")
     api_tokens: Mapped[list["DjangoAiApiToken"]] = relationship(back_populates="created_by_user")
-
+    integration_tokens: Mapped[list["DjangoAiIntegrationToken"]] = relationship(back_populates="created_by_user")

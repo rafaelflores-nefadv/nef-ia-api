@@ -8,12 +8,13 @@ from app.repositories.operational.provider_model_repository import ProviderModel
 from app.repositories.operational.provider_repository import ProviderRepository
 from app.repositories.operational.queue_repository import QueueJobRepository
 from app.repositories.operational.request_file_repository import RequestFileRepository
-from app.repositories.operational.token_repository import ApiTokenRepository
+from app.repositories.operational.token_repository import ApiTokenRepository, IntegrationTokenRepository
 from app.repositories.operational.user_repository import AdminUserRepository
 from app.repositories.operational.usage_repository import ProviderUsageRepository
 
 __all__ = [
     "ApiTokenRepository",
+    "IntegrationTokenRepository",
     "ProviderRepository",
     "ProviderCredentialRepository",
     "ProviderModelRepository",

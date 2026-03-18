@@ -40,3 +40,39 @@ class ApiTokenRevokedResponse(BaseModel):
     id: UUID
     is_active: bool
 
+
+class IntegrationTokenCreateRequest(BaseModel):
+    name: str = Field(min_length=3, max_length=120)
+
+
+class IntegrationTokenCreateResponse(BaseModel):
+    id: UUID
+    name: str
+    token: str
+    is_active: bool
+    created_by_user_id: UUID
+    created_at: datetime
+
+
+class IntegrationTokenListItem(BaseModel):
+    id: UUID
+    name: str
+    token_hash_masked: str
+    is_active: bool
+    last_used_at: datetime | None
+    created_by_user_id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class IntegrationTokenDeactivatedResponse(BaseModel):
+    id: UUID
+    is_active: bool
+
+
+class IntegrationTokenTestResponse(BaseModel):
+    ok: bool
+    auth_mode: str
+    token_id: UUID | None = None
+    token_name: str | None = None
+    owner_user_id: UUID | None = None
