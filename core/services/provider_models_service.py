@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -10,6 +11,8 @@ from models_catalog.catalog import get_known_models
 from providers.models import Provider
 
 from .api_client import FastAPIClient
+
+logger = logging.getLogger(__name__)
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -241,6 +244,7 @@ class ProviderModelsService:
 
     def get_available_models(self, *, provider: Provider) -> dict[str, Any]:
         warnings: list[str] = []
+        fallback_reason = "api_error"
 
         remote_providers, provider_warnings = self._fetch_admin_providers()
         warnings.extend(provider_warnings)
@@ -257,36 +261,45 @@ class ProviderModelsService:
                 remote_provider_id=remote_provider_id
             )
             warnings.extend(model_warnings)
+            if not api_items:
+                if model_warnings:
+                    fallback_reason = "api_error"
+                else:
+                    fallback_reason = "api_no_data"
         else:
             warnings.append(
                 "Provider local nao encontrado no catalogo administrativo da FastAPI."
             )
+            fallback_reason = "provider_not_found"
 
         if api_items:
             if source == "api_provider":
                 source_label = "api_provider"
+                logger.info(
+                    "Modelos carregados via descoberta do provider.",
+                    extra={
+                        "provider_slug": provider.slug,
+                        "provider_id": provider.id,
+                        "remote_provider_id": remote_provider_id,
+                        "source": source_label,
+                        "items_count": len(api_items),
+                    },
+                )
             else:
                 source_label = "api_catalog"
                 warnings.append(
                     "A API nao retornou descoberta direta do provider nesta consulta."
                 )
-                fallback_items = self._fallback_items(provider)
-                if fallback_items:
-                    registered_slugs = {str(item.get("slug") or "") for item in api_items}
-                    merged_items: list[dict[str, Any]] = []
-                    for item in fallback_items:
-                        slug = str(item.get("slug") or "")
-                        item["is_registered"] = slug in registered_slugs
-                        merged_items.append(item)
-                    warnings.append(
-                        "Exibindo catalogo local como contingencia para manter o cadastro funcional."
-                    )
-                    return {
-                        "items": merged_items,
-                        "source": "fallback_local",
-                        "warnings": _dedupe(warnings),
-                        "provider_remote_id": remote_provider_id,
-                    }
+                logger.info(
+                    "Modelos carregados via catalogo administrativo da FastAPI.",
+                    extra={
+                        "provider_slug": provider.slug,
+                        "provider_id": provider.id,
+                        "remote_provider_id": remote_provider_id,
+                        "source": source_label,
+                        "items_count": len(api_items),
+                    },
+                )
             return {
                 "items": api_items,
                 "source": source_label,
@@ -297,6 +310,30 @@ class ProviderModelsService:
         fallback_items = self._fallback_items(provider)
         if fallback_items:
             warnings.append("Exibindo catalogo local como fallback temporario.")
+            if fallback_reason == "api_no_data":
+                logger.info(
+                    "Fallback local ativado por ausencia de dados da API.",
+                    extra={
+                        "provider_slug": provider.slug,
+                        "provider_id": provider.id,
+                        "remote_provider_id": remote_provider_id,
+                        "source": "fallback_local",
+                        "fallback_reason": fallback_reason,
+                        "items_count": len(fallback_items),
+                    },
+                )
+            else:
+                logger.warning(
+                    "Fallback local ativado por erro de integracao administrativa.",
+                    extra={
+                        "provider_slug": provider.slug,
+                        "provider_id": provider.id,
+                        "remote_provider_id": remote_provider_id,
+                        "source": "fallback_local",
+                        "fallback_reason": fallback_reason,
+                        "items_count": len(fallback_items),
+                    },
+                )
             return {
                 "items": fallback_items,
                 "source": "fallback_local",
@@ -305,6 +342,16 @@ class ProviderModelsService:
             }
 
         warnings.append("Nenhum modelo disponivel foi retornado para este provider.")
+        logger.warning(
+            "Nenhum modelo disponivel na API e no fallback local.",
+            extra={
+                "provider_slug": provider.slug,
+                "provider_id": provider.id,
+                "remote_provider_id": remote_provider_id,
+                "source": "unavailable",
+                "fallback_reason": fallback_reason,
+            },
+        )
         return {
             "items": [],
             "source": "unavailable",
