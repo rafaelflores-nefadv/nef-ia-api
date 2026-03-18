@@ -63,7 +63,7 @@ def _format_size(size_bytes: int | None) -> str:
 
 def _status_meta(status: str) -> dict[str, str]:
     mapping = {
-        "disponivel": {"label": "Disponivel", "css_class": "status-success"},
+        "disponivel": {"label": "Disponível", "css_class": "status-success"},
         "processando": {"label": "Processando", "css_class": "status-warning"},
         "erro": {"label": "Erro", "css_class": "status-danger"},
         "arquivado": {"label": "Arquivado", "css_class": "status-neutral"},
@@ -102,7 +102,7 @@ class FilesService:
                 "status": "disponivel",
                 "created_at": now - timedelta(hours=2, minutes=20),
                 "source": "upload manual",
-                "summary": "Planilha consolidada para extracao tributaria.",
+                "summary": "Planilha consolidada para extração tributária.",
                 "storage_path": "/mock/storage/nfes_marco_2026.xlsx",
                 "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "checksum": None,
@@ -118,7 +118,7 @@ class FilesService:
                 "status": "processando",
                 "created_at": now - timedelta(minutes=26),
                 "source": "api inbound",
-                "summary": "Documento em analise para classificacao de compras.",
+                "summary": "Documento em análise para classificação de compras.",
                 "storage_path": "/mock/storage/compras_lote_a.pdf",
                 "mime_type": "application/pdf",
                 "checksum": None,
@@ -134,11 +134,11 @@ class FilesService:
                 "status": "erro",
                 "created_at": now - timedelta(hours=5, minutes=7),
                 "source": "worker",
-                "summary": "Falha ao validar esquema de dados de reconciliacao.",
+                "summary": "Falha ao validar esquema de dados de reconciliação.",
                 "storage_path": "/mock/storage/reconciliacao_tributaria.json",
                 "mime_type": "application/json",
                 "checksum": None,
-                "error_message": "Schema invalido no campo total_retido.",
+                "error_message": "Schema inválido no campo total_retido.",
                 "origin_kind": "mock",
             },
             {
@@ -150,7 +150,7 @@ class FilesService:
                 "status": "arquivado",
                 "created_at": now - timedelta(days=3, hours=2),
                 "source": "sftp import",
-                "summary": "Arquivo historico de pagamentos pronto para auditoria.",
+                "summary": "Arquivo histórico de pagamentos pronto para auditoria.",
                 "storage_path": "/mock/storage/pagamentos_abril.csv",
                 "mime_type": "text/csv",
                 "checksum": None,
@@ -166,7 +166,7 @@ class FilesService:
                 "status": "disponivel",
                 "created_at": now - timedelta(days=1, hours=1, minutes=50),
                 "source": "gerado pelo sistema",
-                "summary": "Resumo textual com indicadores operacionais da execucao.",
+                "summary": "Resumo textual com indicadores operacionais da execução.",
                 "storage_path": "/mock/storage/sumario_operacional.txt",
                 "mime_type": "text/plain",
                 "checksum": None,
@@ -218,10 +218,10 @@ class FilesService:
             execution_status=execution_status,
         )
 
-        summary = f"Arquivo {file_type} retornado pela FastAPI para a execucao."
+        summary = f"Arquivo {file_type} retornado pela FastAPI para a execução."
         error_message = ""
         if status == "erro":
-            error_message = "Arquivo de erro associado a execucao."
+            error_message = "Arquivo de erro associado à execução."
             summary = "Arquivo de erro retornado pelo backend."
 
         return {
@@ -258,9 +258,9 @@ class FilesService:
                 "Configure FASTAPI_ADMIN_TOKEN para consumir arquivos administrativos reais."
             )
         elif result.status_code in {401, 403} and self.admin_token:
-            warnings.append("Token administrativo invalido ou sem permissao para arquivos.")
+            warnings.append("Token administrativo inválido ou sem permissão para arquivos.")
         elif result.status_code is None:
-            warnings.append(result.error or "Falha de conexao com a FastAPI ao consultar arquivos.")
+            warnings.append(result.error or "Falha de conexão com a FastAPI ao consultar arquivos.")
         elif result.error:
             warnings.append(result.error)
 
@@ -294,7 +294,7 @@ class FilesService:
 
         if len(api_executions) > MAX_EXECUTIONS_FOR_FILE_AGGREGATION:
             warnings.append(
-                f"Agregacao limitada a {MAX_EXECUTIONS_FOR_FILE_AGGREGATION} execucoes para preservar desempenho."
+                f"Agregação limitada a {MAX_EXECUTIONS_FOR_FILE_AGGREGATION} execuções para preservar desempenho."
             )
         api_executions = api_executions[:MAX_EXECUTIONS_FOR_FILE_AGGREGATION]
 
@@ -330,7 +330,7 @@ class FilesService:
             }
 
         warnings.append(
-            "Arquivos reais indisponiveis no momento. Exibindo fallback local."
+            "Arquivos reais indisponíveis no momento. Exibindo fallback local."
         )
         return {
             "items": self._mock_files(),
@@ -432,7 +432,7 @@ class FilesService:
                 "file_item": None,
                 "warnings": _dedupe(warnings),
                 "source": pool["source"],
-                "limitation_message": "Arquivo nao localizado nos dados disponiveis.",
+                "limitation_message": "Arquivo não localizado nos dados disponíveis.",
             }
 
         prepared = self._build_view_item(file_item)
@@ -440,7 +440,7 @@ class FilesService:
         if pool["source"] == "mock":
             limitation_message = "Detalhe exibido em fallback local por indisponibilidade da API."
         elif prepared.get("storage_path") in {"", "-"}:
-            limitation_message = "Nem todos os campos tecnicos do arquivo foram retornados pela API."
+            limitation_message = "Nem todos os campos técnicos do arquivo foram retornados pela API."
 
         return {
             "found": True,

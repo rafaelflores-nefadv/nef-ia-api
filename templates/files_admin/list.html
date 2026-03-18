@@ -11,14 +11,14 @@
     {% if integration_source == "api" %}
         <small class="admin-note">Origem atual: dados reais de arquivos agregados da FastAPI.</small>
     {% else %}
-        <small class="admin-note">Origem atual: fallback local para manter a operacao do painel.</small>
+        <small class="admin-note">Origem atual: fallback local para manter a operação do painel.</small>
     {% endif %}
 </section>
 
 {% if integration_warnings %}
     <section class="panel-card mb-3">
         <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle">
-            <strong class="d-block mb-1">Avisos de integracao</strong>
+            <strong class="d-block mb-1">Avisos de integração</strong>
             <ul class="mb-0 small">
                 {% for warning in integration_warnings %}
                     <li>{{ warning }}</li>
@@ -48,9 +48,9 @@
             </select>
         </div>
         <div class="col-12 col-md-6 col-lg-3">
-            <label class="form-label small fw-semibold mb-1">Execucao</label>
+            <label class="form-label small fw-semibold mb-1">Execução</label>
             <select name="execucao" class="form-select">
-                <option value="">Todas as execucoes</option>
+                <option value="">Todas as execuções</option>
                 {% for execution_id in execution_options %}
                     <option value="{{ execution_id }}" {% if selected_execution == execution_id %}selected{% endif %}>{{ execution_id }}</option>
                 {% endfor %}
@@ -83,11 +83,11 @@
                         <th>Arquivo</th>
                         <th>Tipo</th>
                         <th>Tamanho</th>
-                        <th>Execucao</th>
+                        <th>Execução</th>
                         <th>Status</th>
                         <th>Origem</th>
                         <th>Criado em</th>
-                        <th class="text-end">Acoes</th>
+                        <th class="text-end">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -119,7 +119,7 @@
             {% if total_count > 0 %}
                 {% include "includes/empty_state.html" with empty_icon="bi bi-funnel" empty_title="Nenhum arquivo com os filtros atuais" empty_message="Ajuste os filtros aplicados para encontrar os arquivos desejados." empty_action_url=files_list_url empty_action_label="Limpar filtros" empty_action_icon="bi bi-arrow-counterclockwise" %}
             {% else %}
-                {% include "includes/empty_state.html" with empty_icon="bi bi-folder2-open" empty_title="Nenhum arquivo disponivel" empty_message="Ainda nao existem arquivos para exibir nesta integracao." %}
+                {% include "includes/empty_state.html" with empty_icon="bi bi-folder2-open" empty_title="Nenhum arquivo disponível" empty_message="Ainda não existem arquivos para exibir nesta integração." %}
             {% endif %}
         </div>
     {% endif %}

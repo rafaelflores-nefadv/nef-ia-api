@@ -53,7 +53,7 @@ class FastAPIClient:
             return ApiResponse(
                 status_code=None,
                 data=None,
-                error="Falha de conexao com a FastAPI.",
+                error="Falha de conexão com a FastAPI.",
             )
 
         payload: dict[str, Any] | None = None
@@ -71,7 +71,7 @@ class FastAPIClient:
             return ApiResponse(
                 status_code=response.status_code,
                 data=None,
-                error=f"Resposta nao JSON da FastAPI em {path}.",
+                error=f"Resposta não JSON da FastAPI em {path}.",
             )
 
         if response.status_code >= 400:

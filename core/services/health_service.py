@@ -9,7 +9,7 @@ def _status_meta(status: str) -> dict[str, str]:
     table = {
         "online": {"label": "Online", "css_class": "status-success"},
         "degraded": {"label": "Degradado", "css_class": "status-warning"},
-        "offline": {"label": "Indisponivel", "css_class": "status-danger"},
+        "offline": {"label": "Indisponível", "css_class": "status-danger"},
     }
     return table.get(status, table["offline"])
 
@@ -30,7 +30,7 @@ def _parse_live(client: FastAPIClient) -> dict[str, Any]:
 
     if result.status_code is None:
         status = "offline"
-        message = result.error or "Nao foi possivel consultar /health/live."
+        message = result.error or "Não foi possível consultar /health/live."
     elif not isinstance(result.data, dict):
         status = "degraded"
         message = result.error or "Resposta invalida em /health/live."
@@ -77,7 +77,7 @@ def _parse_ready(client: FastAPIClient) -> dict[str, Any]:
 
     if result.status_code is None:
         status = "offline"
-        message = result.error or "Nao foi possivel consultar /health/ready."
+        message = result.error or "Não foi possível consultar /health/ready."
     elif not isinstance(result.data, dict):
         status = "degraded"
         message = result.error or "Resposta invalida em /health/ready."

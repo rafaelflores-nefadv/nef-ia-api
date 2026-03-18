@@ -1,7 +1,7 @@
 {% extends "layouts/base_admin.html" %}
 
 {% block content %}
-{% include "includes/page_header.html" with header_title="Dashboard" header_subtitle="Visao consolidada de saude e catalogo da plataforma." breadcrumb_current="Dashboard" %}
+{% include "includes/page_header.html" with header_title="Dashboard" header_subtitle="Visão consolidada de saúde e catálogo da plataforma." breadcrumb_current="Dashboard" %}
 
 <section class="mb-4">
     <div class="row g-3">
@@ -53,15 +53,15 @@
 <section class="mb-4">
     <article class="panel-card">
         <div class="panel-title-wrap">
-            <h2 class="panel-title">Atalhos rapidos</h2>
-            <p class="panel-muted mb-0">Acesso direto aos modulos administrativos mais usados.</p>
+            <h2 class="panel-title">Atalhos rápidos</h2>
+            <p class="panel-muted mb-0">Acesso direto aos módulos administrativos mais usados.</p>
         </div>
         <div class="row g-2">
             <div class="col-12 col-md-6 col-xl-4">
                 <a href="{% url 'providers:list' %}" class="quick-link-card">
                     <div>
                         <p class="quick-link-title">Providers</p>
-                        <p class="quick-link-description">Gestao de provedores de IA</p>
+                        <p class="quick-link-description">Gestão de provedores de IA</p>
                     </div>
                     <i class="bi bi-diagram-3"></i>
                 </a>
@@ -70,7 +70,7 @@
                 <a href="{% url 'models_catalog:list' %}" class="quick-link-card">
                     <div>
                         <p class="quick-link-title">Modelos</p>
-                        <p class="quick-link-description">Catalogo de modelos por provider</p>
+                        <p class="quick-link-description">Catálogo de modelos por provider</p>
                     </div>
                     <i class="bi bi-boxes"></i>
                 </a>
@@ -79,7 +79,7 @@
                 <a href="{% url 'credentials:list' %}" class="quick-link-card">
                     <div>
                         <p class="quick-link-title">Credenciais</p>
-                        <p class="quick-link-description">Chaves e configuracoes de acesso</p>
+                        <p class="quick-link-description">Chaves e configurações de acesso</p>
                     </div>
                     <i class="bi bi-key"></i>
                 </a>
@@ -87,8 +87,8 @@
             <div class="col-12 col-md-6 col-xl-4">
                 <a href="{% url 'operations:status' %}" class="quick-link-card">
                     <div>
-                        <p class="quick-link-title">Operacoes</p>
-                        <p class="quick-link-description">Saude operacional consolidada</p>
+                        <p class="quick-link-title">Operações</p>
+                        <p class="quick-link-description">Saúde operacional consolidada</p>
                     </div>
                     <i class="bi bi-gear-wide-connected"></i>
                 </a>
@@ -96,7 +96,7 @@
             <div class="col-12 col-md-6 col-xl-4">
                 <a href="{% url 'executions:list' %}" class="quick-link-card">
                     <div>
-                        <p class="quick-link-title">Execucoes</p>
+                        <p class="quick-link-title">Execuções</p>
                         <p class="quick-link-description">Acompanhamento de processamento</p>
                     </div>
                     <i class="bi bi-play-circle"></i>
@@ -106,7 +106,7 @@
                 <a href="{% url 'files_admin:list' %}" class="quick-link-card">
                     <div>
                         <p class="quick-link-title">Arquivos</p>
-                        <p class="quick-link-description">Navegacao de entradas e saidas</p>
+                        <p class="quick-link-description">Navegação de entradas e saídas</p>
                     </div>
                     <i class="bi bi-folder2-open"></i>
                 </a>
@@ -138,7 +138,7 @@
     <div class="col-12 col-xl-4">
         <article class="panel-card h-100">
             <div class="panel-title-wrap">
-                <h2 class="panel-title">Integracao FastAPI</h2>
+                <h2 class="panel-title">Integração FastAPI</h2>
             </div>
             <p class="panel-muted mb-2">{{ health_live.message }}</p>
             <p class="panel-muted mb-2">{{ health_ready.message }}</p>
@@ -147,10 +147,10 @@
                     <small>{{ health_errors|join:", " }}</small>
                 </div>
             {% else %}
-                <small class="text-secondary">Conexao com FastAPI operacional.</small>
+                <small class="text-secondary">Conexão com FastAPI operacional.</small>
             {% endif %}
             <div class="mt-3">
-                <small class="text-secondary">Ultima sincronizacao: {{ last_sync_at|date:"d/m/Y H:i:s" }}</small>
+                <small class="text-secondary">Última sincronização: {{ last_sync_at|date:"d/m/Y H:i:s" }}</small>
             </div>
         </article>
     </div>

@@ -1,19 +1,19 @@
 {% extends "layouts/base_admin.html" %}
 
 {% block content %}
-{% include "includes/page_header.html" with header_title="Operacoes" header_subtitle=page_subtitle breadcrumb_current="Operacoes" %}
+{% include "includes/page_header.html" with header_title="Operações" header_subtitle=page_subtitle breadcrumb_current="Operações" %}
 
 <section class="mb-4">
     <div class="d-flex flex-wrap gap-2 mb-3">
-        <span class="status-pill {{ health_overall.status_css_class }}">Saude geral: {{ health_overall.status_label }}</span>
+        <span class="status-pill {{ health_overall.status_css_class }}">Saúde geral: {{ health_overall.status_label }}</span>
         <span class="status-pill {{ health_live.status_css_class }}">Live: {{ health_live.status_label }}</span>
         <span class="status-pill {{ health_ready.status_css_class }}">Ready: {{ health_ready.status_label }}</span>
     </div>
 
     {% if health_errors %}
-        <p class="admin-note mb-3">Integracao em degradacao: {{ health_errors|join:", " }}</p>
+        <p class="admin-note mb-3">Integração em degradação: {{ health_errors|join:", " }}</p>
     {% else %}
-        <p class="admin-note mb-3">Dados de saude consultados em tempo real na FastAPI.</p>
+        <p class="admin-note mb-3">Dados de saúde consultados em tempo real na FastAPI.</p>
     {% endif %}
 
     <div class="row g-3">
@@ -32,7 +32,7 @@
     <div class="col-12 col-xl-6">
         <article class="panel-card h-100">
             <div class="panel-title-wrap">
-                <h3 class="panel-title">Saude do catalogo</h3>
+                <h3 class="panel-title">Saúde do catálogo</h3>
             </div>
             <div class="d-grid gap-2">
                 {% for item in catalog_health %}
@@ -68,7 +68,7 @@
                 {% endfor %}
             </div>
             {% if health_errors %}
-                <small class="text-secondary d-block mt-2">Falhas de integracao: {{ health_errors|join:", " }}</small>
+                <small class="text-secondary d-block mt-2">Falhas de integração: {{ health_errors|join:", " }}</small>
             {% else %}
                 <small class="text-secondary d-block mt-2">Dados de health consultados em tempo real na FastAPI.</small>
             {% endif %}
@@ -95,7 +95,7 @@
     <div class="col-12 col-xl-4">
         <article class="panel-card h-100">
             <div class="panel-title-wrap">
-                <h3 class="panel-title">Ultima atualizacao</h3>
+                <h3 class="panel-title">Última atualização</h3>
             </div>
             <p class="mb-0">{{ last_updated|date:"d/m/Y H:i:s" }}</p>
         </article>

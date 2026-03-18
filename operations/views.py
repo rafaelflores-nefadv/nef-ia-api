@@ -54,8 +54,8 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
 
         context.update(
             {
-                "page_title": "Operacoes",
-                "page_subtitle": "Visao consolidada do status operacional da plataforma.",
+                "page_title": "Opera\u00e7\u00f5es",
+                "page_subtitle": "Vis\u00e3o consolidada do status operacional da plataforma.",
                 "active_menu": "operacoes",
                 "summary_cards": [
                     {"label": "Total de providers", "value": providers_total},
@@ -116,7 +116,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
             alerts.append(
                 {
                     "level": "danger",
-                    "message": "FastAPI indisponivel. Exibindo dados de saude com fallback.",
+                    "message": "FastAPI indispon\u00edvel. Exibindo dados de sa\u00fade com fallback.",
                 }
             )
         elif health["overall"]["status"] == "degraded":
@@ -131,7 +131,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
             alerts.append(
                 {
                     "level": "warning",
-                    "message": f"Provider {provider.name} esta ativo, mas sem modelos ativos.",
+                    "message": f"Provider {provider.name} est\u00e1 ativo, mas sem modelos ativos.",
                 }
             )
 
@@ -151,7 +151,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
                 {
                     "level": "warning",
                     "message": (
-                        f"Provider {provider.name} esta ativo, mas sem credenciais ativas."
+                        f"Provider {provider.name} est\u00e1 ativo, mas sem credenciais ativas."
                     ),
                 }
             )
@@ -194,7 +194,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
                 {
                     "level": "warning",
                     "message": (
-                        "Existem providers sem configuracao minima para operacao."
+                        "Existem providers sem configura\u00e7\u00e3o m\u00ednima para opera\u00e7\u00e3o."
                     ),
                 }
             )
@@ -203,7 +203,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
             alerts.append(
                 {
                     "level": "success",
-                    "message": "Nenhum alerta operacional critico no momento.",
+                    "message": "Nenhum alerta operacional cr\u00edtico no momento.",
                 }
             )
 

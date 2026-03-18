@@ -6,10 +6,10 @@ from core.services.executions_service import ExecutionsService
 
 
 PERIOD_OPTIONS = [
-    ("", "Todos os periodos"),
-    ("24h", "Ultimas 24 horas"),
-    ("7d", "Ultimos 7 dias"),
-    ("30d", "Ultimos 30 dias"),
+    ("", "Todos os períodos"),
+    ("24h", "Últimas 24 horas"),
+    ("7d", "Últimos 7 dias"),
+    ("30d", "Últimos 30 dias"),
 ]
 
 
@@ -34,15 +34,15 @@ class ExecutionListView(LoginRequiredMixin, TemplateView):
 
         context.update(
             {
-                "page_title": "Execucoes",
-                "page_subtitle": "Visao administrativa das execucoes da plataforma.",
+                "page_title": "Execuções",
+                "page_subtitle": "Visão administrativa das execuções da plataforma.",
                 "active_menu": "execucoes",
                 "executions": payload["items"],
                 "status_options": [
                     ("", "Todos os status"),
                     ("pendente", "Pendente"),
                     ("em_andamento", "Em andamento"),
-                    ("concluida", "Concluida"),
+                    ("concluida", "Concluída"),
                     ("falhou", "Falhou"),
                 ],
                 "provider_options": payload["provider_options"],
@@ -56,7 +56,7 @@ class ExecutionListView(LoginRequiredMixin, TemplateView):
                 "integration_source": payload["source"],
                 "integration_warnings": payload["warnings"],
                 "list_counter_label": (
-                    f"Exibindo {payload['filtered_count']} de {payload['total_count']} execucoes"
+                    f"Exibindo {payload['filtered_count']} de {payload['total_count']} execuções"
                 ),
             }
         )

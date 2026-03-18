@@ -22,7 +22,7 @@ def _status_meta(status: str) -> dict[str, str]:
     table = {
         "pendente": {"label": "Pendente", "css_class": "status-neutral"},
         "em_andamento": {"label": "Em andamento", "css_class": "status-warning"},
-        "concluida": {"label": "Concluida", "css_class": "status-success"},
+        "concluida": {"label": "Concluída", "css_class": "status-success"},
         "falhou": {"label": "Falhou", "css_class": "status-danger"},
     }
     return table.get(status, table["pendente"])
@@ -96,7 +96,7 @@ class ExecutionsService:
         return [
             {
                 "id": "exec-1001",
-                "automation_name": "Extracao de notas fiscais",
+                "automation_name": "Extração de notas fiscais",
                 "provider": "OpenAI",
                 "model": "gpt-4.1",
                 "status": "concluida",
@@ -104,13 +104,13 @@ class ExecutionsService:
                 "finished_at": now - timedelta(hours=2, minutes=3),
                 "estimated_cost": 3.2415,
                 "related_files_count": 18,
-                "processing_summary": "Processamento finalizado com consolidacao e validacao.",
+                "processing_summary": "Processamento finalizado com consolidação e validação.",
                 "error_message": "",
                 "source": "mock",
             },
             {
                 "id": "exec-1002",
-                "automation_name": "Classificacao de documentos de compras",
+                "automation_name": "Classificação de documentos de compras",
                 "provider": "Azure OpenAI",
                 "model": "gpt-4o-mini",
                 "status": "em_andamento",
@@ -118,13 +118,13 @@ class ExecutionsService:
                 "finished_at": None,
                 "estimated_cost": 0.7622,
                 "related_files_count": 9,
-                "processing_summary": "Execucao em lote com enriquecimento de metadados.",
+                "processing_summary": "Execução em lote com enriquecimento de metadados.",
                 "error_message": "",
                 "source": "mock",
             },
             {
                 "id": "exec-1003",
-                "automation_name": "Conferencia tributaria mensal",
+                "automation_name": "Conferência tributária mensal",
                 "provider": "Anthropic",
                 "model": "claude-3-5-sonnet",
                 "status": "falhou",
@@ -132,13 +132,13 @@ class ExecutionsService:
                 "finished_at": now - timedelta(hours=4, minutes=58),
                 "estimated_cost": 0.2140,
                 "related_files_count": 4,
-                "processing_summary": "Execucao interrompida na etapa de reconciliacao.",
-                "error_message": "Timeout ao consultar dependencia externa.",
+                "processing_summary": "Execução interrompida na etapa de reconciliação.",
+                "error_message": "Timeout ao consultar dependência externa.",
                 "source": "mock",
             },
             {
                 "id": "exec-1004",
-                "automation_name": "Validacao de planilhas de pagamento",
+                "automation_name": "Validação de planilhas de pagamento",
                 "provider": "OpenAI",
                 "model": "gpt-4.1-mini",
                 "status": "pendente",
@@ -146,7 +146,7 @@ class ExecutionsService:
                 "finished_at": None,
                 "estimated_cost": 0.0,
                 "related_files_count": 27,
-                "processing_summary": "Fila aguardando worker disponivel.",
+                "processing_summary": "Fila aguardando worker disponível.",
                 "error_message": "",
                 "source": "mock",
             },
@@ -160,7 +160,7 @@ class ExecutionsService:
                 "finished_at": now - timedelta(days=1, hours=1, minutes=29),
                 "estimated_cost": 1.1168,
                 "related_files_count": 11,
-                "processing_summary": "Resumo gerado e publicado no repositorio interno.",
+                "processing_summary": "Resumo gerado e publicado no repositório interno.",
                 "error_message": "",
                 "source": "mock",
             },
@@ -182,9 +182,9 @@ class ExecutionsService:
 
         summary = "Dados carregados da FastAPI."
         if status == "falhou" and row.get("error_message"):
-            summary = "Execucao com falha reportada pelo backend."
+            summary = "Execução com falha reportada pelo backend."
         elif status == "em_andamento":
-            summary = "Execucao em andamento no backend."
+            summary = "Execução em andamento no backend."
 
         return {
             "id": execution_id,
@@ -214,9 +214,9 @@ class ExecutionsService:
                 "Configure FASTAPI_ADMIN_TOKEN para consumir endpoints administrativos reais."
             )
         elif result.status_code in {401, 403} and self.admin_token:
-            warnings.append("Token administrativo invalido ou sem permissao para execucoes.")
+            warnings.append("Token administrativo inválido ou sem permissão para execuções.")
         elif result.status_code is None:
-            warnings.append(result.error or "Falha de conexao com a FastAPI.")
+            warnings.append(result.error or "Falha de conexão com a FastAPI.")
         elif result.error:
             warnings.append(result.error)
 
@@ -267,7 +267,7 @@ class ExecutionsService:
             ]
             if supplemental:
                 warnings.append(
-                    "Dados de pendentes/concluidas ainda usam fallback local nesta etapa."
+                    "Dados de pendentes/concluídas ainda usam fallback local nesta etapa."
                 )
             return {
                 "items": deduped_api + supplemental,
@@ -276,7 +276,7 @@ class ExecutionsService:
             }
 
         warnings.append(
-            "Execucoes reais indisponiveis no momento. Exibindo fallback local."
+            "Execuções reais indisponíveis no momento. Exibindo fallback local."
         )
         return {
             "items": mock_items,
@@ -352,7 +352,7 @@ class ExecutionsService:
         warnings: list[str] = []
         if not self.admin_token:
             warnings.append(
-                "Sem FASTAPI_ADMIN_TOKEN, nao foi possivel consultar quantidade real de arquivos."
+                "Sem FASTAPI_ADMIN_TOKEN, não foi possível consultar quantidade real de arquivos."
             )
             return {"count": None, "warnings": warnings}
 
@@ -361,7 +361,7 @@ class ExecutionsService:
             headers=self._auth_headers(),
         )
         if result.status_code is None:
-            warnings.append(result.error or "Falha ao consultar arquivos da execucao.")
+            warnings.append(result.error or "Falha ao consultar arquivos da execução.")
             return {"count": None, "warnings": warnings}
         if result.error:
             warnings.append(result.error)
@@ -371,7 +371,7 @@ class ExecutionsService:
         if isinstance(items, list):
             return {"count": len(items), "warnings": warnings}
 
-        warnings.append("Resposta inesperada ao consultar arquivos da execucao.")
+        warnings.append("Resposta inesperada ao consultar arquivos da execução.")
         return {"count": None, "warnings": warnings}
 
     def get_execution_list(
@@ -425,7 +425,7 @@ class ExecutionsService:
                 "execution": None,
                 "warnings": _dedupe(warnings),
                 "source": pool["source"],
-                "limitation_message": "Execucao nao localizada nos dados disponiveis.",
+                "limitation_message": "Execução não localizada nos dados disponíveis.",
             }
 
         if execution.get("source") == "api" and execution.get("related_files_count") is None:
@@ -440,9 +440,9 @@ class ExecutionsService:
         if pool["source"] == "mock":
             limitation_message = "Detalhe exibido em fallback local por indisponibilidade da API."
         elif execution.get("source") != "api":
-            limitation_message = "Parte dos dados desta execucao ainda vem de fallback local."
+            limitation_message = "Parte dos dados desta execução ainda vem de fallback local."
         elif prepared.get("related_files_count") is None:
-            limitation_message = "Nem todos os campos de detalhe estao disponiveis nesta integracao."
+            limitation_message = "Nem todos os campos de detalhe estão disponíveis nesta integração."
 
         return {
             "found": True,

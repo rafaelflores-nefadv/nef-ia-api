@@ -20,7 +20,7 @@ class ProviderListView(LoginRequiredMixin, ListView):
         context.update(
             {
                 "page_title": "Providers",
-                "page_subtitle": "Gestao administrativa de integracoes disponiveis.",
+                "page_subtitle": "Gestão administrativa de integrações disponíveis.",
                 "active_menu": "providers",
             }
         )
@@ -66,7 +66,7 @@ class ProviderUpdateView(LoginRequiredMixin, UpdateView):
                 "form_title": "Editar provider",
                 "form_subtitle": "Atualize os dados do provider selecionado.",
                 "active_menu": "providers",
-                "submit_label": "Salvar alteracoes",
+                "submit_label": "Salvar alterações",
             }
         )
         return context

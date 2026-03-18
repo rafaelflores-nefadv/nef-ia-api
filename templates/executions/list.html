@@ -2,7 +2,7 @@
 
 {% block content %}
 {% url "executions:list" as executions_list_url %}
-{% include "includes/page_header.html" with header_title="Execucoes" header_subtitle=page_subtitle breadcrumb_current="Execucoes" header_side_text=list_counter_label %}
+{% include "includes/page_header.html" with header_title="Execuções" header_subtitle=page_subtitle breadcrumb_current="Execuções" header_side_text=list_counter_label %}
 
 <section class="mb-3 d-flex flex-column gap-2">
     <div class="d-flex flex-wrap align-items-center gap-2">
@@ -11,7 +11,7 @@
     {% if integration_source == "api" %}
         <small class="admin-note">Origem atual: dados reais consumidos da FastAPI administrativa.</small>
     {% elif integration_source == "api_hibrido" %}
-        <small class="admin-note">Origem atual: integracao parcial, combinando API real com fallback local.</small>
+        <small class="admin-note">Origem atual: integração parcial, combinando API real com fallback local.</small>
     {% else %}
         <small class="admin-note">Origem atual: fallback local devido a indisponibilidade da API.</small>
     {% endif %}
@@ -20,7 +20,7 @@
 {% if integration_warnings %}
     <section class="panel-card mb-3">
         <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle">
-            <strong class="d-block mb-1">Avisos de integracao</strong>
+            <strong class="d-block mb-1">Avisos de integração</strong>
             <ul class="mb-0 small">
                 {% for warning in integration_warnings %}
                     <li>{{ warning }}</li>
@@ -50,7 +50,7 @@
             </select>
         </div>
         <div class="col-12 col-md-6 col-lg-3">
-            <label class="form-label small fw-semibold mb-1">Periodo</label>
+            <label class="form-label small fw-semibold mb-1">Período</label>
             <select name="periodo" class="form-select">
                 {% for value, label in period_options %}
                     <option value="{{ value }}" {% if selected_period == value %}selected{% endif %}>{{ label }}</option>
@@ -63,7 +63,7 @@
                 type="text"
                 name="q"
                 class="form-control"
-                placeholder="ID ou automacao"
+                placeholder="ID ou automação"
                 value="{{ search_query }}"
             >
         </div>
@@ -81,15 +81,15 @@
                 <thead>
                     <tr>
                         <th>ID</th>
-                        <th>Automacao</th>
+                        <th>Automação</th>
                         <th>Provider</th>
                         <th>Modelo</th>
                         <th>Status</th>
                         <th>Inicio</th>
                         <th>Fim</th>
-                        <th>Duracao</th>
+                        <th>Duração</th>
                         <th>Custo</th>
-                        <th class="text-end">Acoes</th>
+                        <th class="text-end">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -123,9 +123,9 @@
     {% else %}
         <div class="p-2">
             {% if total_count > 0 %}
-                {% include "includes/empty_state.html" with empty_icon="bi bi-funnel" empty_title="Nenhuma execucao com os filtros atuais" empty_message="Ajuste os filtros aplicados para encontrar as execucoes desejadas." empty_action_url=executions_list_url empty_action_label="Limpar filtros" empty_action_icon="bi bi-arrow-counterclockwise" %}
+                {% include "includes/empty_state.html" with empty_icon="bi bi-funnel" empty_title="Nenhuma execução com os filtros atuais" empty_message="Ajuste os filtros aplicados para encontrar as execuções desejadas." empty_action_url=executions_list_url empty_action_label="Limpar filtros" empty_action_icon="bi bi-arrow-counterclockwise" %}
             {% else %}
-                {% include "includes/empty_state.html" with empty_icon="bi bi-play-circle" empty_title="Nenhuma execucao disponivel" empty_message="Ainda nao existem execucoes para exibir nesta integracao." %}
+                {% include "includes/empty_state.html" with empty_icon="bi bi-play-circle" empty_title="Nenhuma execução disponível" empty_message="Ainda não existem execuções para exibir nesta integração." %}
             {% endif %}
         </div>
     {% endif %}

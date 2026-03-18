@@ -27,12 +27,12 @@ class FileListView(LoginRequiredMixin, TemplateView):
         context.update(
             {
                 "page_title": "Arquivos",
-                "page_subtitle": "Visao administrativa dos arquivos da plataforma.",
+                "page_subtitle": "Visão administrativa dos arquivos da plataforma.",
                 "active_menu": "arquivos",
                 "files": payload["items"],
                 "status_options": [
                     ("", "Todos os status"),
-                    ("disponivel", "Disponivel"),
+                    ("disponivel", "Disponível"),
                     ("processando", "Processando"),
                     ("erro", "Erro"),
                     ("arquivado", "Arquivado"),

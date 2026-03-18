@@ -22,7 +22,7 @@ class ProviderModelForm(forms.ModelForm):
             "provider": "Provider",
             "name": "Nome",
             "slug": "Slug",
-            "description": "Descricao",
+            "description": "Descrição",
             "context_window": "Janela de contexto",
             "input_cost_per_1k": "Custo input / 1k",
             "output_cost_per_1k": "Custo output / 1k",
@@ -40,7 +40,7 @@ class ProviderModelForm(forms.ModelForm):
                 attrs={
                     "class": "form-control",
                     "rows": 4,
-                    "placeholder": "Descricao opcional do modelo.",
+                    "placeholder": "Descrição opcional do modelo.",
                 }
             ),
             "context_window": forms.NumberInput(

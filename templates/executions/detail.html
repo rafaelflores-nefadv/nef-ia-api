@@ -2,7 +2,7 @@
 
 {% block content %}
 {% url "executions:list" as executions_list_url %}
-{% include "includes/page_header.html" with header_title="Detalhe da execucao" header_subtitle=execution.id breadcrumb_parent_label="Execucoes" breadcrumb_parent_url=executions_list_url breadcrumb_current="Detalhe" header_action_url=executions_list_url header_action_label="Voltar para listagem" header_action_variant="btn-outline-secondary" %}
+{% include "includes/page_header.html" with header_title="Detalhe da execução" header_subtitle=execution.id breadcrumb_parent_label="Execuções" breadcrumb_parent_url=executions_list_url breadcrumb_current="Detalhe" header_action_url=executions_list_url header_action_label="Voltar para listagem" header_action_variant="btn-outline-secondary" %}
 
 <section class="mb-3 d-flex flex-column gap-2">
     <div class="d-flex flex-wrap align-items-center gap-2">
@@ -26,7 +26,7 @@
         {% endif %}
         {% if integration_warnings %}
             <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle">
-                <strong class="d-block mb-1">Avisos de integracao</strong>
+            <strong class="d-block mb-1">Avisos de integração</strong>
                 <ul class="mb-0 small">
                     {% for warning in integration_warnings %}
                         <li>{{ warning }}</li>
@@ -46,7 +46,7 @@
     </div>
     <div class="col-12 col-md-6 col-xl-3">
         <article class="metric-card">
-            <p class="metric-label">Duracao</p>
+            <p class="metric-label">Duração</p>
             <h3 class="metric-value">{{ execution.duration_display }}</h3>
         </article>
     </div>
@@ -68,10 +68,10 @@
     <div class="col-12 col-xl-7">
         <article class="panel-card h-100">
             <div class="panel-title-wrap">
-                <h3 class="panel-title">Resumo da execucao</h3>
+                <h3 class="panel-title">Resumo da execução</h3>
             </div>
             <dl class="row mb-0">
-                <dt class="col-sm-4 text-secondary">Automacao</dt>
+                <dt class="col-sm-4 text-secondary">Automação</dt>
                 <dd class="col-sm-8">{{ execution.automation_name|default:"-" }}</dd>
 
                 <dt class="col-sm-4 text-secondary">Provider</dt>
@@ -109,7 +109,7 @@
                 </div>
             {% else %}
                 <div class="border rounded-3 p-2 border-success-subtle bg-success-subtle">
-                    <span class="small">Sem erro tecnico registrado nesta execucao.</span>
+                    <span class="small">Sem erro técnico registrado nesta execução.</span>
                 </div>
             {% endif %}
         </article>

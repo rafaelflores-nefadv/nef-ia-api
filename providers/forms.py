@@ -10,7 +10,7 @@ class ProviderForm(forms.ModelForm):
         labels = {
             "name": "Nome",
             "slug": "Slug",
-            "description": "Descricao",
+            "description": "Descrição",
             "is_active": "Ativo",
         }
         widgets = {
@@ -30,7 +30,7 @@ class ProviderForm(forms.ModelForm):
                 attrs={
                     "class": "form-control",
                     "rows": 4,
-                    "placeholder": "Descricao opcional do provider.",
+                    "placeholder": "Descrição opcional do provider.",
                 }
             ),
             "is_active": forms.CheckboxInput(

@@ -27,7 +27,7 @@ class ProviderModelListView(LoginRequiredMixin, ListView):
         context.update(
             {
                 "page_title": "Modelos",
-                "page_subtitle": "Catalogo administrativo de modelos de IA.",
+                "page_subtitle": "Catálogo administrativo de modelos de IA.",
                 "active_menu": "modelos",
             }
         )
@@ -76,7 +76,7 @@ class ProviderModelUpdateView(LoginRequiredMixin, UpdateView):
                 "form_title": "Editar modelo",
                 "form_subtitle": "Atualize os dados do modelo selecionado.",
                 "active_menu": "modelos",
-                "submit_label": "Salvar alteracoes",
+                "submit_label": "Salvar alterações",
             }
         )
         return context

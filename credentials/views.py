@@ -27,7 +27,7 @@ class ProviderCredentialListView(LoginRequiredMixin, ListView):
         context.update(
             {
                 "page_title": "Credenciais",
-                "page_subtitle": "Gestao administrativa de credenciais por provider.",
+                "page_subtitle": "Gestão administrativa de credenciais por provider.",
                 "active_menu": "credenciais",
             }
         )
@@ -77,7 +77,7 @@ class ProviderCredentialUpdateView(LoginRequiredMixin, UpdateView):
                 "form_title": "Editar credencial",
                 "form_subtitle": "Atualize os dados da credencial selecionada.",
                 "active_menu": "credenciais",
-                "submit_label": "Salvar alteracoes",
+                "submit_label": "Salvar alterações",
                 "is_editing": True,
             }
         )
