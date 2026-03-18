@@ -6,6 +6,9 @@ from django.urls import reverse_lazy
 from django.views.decorators.http import require_POST
 from django.views.generic import CreateView, ListView, UpdateView
 
+from core.services.provider_models_service import ProviderModelsService
+from providers.models import Provider
+
 from .forms import ProviderModelCreateForm, ProviderModelUpdateForm
 from .models import ProviderModel
 
@@ -40,9 +43,28 @@ class ProviderModelCreateView(LoginRequiredMixin, CreateView):
     template_name = "models_catalog/form.html"
     success_url = reverse_lazy("models_catalog:list")
 
+    def _resolve_selected_provider(self) -> Provider | None:
+        provider_value = (
+            self.request.POST.get("provider")
+            if self.request.method == "POST"
+            else self.request.GET.get("provider")
+        )
+        if not provider_value:
+            return None
+        try:
+            return Provider.objects.get(pk=int(provider_value))
+        except (TypeError, ValueError, Provider.DoesNotExist):
+            return None
+
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
-        if self.request.method == "GET":
+        selected_provider = self._resolve_selected_provider()
+        if selected_provider is not None:
+            kwargs["catalog_provider_id"] = selected_provider.pk
+            kwargs["available_models_payload"] = ProviderModelsService().get_available_models(
+                provider=selected_provider
+            )
+        elif self.request.method == "GET":
             kwargs["catalog_provider_id"] = self.request.GET.get("provider")
         return kwargs
 
@@ -53,7 +75,7 @@ class ProviderModelCreateView(LoginRequiredMixin, CreateView):
                 "page_title": "Novo modelo",
                 "form_title": "Novo modelo",
                 "form_subtitle": (
-                    "Selecione um modelo conhecido do provider para manter o catalogo consistente."
+                    "Selecione um modelo disponivel do provider via FastAPI para manter o catalogo consistente."
                 ),
                 "active_menu": "modelos",
                 "submit_label": "Salvar modelo",

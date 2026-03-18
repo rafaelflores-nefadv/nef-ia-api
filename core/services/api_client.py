@@ -10,7 +10,7 @@ from django.conf import settings
 @dataclass
 class ApiResponse:
     status_code: int | None
-    data: dict[str, Any] | None
+    data: Any | None
     error: str | None = None
 
     @property
@@ -22,7 +22,7 @@ class ApiResponse:
         return (
             self.status_code is not None
             and 200 <= self.status_code < 300
-            and isinstance(self.data, dict)
+            and self.data is not None
         )
 
 
@@ -37,6 +37,7 @@ class FastAPIClient:
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        expect_dict: bool = True,
     ) -> ApiResponse:
         url = f"{self.base_url}/{path.lstrip('/')}"
 
@@ -53,30 +54,37 @@ class FastAPIClient:
             return ApiResponse(
                 status_code=None,
                 data=None,
-                error="Falha de conexão com a FastAPI.",
+                error="Falha de conexao com a FastAPI.",
             )
 
-        payload: dict[str, Any] | None = None
         try:
             decoded = response.json()
-            if isinstance(decoded, dict):
-                payload = decoded
-            else:
-                return ApiResponse(
-                    status_code=response.status_code,
-                    data=None,
-                    error=f"Resposta invalida da FastAPI em {path}.",
-                )
         except ValueError:
             return ApiResponse(
                 status_code=response.status_code,
                 data=None,
-                error=f"Resposta não JSON da FastAPI em {path}.",
+                error=f"Resposta nao JSON da FastAPI em {path}.",
             )
+
+        if expect_dict and not isinstance(decoded, dict):
+            return ApiResponse(
+                status_code=response.status_code,
+                data=None,
+                error=f"Resposta invalida da FastAPI em {path}.",
+            )
+
+        if not expect_dict and not isinstance(decoded, (dict, list)):
+            return ApiResponse(
+                status_code=response.status_code,
+                data=None,
+                error=f"Resposta invalida da FastAPI em {path}.",
+            )
+
+        payload = decoded
 
         if response.status_code >= 400:
             payload_error = None
-            if isinstance(payload.get("error"), dict):
+            if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
                 payload_error = payload["error"].get("message")
             return ApiResponse(
                 status_code=response.status_code,

@@ -7,11 +7,23 @@
 <section class="panel-card">
     {% if is_create_mode %}
         <p class="admin-note mb-2">
-            Selecione um modelo conhecido do provider para evitar duplicidade e inconsistencias de catalogo.
+            Selecione um modelo disponivel do provider para evitar duplicidade e inconsistencias de catalogo.
         </p>
         <p class="admin-note mb-3">
-            Nome e slug sao preenchidos automaticamente a partir do catalogo controlado.
+            Nome e slug sao preenchidos automaticamente a partir da integracao FastAPI.
         </p>
+        <div class="d-flex align-items-center gap-2 mb-3">
+            {% include "includes/data_origin_badge.html" with source=form.available_models_source %}
+            {% if form.available_models_source == "api_provider" %}
+                <small class="admin-note">Origem atual: modelos descobertos no provider via FastAPI.</small>
+            {% elif form.available_models_source == "api_catalog" %}
+                <small class="admin-note">Origem atual: catalogo administrativo da FastAPI.</small>
+            {% elif form.available_models_source == "fallback_local" %}
+                <small class="admin-note">Origem atual: fallback local temporario.</small>
+            {% else %}
+                <small class="admin-note">Origem atual: integracao indisponivel.</small>
+            {% endif %}
+        </div>
     {% else %}
         <p class="admin-note mb-3">
             Provider e identificacao do modelo estao bloqueados para preservar consistencia.
@@ -40,6 +52,16 @@
         </div>
     {% endif %}
 
+    {% if is_create_mode and form.available_models_warnings %}
+        <div class="alert alert-info" role="alert">
+            <ul class="mb-0 ps-3">
+                {% for warning in form.available_models_warnings %}
+                    <li>{{ warning }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+
     {% if form.non_field_errors %}
         <div class="alert alert-danger" role="alert">
             {% for error in form.non_field_errors %}
@@ -56,7 +78,7 @@
                 <div class="col-12 col-lg-6">
                     <label for="{{ form.provider.id_for_label }}" class="form-label fw-semibold">{{ form.provider.label }}</label>
                     {{ form.provider }}
-                    <div class="form-text">Escolha o provider para carregar os modelos conhecidos disponiveis.</div>
+                    <div class="form-text">Escolha o provider para carregar os modelos disponiveis.</div>
                     {% for error in form.provider.errors %}
                         <div class="invalid-feedback d-block">{{ error }}</div>
                     {% endfor %}
