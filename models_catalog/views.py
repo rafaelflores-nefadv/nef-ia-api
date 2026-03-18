@@ -59,8 +59,14 @@ class ProviderModelCreateView(LoginRequiredMixin, CreateView):
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         selected_provider = self._resolve_selected_provider()
+        selected_model_key = (
+            self.request.POST.get("known_model")
+            if self.request.method == "POST"
+            else self.request.GET.get("model")
+        )
         if selected_provider is not None:
             kwargs["catalog_provider_id"] = selected_provider.pk
+            kwargs["catalog_model_key"] = selected_model_key
             kwargs["available_models_payload"] = ProviderModelsService().get_available_models(
                 provider=selected_provider
             )

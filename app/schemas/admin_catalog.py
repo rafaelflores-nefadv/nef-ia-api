@@ -61,6 +61,19 @@ class ProviderModelResponse(BaseModel):
     updated_at: datetime
 
 
+class AvailableProviderModelResponse(BaseModel):
+    provider_id: UUID
+    provider_slug: str
+    provider_model_id: str
+    model_name: str
+    model_slug: str
+    context_limit: int | None = None
+    cost_input_per_1k_tokens: Decimal | None = None
+    cost_output_per_1k_tokens: Decimal | None = None
+    description: str | None = None
+    is_registered: bool = False
+
+
 class ProviderCredentialCreateRequest(BaseModel):
     credential_name: str = Field(min_length=2, max_length=120)
     api_key: str = Field(min_length=4, max_length=2000)

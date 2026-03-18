@@ -142,6 +142,14 @@ class ProviderModelsService:
             or row.get("output_cost")
         )
         description = str(row.get("description") or "").strip()
+        raw_is_registered = row.get("is_registered")
+        is_registered = False
+        if isinstance(raw_is_registered, bool):
+            is_registered = raw_is_registered
+        elif isinstance(raw_is_registered, str):
+            is_registered = raw_is_registered.strip().lower() in {"1", "true", "yes", "sim"}
+        elif isinstance(raw_is_registered, (int, float)):
+            is_registered = bool(raw_is_registered)
 
         return {
             "key": slug,
@@ -152,6 +160,7 @@ class ProviderModelsService:
             "input_cost_per_1k": input_cost,
             "output_cost_per_1k": output_cost,
             "description": description,
+            "is_registered": is_registered,
         }
 
     def _fetch_models_from_fastapi(
@@ -222,6 +231,8 @@ class ProviderModelsService:
                 if item["slug"] in seen:
                     continue
                 seen.add(item["slug"])
+                if source == "api_catalog":
+                    item["is_registered"] = True
                 deduped.append(item)
 
             return deduped, source, warnings
@@ -257,8 +268,25 @@ class ProviderModelsService:
             else:
                 source_label = "api_catalog"
                 warnings.append(
-                    "A API nao expoe descoberta direta no provider; exibindo catalogo da FastAPI."
+                    "A API nao retornou descoberta direta do provider nesta consulta."
                 )
+                fallback_items = self._fallback_items(provider)
+                if fallback_items:
+                    registered_slugs = {str(item.get("slug") or "") for item in api_items}
+                    merged_items: list[dict[str, Any]] = []
+                    for item in fallback_items:
+                        slug = str(item.get("slug") or "")
+                        item["is_registered"] = slug in registered_slugs
+                        merged_items.append(item)
+                    warnings.append(
+                        "Exibindo catalogo local como contingencia para manter o cadastro funcional."
+                    )
+                    return {
+                        "items": merged_items,
+                        "source": "fallback_local",
+                        "warnings": _dedupe(warnings),
+                        "provider_remote_id": remote_provider_id,
+                    }
             return {
                 "items": api_items,
                 "source": source_label,

@@ -10,11 +10,42 @@ from .catalog import get_known_models
 from .models import ProviderModel
 
 
+class KnownModelSelect(forms.Select):
+    def __init__(self, *args, disabled_values: set[str] | None = None, **kwargs):
+        self.disabled_values = disabled_values or set()
+        super().__init__(*args, **kwargs)
+
+    def create_option(
+        self,
+        name,
+        value,
+        label,
+        selected,
+        index,
+        subindex=None,
+        attrs=None,
+    ):
+        option = super().create_option(
+            name=name,
+            value=value,
+            label=label,
+            selected=selected,
+            index=index,
+            subindex=subindex,
+            attrs=attrs,
+        )
+        option_value = str(option.get("value") or "")
+        if option_value and option_value in self.disabled_values:
+            option.setdefault("attrs", {})
+            option["attrs"]["disabled"] = "disabled"
+        return option
+
+
 class ProviderModelCreateForm(forms.ModelForm):
     known_model = forms.ChoiceField(
         label="Modelo disponivel",
         required=True,
-        widget=forms.Select(attrs={"class": "form-select"}),
+        widget=KnownModelSelect(attrs={"class": "form-select"}),
     )
 
     catalog_help_text = (
@@ -24,6 +55,8 @@ class ProviderModelCreateForm(forms.ModelForm):
     selected_known_model: dict | None = None
     available_models_source = "unavailable"
     available_models_warnings: list[str] = []
+    registered_models: list[dict] = []
+    selectable_models_count: int = 0
 
     class Meta:
         model = ProviderModel
@@ -77,6 +110,7 @@ class ProviderModelCreateForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         self.catalog_provider_id = kwargs.pop("catalog_provider_id", None)
+        self.catalog_model_key = kwargs.pop("catalog_model_key", None)
         self.available_models_payload = kwargs.pop("available_models_payload", None)
         super().__init__(*args, **kwargs)
 
@@ -93,9 +127,26 @@ class ProviderModelCreateForm(forms.ModelForm):
         self.known_models_by_key = {
             str(item.get("key") or "").strip(): item for item in known_models
         }
+        self.registered_models = [
+            item for item in known_models if bool(item.get("is_registered"))
+        ]
+        self.selectable_models_count = len(
+            [item for item in known_models if not bool(item.get("is_registered"))]
+        )
+        disabled_values = {
+            str(item.get("key") or "").strip()
+            for item in known_models
+            if bool(item.get("is_registered"))
+        }
+        widget = self.fields["known_model"].widget
+        if isinstance(widget, KnownModelSelect):
+            widget.disabled_values = disabled_values
 
         if not self.is_bound and selected_provider is not None:
             self.fields["provider"].initial = selected_provider.pk
+            model_key = str(self.catalog_model_key or "").strip()
+            if model_key and model_key in self.known_models_by_key:
+                self.fields["known_model"].initial = model_key
 
         self.fields["known_model"].choices = self._build_known_model_choices(
             selected_provider=selected_provider,
@@ -112,6 +163,10 @@ class ProviderModelCreateForm(forms.ModelForm):
             )
         elif not known_models:
             self.catalog_warning = "Nenhum modelo disponivel foi retornado para este provider."
+        elif self.selectable_models_count == 0:
+            self.catalog_warning = (
+                "Todos os modelos retornados para este provider ja estao cadastrados."
+            )
         elif self.available_models_source == "api_provider":
             self.catalog_help_text = "Modelos carregados da API do provider via FastAPI."
         elif self.available_models_source == "api_catalog":
@@ -124,8 +179,11 @@ class ProviderModelCreateForm(forms.ModelForm):
             self.catalog_help_text = "Integracao indisponivel. Tente novamente em instantes."
 
         selected_model_key = (
-            (self.data.get("known_model") if self.is_bound else None) or ""
-        ).strip()
+            self.data.get("known_model")
+            if self.is_bound
+            else self.fields["known_model"].initial
+        )
+        selected_model_key = str(selected_model_key or "").strip()
         self.selected_known_model = self.known_models_by_key.get(selected_model_key)
 
     def _resolve_available_models_payload(
@@ -154,6 +212,7 @@ class ProviderModelCreateForm(forms.ModelForm):
                             "input_cost_per_1k": item.get("input_cost_per_1k"),
                             "output_cost_per_1k": item.get("output_cost_per_1k"),
                             "description": item.get("description") or "",
+                            "is_registered": bool(item.get("is_registered", False)),
                         }
                     )
 
@@ -183,6 +242,7 @@ class ProviderModelCreateForm(forms.ModelForm):
                     "input_cost_per_1k": model.input_cost_per_1k,
                     "output_cost_per_1k": model.output_cost_per_1k,
                     "description": model.description,
+                    "is_registered": False,
                 }
             )
 
@@ -225,10 +285,14 @@ class ProviderModelCreateForm(forms.ModelForm):
             return [("", "Selecione um provider primeiro")]
         if not known_models:
             return [("", "Nenhum modelo disponivel para este provider")]
-        return [("", "Selecione um modelo")] + [
-            (str(model.get("key") or ""), str(model.get("label") or model.get("name") or ""))
-            for model in known_models
-        ]
+        choices = [("", "Selecione um modelo")]
+        for model in known_models:
+            key = str(model.get("key") or "")
+            label = str(model.get("label") or model.get("name") or key)
+            if bool(model.get("is_registered")):
+                label = f"{label} (ja cadastrado)"
+            choices.append((key, label))
+        return choices
 
     def clean(self):
         cleaned_data = super().clean()
@@ -251,6 +315,12 @@ class ProviderModelCreateForm(forms.ModelForm):
             self.add_error(
                 "known_model",
                 "Selecione um modelo disponivel valido para o provider informado.",
+            )
+            return cleaned_data
+        if bool(known_model.get("is_registered")):
+            self.add_error(
+                "known_model",
+                "Este modelo ja esta cadastrado para este provider.",
             )
             return cleaned_data
 

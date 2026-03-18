@@ -7,6 +7,7 @@ from app.api.dependencies.security import get_current_admin_user
 from app.db.session import get_operational_session
 from app.models.operational import DjangoAiProvider, DjangoAiProviderCredential, DjangoAiProviderModel, DjangoAiUser
 from app.schemas.admin_catalog import (
+    AvailableProviderModelResponse,
     CatalogStatusResponse,
     ProviderCreateRequest,
     ProviderCredentialCreateRequest,
@@ -19,6 +20,7 @@ from app.schemas.admin_catalog import (
     ProviderUpdateRequest,
 )
 from app.services.provider_admin_service import ProviderAdminService
+from app.services.provider_model_discovery_service import ProviderModelDiscoveryService
 
 router = APIRouter(tags=["admin-catalog"])
 
@@ -149,6 +151,16 @@ def list_provider_models(
 ) -> list[ProviderModelResponse]:
     service = ProviderAdminService(session)
     return [_model_to_response(item) for item in service.list_models(provider_id=provider_id)]
+
+
+@router.get("/providers/{provider_id}/available-models", response_model=list[AvailableProviderModelResponse])
+def list_provider_available_models(
+    provider_id: UUID,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    session: Session = Depends(get_operational_session),
+) -> list[AvailableProviderModelResponse]:
+    payload = ProviderModelDiscoveryService(session).list_available_models(provider_id=provider_id)
+    return [AvailableProviderModelResponse(**item) for item in payload]
 
 
 @router.post("/providers/{provider_id}/models", response_model=ProviderModelResponse, status_code=status.HTTP_201_CREATED)

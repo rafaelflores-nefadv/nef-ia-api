@@ -88,9 +88,59 @@
                     <label for="{{ form.known_model.id_for_label }}" class="form-label fw-semibold">{{ form.known_model.label }}</label>
                     {{ form.known_model }}
                     <div class="form-text">{{ form.catalog_help_text }}</div>
+                    {% if form.selectable_models_count %}
+                        <div class="form-text">{{ form.selectable_models_count }} modelo(s) disponivel(is) para cadastro.</div>
+                    {% endif %}
                     {% for error in form.known_model.errors %}
                         <div class="invalid-feedback d-block">{{ error }}</div>
                     {% endfor %}
+                </div>
+
+                {% if form.registered_models %}
+                    <div class="col-12">
+                        <small class="text-secondary d-block mb-2">Modelos ja cadastrados para este provider</small>
+                        <div class="d-flex flex-wrap gap-2">
+                            {% for item in form.registered_models %}
+                                <span class="status-pill status-neutral">{{ item.label|default:item.name }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endif %}
+
+                <div class="col-12">
+                    <div class="border rounded-3 p-3 bg-light-subtle">
+                        <small class="text-secondary d-block mb-2">Preview do modelo selecionado</small>
+                        {% if form.selected_known_model %}
+                            <div class="row g-2">
+                                <div class="col-12 col-lg-4">
+                                    <small class="text-secondary d-block">Nome</small>
+                                    <strong>{{ form.selected_known_model.name|default:"-" }}</strong>
+                                </div>
+                                <div class="col-12 col-lg-4">
+                                    <small class="text-secondary d-block">Slug</small>
+                                    <code>{{ form.selected_known_model.slug|default:"-" }}</code>
+                                </div>
+                                <div class="col-12 col-lg-4">
+                                    <small class="text-secondary d-block">Contexto</small>
+                                    <strong>{{ form.selected_known_model.context_window|default:"-" }}</strong>
+                                </div>
+                                <div class="col-12 col-lg-4">
+                                    <small class="text-secondary d-block">Custo input / 1k</small>
+                                    <strong>{{ form.selected_known_model.input_cost_per_1k|default:"-" }}</strong>
+                                </div>
+                                <div class="col-12 col-lg-4">
+                                    <small class="text-secondary d-block">Custo output / 1k</small>
+                                    <strong>{{ form.selected_known_model.output_cost_per_1k|default:"-" }}</strong>
+                                </div>
+                                <div class="col-12">
+                                    <small class="text-secondary d-block">Descricao</small>
+                                    <span>{{ form.selected_known_model.description|default:"-" }}</span>
+                                </div>
+                            </div>
+                        {% else %}
+                            <span class="admin-note">Selecione um modelo para visualizar nome, slug e metadados sugeridos.</span>
+                        {% endif %}
+                    </div>
                 </div>
             {% endif %}
 
@@ -149,6 +199,7 @@
         <script>
             (function () {
                 const providerField = document.getElementById("id_provider");
+                const modelField = document.getElementById("id_known_model");
                 if (!providerField) {
                     return;
                 }
@@ -160,6 +211,25 @@
                         url.searchParams.set("provider", selected);
                     } else {
                         url.searchParams.delete("provider");
+                    }
+                    url.searchParams.delete("model");
+                    window.location.assign(url.pathname + url.search);
+                });
+
+                if (!modelField) {
+                    return;
+                }
+
+                modelField.addEventListener("change", function () {
+                    const selected = modelField.value;
+                    const url = new URL(window.location.href);
+                    if (providerField.value) {
+                        url.searchParams.set("provider", providerField.value);
+                    }
+                    if (selected) {
+                        url.searchParams.set("model", selected);
+                    } else {
+                        url.searchParams.delete("model");
                     }
                     window.location.assign(url.pathname + url.search);
                 });
