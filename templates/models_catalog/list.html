@@ -18,7 +18,7 @@
                         <th>Custo output/1k</th>
                         <th>Status</th>
                         <th>Atualizado em</th>
-                        <th class="text-end">Ações</th>
+                        <th class="text-end">Acoes</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -58,6 +58,6 @@
         </div>
     </section>
 {% else %}
-    {% include "includes/empty_state.html" with empty_icon="bi bi-boxes" empty_title="Nenhum modelo cadastrado" empty_message="Cadastre um modelo para disponibilizar operações de IA no ambiente." empty_action_url=model_create_url empty_action_label="Criar modelo" empty_action_icon="bi bi-plus-lg" %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-boxes" empty_title="Nenhum modelo cadastrado" empty_message="Cadastre um modelo conhecido para disponibilizar operacoes de IA no ambiente." empty_action_url=model_create_url empty_action_label="Criar modelo" empty_action_icon="bi bi-plus-lg" %}
 {% endif %}
 {% endblock %}

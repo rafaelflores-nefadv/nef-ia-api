@@ -6,7 +6,7 @@ from django.urls import reverse_lazy
 from django.views.decorators.http import require_POST
 from django.views.generic import CreateView, ListView, UpdateView
 
-from .forms import ProviderModelForm
+from .forms import ProviderModelCreateForm, ProviderModelUpdateForm
 from .models import ProviderModel
 
 
@@ -27,7 +27,7 @@ class ProviderModelListView(LoginRequiredMixin, ListView):
         context.update(
             {
                 "page_title": "Modelos",
-                "page_subtitle": "Catálogo administrativo de modelos de IA.",
+                "page_subtitle": "Catalogo administrativo de modelos de IA.",
                 "active_menu": "modelos",
             }
         )
@@ -36,9 +36,15 @@ class ProviderModelListView(LoginRequiredMixin, ListView):
 
 class ProviderModelCreateView(LoginRequiredMixin, CreateView):
     model = ProviderModel
-    form_class = ProviderModelForm
+    form_class = ProviderModelCreateForm
     template_name = "models_catalog/form.html"
     success_url = reverse_lazy("models_catalog:list")
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        if self.request.method == "GET":
+            kwargs["catalog_provider_id"] = self.request.GET.get("provider")
+        return kwargs
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -46,9 +52,12 @@ class ProviderModelCreateView(LoginRequiredMixin, CreateView):
             {
                 "page_title": "Novo modelo",
                 "form_title": "Novo modelo",
-                "form_subtitle": "Cadastre um novo modelo para um provider.",
+                "form_subtitle": (
+                    "Selecione um modelo conhecido do provider para manter o catalogo consistente."
+                ),
                 "active_menu": "modelos",
                 "submit_label": "Salvar modelo",
+                "is_create_mode": True,
             }
         )
         return context
@@ -61,7 +70,7 @@ class ProviderModelCreateView(LoginRequiredMixin, CreateView):
 
 class ProviderModelUpdateView(LoginRequiredMixin, UpdateView):
     model = ProviderModel
-    form_class = ProviderModelForm
+    form_class = ProviderModelUpdateForm
     template_name = "models_catalog/form.html"
     success_url = reverse_lazy("models_catalog:list")
 
@@ -74,9 +83,15 @@ class ProviderModelUpdateView(LoginRequiredMixin, UpdateView):
             {
                 "page_title": "Editar modelo",
                 "form_title": "Editar modelo",
-                "form_subtitle": "Atualize os dados do modelo selecionado.",
+                "form_subtitle": (
+                    "Provider e identificacao do modelo ficam bloqueados para preservar consistencia."
+                ),
                 "active_menu": "modelos",
-                "submit_label": "Salvar alterações",
+                "submit_label": "Salvar alteracoes",
+                "is_create_mode": False,
+                "locked_provider_name": self.object.provider.name,
+                "locked_model_name": self.object.name,
+                "locked_model_slug": self.object.slug,
             }
         )
         return context
