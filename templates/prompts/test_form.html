@@ -1,0 +1,49 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "prompts:list" as prompts_list_url %}
+{% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Prompts" breadcrumb_parent_url=prompts_list_url breadcrumb_current="Teste de prompt" %}
+
+<section class="panel-card">
+    <p class="admin-note mb-3">
+        O teste envia o conteudo do prompt e o arquivo para a FastAPI e executa o modelo vinculado ao prompt.
+    </p>
+
+    {% if form.non_field_errors %}
+        <div class="alert alert-danger" role="alert">
+            {% for error in form.non_field_errors %}
+                {{ error }}
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+
+        <div class="row g-3">
+            <div class="col-12 col-lg-6">
+                <label for="{{ form.prompt.id_for_label }}" class="form-label fw-semibold">{{ form.prompt.label }}</label>
+                {{ form.prompt }}
+                <div class="form-text">Apenas prompts ativos aparecem nesta lista.</div>
+                {% for error in form.prompt.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+
+            <div class="col-12 col-lg-6">
+                <label for="{{ form.request_file.id_for_label }}" class="form-label fw-semibold">{{ form.request_file.label }}</label>
+                {{ form.request_file }}
+                <div class="form-text">Anexe o documento para processamento real no provider selecionado.</div>
+                {% for error in form.request_file.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 mt-4">
+            <button type="submit" class="btn btn-dark">{{ submit_label }}</button>
+            <a href="{{ prompts_list_url }}" class="btn btn-outline-secondary">Voltar</a>
+        </div>
+    </form>
+</section>
+{% endblock %}

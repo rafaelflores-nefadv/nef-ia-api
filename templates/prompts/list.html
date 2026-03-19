@@ -3,9 +3,16 @@
 {% block content %}
 {% url "prompts:create" as prompt_create_url %}
 {% url "prompts:list" as prompts_list_url %}
+{% url "prompts:test_create" as prompt_test_url %}
 {% include "includes/page_header.html" with header_title="Prompts" header_subtitle=page_subtitle breadcrumb_current="Prompts" header_action_url=prompt_create_url header_action_label="Novo prompt" header_action_icon="bi bi-plus-lg" header_side_text=list_counter_label %}
 
 <section class="panel-card mb-3">
+    <div class="d-flex justify-content-end mb-3">
+        <a href="{{ prompt_test_url }}" class="btn btn-outline-primary">
+            <i class="bi bi-play-circle me-1"></i>
+            Teste de prompt
+        </a>
+    </div>
     <form method="get" class="row g-2">
         <div class="col-12 col-md-4">
             <label class="form-label small fw-semibold mb-1">Status</label>
@@ -73,6 +80,9 @@
                             <td>{{ prompt.updated_at|date:"d/m/Y H:i" }}</td>
                             <td class="text-end">
                                 <div class="table-actions">
+                                    {% if prompt.is_active %}
+                                        <a href="{% url 'prompts:test_create' %}?prompt={{ prompt.id }}" class="btn btn-sm btn-outline-primary">Testar</a>
+                                    {% endif %}
                                     <a href="{% url 'prompts:edit' prompt.id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
                                     <form method="post" action="{% url 'prompts:toggle_status' prompt.id %}">
                                         {% csrf_token %}

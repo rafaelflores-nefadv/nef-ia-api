@@ -228,3 +228,89 @@ class FastAPIClient:
             )
 
         return ApiResponse(status_code=response.status_code, data=payload, error=None)
+
+    def request_multipart(
+        self,
+        *,
+        method: str,
+        path: str,
+        data: dict[str, Any] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+        headers: dict[str, str] | None = None,
+        expect_dict: bool = True,
+    ) -> ApiResponse:
+        if not self.integration_active:
+            return ApiResponse(
+                status_code=None,
+                data=None,
+                error="Integracao FastAPI desativada nas configuracoes.",
+            )
+
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        resolved_headers = headers
+        if resolved_headers is None and path.startswith("/api/v1/admin"):
+            resolved_headers = self.get_admin_headers()
+
+        normalized_method = str(method or "POST").upper()
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.request(
+                    normalized_method,
+                    url,
+                    data=data,
+                    files=files,
+                    headers=resolved_headers,
+                )
+        except httpx.TimeoutException:
+            return ApiResponse(
+                status_code=None,
+                data=None,
+                error="Tempo limite excedido ao consultar a FastAPI.",
+            )
+        except httpx.RequestError:
+            return ApiResponse(
+                status_code=None,
+                data=None,
+                error="Falha de conexao com a FastAPI.",
+            )
+
+        if response.status_code == 204:
+            return ApiResponse(status_code=response.status_code, data={}, error=None)
+
+        try:
+            decoded = response.json()
+        except ValueError:
+            return ApiResponse(
+                status_code=response.status_code,
+                data=None,
+                error=f"Resposta nao JSON da FastAPI em {path}.",
+            )
+
+        if expect_dict and not isinstance(decoded, dict):
+            return ApiResponse(
+                status_code=response.status_code,
+                data=None,
+                error=f"Resposta invalida da FastAPI em {path}.",
+            )
+
+        if not expect_dict and not isinstance(decoded, (dict, list)):
+            return ApiResponse(
+                status_code=response.status_code,
+                data=None,
+                error=f"Resposta invalida da FastAPI em {path}.",
+            )
+
+        payload = decoded
+
+        if response.status_code >= 400:
+            payload_error = None
+            if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+                payload_error = payload["error"].get("message")
+            return ApiResponse(
+                status_code=response.status_code,
+                data=payload,
+                error=payload_error
+                or f"FastAPI retornou HTTP {response.status_code} em {path}.",
+            )
+
+        return ApiResponse(status_code=response.status_code, data=payload, error=None)

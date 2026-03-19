@@ -1,18 +1,57 @@
+from uuid import UUID
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db import IntegrityError
 from django.db.models import Q
 from django.db.models.deletion import ProtectedError
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_POST
-from django.views.generic import CreateView, ListView, UpdateView
+from django.views.generic import CreateView, FormView, ListView, TemplateView, UpdateView
+
+from core.services.prompt_tests_service import PromptTestsService, PromptTestsServiceError
 
 from models_catalog.models import ProviderModel
 
-from .forms import AIPromptForm
+from .forms import AIPromptForm, PromptTestForm
 from .models import AIPrompt
+
+
+def _prompt_test_status_meta(status: str) -> dict[str, str]:
+    table = {
+        "queued": {"label": "Na fila", "css_class": "status-neutral"},
+        "processing": {"label": "Processando", "css_class": "status-warning"},
+        "completed": {"label": "Concluido", "css_class": "status-success"},
+        "failed": {"label": "Falhou", "css_class": "status-danger"},
+    }
+    return table.get(status, {"label": status or "Desconhecido", "css_class": "status-neutral"})
+
+
+def _parse_dt(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        parsed = parse_datetime(value)
+        if parsed is None:
+            return None
+        if timezone.is_aware(parsed):
+            return timezone.localtime(parsed)
+        return timezone.make_aware(parsed, timezone.get_current_timezone())
+    if timezone.is_aware(value):
+        return timezone.localtime(value)
+    return timezone.make_aware(value, timezone.get_current_timezone())
+
+
+def _to_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class AIPromptListView(LoginRequiredMixin, ListView):
@@ -180,3 +219,99 @@ def ai_prompt_delete(request, pk: int):
 
     messages.success(request, f'Prompt "{prompt_title}" excluido com sucesso.')
     return redirect("prompts:list")
+
+
+class PromptTestCreateView(LoginRequiredMixin, FormView):
+    template_name = "prompts/test_form.html"
+    form_class = PromptTestForm
+
+    def get_initial(self):
+        initial = super().get_initial()
+        prompt_value = str(self.request.GET.get("prompt") or "").strip()
+        if prompt_value.isdigit():
+            initial["prompt"] = int(prompt_value)
+        return initial
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            {
+                "page_title": "Teste de prompt",
+                "form_title": "Teste de prompt",
+                "form_subtitle": (
+                    "Selecione um prompt ativo, anexe um arquivo e dispare a execucao real na FastAPI."
+                ),
+                "active_menu": "prompts",
+                "submit_label": "Disparar teste",
+            }
+        )
+        return context
+
+    def form_valid(self, form):
+        prompt = form.cleaned_data["prompt"]
+        uploaded_file = form.cleaned_data["request_file"]
+
+        try:
+            payload = PromptTestsService().start_prompt_test(
+                prompt=prompt,
+                uploaded_file=uploaded_file,
+            )
+        except PromptTestsServiceError as exc:
+            form.add_error(None, str(exc))
+            return self.form_invalid(form)
+
+        prompt_test_id = str(payload.get("id") or "").strip()
+        if not prompt_test_id:
+            form.add_error(None, "FastAPI nao retornou identificador do teste de prompt.")
+            return self.form_invalid(form)
+
+        messages.success(
+            self.request,
+            "Teste de prompt enviado com sucesso. Acompanhe o status da execucao.",
+        )
+        return redirect("prompts:test_detail", test_id=prompt_test_id)
+
+
+class PromptTestDetailView(LoginRequiredMixin, TemplateView):
+    template_name = "prompts/test_detail.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        test_id = self.kwargs["test_id"]
+        try:
+            prompt_test_uuid = UUID(str(test_id))
+        except ValueError as exc:
+            raise Http404("Identificador do teste de prompt invalido.") from exc
+
+        try:
+            payload = PromptTestsService().get_prompt_test_status(prompt_test_id=prompt_test_uuid)
+        except PromptTestsServiceError as exc:
+            raise Http404(str(exc)) from exc
+
+        status_value = str(payload.get("status") or "").strip().lower()
+        status_meta = _prompt_test_status_meta(status_value)
+        is_terminal = status_value in {"completed", "failed"}
+
+        context.update(
+            {
+                "page_title": "Detalhe do teste de prompt",
+                "active_menu": "prompts",
+                "test_id": str(payload.get("id") or test_id),
+                "status_value": status_value,
+                "status_label": status_meta["label"],
+                "status_css_class": status_meta["css_class"],
+                "prompt_title": str(payload.get("prompt_title") or "-"),
+                "provider_slug": str(payload.get("provider_slug") or "-"),
+                "model_slug": str(payload.get("model_slug") or "-"),
+                "file_name": str(payload.get("file_name") or "-"),
+                "file_size": _to_int(payload.get("file_size"), default=0),
+                "created_at": _parse_dt(payload.get("created_at")),
+                "started_at": _parse_dt(payload.get("started_at")),
+                "finished_at": _parse_dt(payload.get("finished_at")),
+                "error_message": str(payload.get("error_message") or "").strip(),
+                "output_text": str(payload.get("output_text") or "").strip(),
+                "is_terminal": is_terminal,
+                "auto_refresh_seconds": 4 if not is_terminal else 0,
+            }
+        )
+        return context

@@ -53,3 +53,38 @@ class AIPromptForm(forms.ModelForm):
         if not content:
             raise ValidationError("Conteudo e obrigatorio.")
         return content
+
+
+class PromptTestForm(forms.Form):
+    prompt = forms.ModelChoiceField(
+        label="Prompt",
+        queryset=AIPrompt.objects.none(),
+        required=True,
+        widget=forms.Select(attrs={"class": "form-select"}),
+        empty_label="Selecione um prompt ativo",
+    )
+    request_file = forms.FileField(
+        label="Arquivo",
+        required=True,
+        widget=forms.ClearableFileInput(attrs={"class": "form-control"}),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["prompt"].queryset = (
+            AIPrompt.objects.select_related("ai_model", "ai_model__provider")
+            .filter(
+                is_active=True,
+                ai_model__is_active=True,
+                ai_model__provider__is_active=True,
+            )
+            .order_by("title")
+        )
+
+    def clean_request_file(self):
+        uploaded_file = self.cleaned_data.get("request_file")
+        if uploaded_file is None:
+            raise ValidationError("Arquivo obrigatorio.")
+        if not str(getattr(uploaded_file, "name", "") or "").strip():
+            raise ValidationError("Arquivo invalido para teste.")
+        return uploaded_file
