@@ -583,6 +583,23 @@ class ProviderModelsService:
         if provider.fastapi_provider_id is None:
             return 0
 
+        normalized_slug_key = self._normalize_lookup_key(model_slug)
+        if not normalized_slug_key:
+            raise ProviderModelsServiceError(
+                "Slug do modelo invalido para exclusao remota."
+            )
+
+        logger.info(
+            "Iniciando exclusao remota de modelo por id/slug.",
+            extra={
+                "provider_id": provider.id,
+                "provider_slug": provider.slug,
+                "remote_provider_id": str(provider.fastapi_provider_id),
+                "model_slug": model_slug,
+                "fastapi_model_id": str(fastapi_model_id) if fastapi_model_id is not None else None,
+            },
+        )
+
         deleted_count = 0
         if self.delete_remote_model(fastapi_model_id=fastapi_model_id):
             deleted_count += 1
@@ -597,6 +614,36 @@ class ProviderModelsService:
             if self.delete_remote_model(fastapi_model_id=remote_id):
                 deleted_count += 1
 
+        final_remaining_ids = self._find_remote_model_ids_by_slug(
+            provider=provider,
+            model_slug=model_slug,
+        )
+        if final_remaining_ids:
+            logger.error(
+                "Exclusao remota incompleta: residuos encontrados por slug.",
+                extra={
+                    "provider_id": provider.id,
+                    "provider_slug": provider.slug,
+                    "remote_provider_id": str(provider.fastapi_provider_id),
+                    "model_slug": model_slug,
+                    "remaining_remote_ids": [str(item) for item in final_remaining_ids],
+                },
+            )
+            raise ProviderModelsServiceError(
+                "Ainda existem registros remotos para este modelo apos a tentativa de limpeza. "
+                "A exclusao local foi bloqueada para manter consistencia."
+            )
+
+        logger.info(
+            "Exclusao remota concluida sem residuos por slug.",
+            extra={
+                "provider_id": provider.id,
+                "provider_slug": provider.slug,
+                "remote_provider_id": str(provider.fastapi_provider_id),
+                "model_slug": model_slug,
+                "deleted_count": deleted_count,
+            },
+        )
         return deleted_count
 
     def get_available_models(self, *, provider: Provider) -> dict[str, Any]:

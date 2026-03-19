@@ -145,3 +145,41 @@ def test_provider_model_delete_checks_remote_by_slug_when_id_missing(monkeypatch
     assert state["remote_called"] is True
     assert state["local_deleted"] is True
     assert any("excluido com sucesso" in message.lower() for message in messages)
+
+
+def test_provider_model_delete_blocks_local_when_remote_slug_residue_remains(monkeypatch) -> None:
+    state = {"local_deleted": False}
+
+    class FakeModel:
+        name = "GPT Remoto"
+        fastapi_model_id = None
+        slug = "gpt-4o-mini"
+        provider = SimpleNamespace(fastapi_provider_id="d82f6853-e87e-4bf6-95ac-eadcfb5574d6")
+
+        def delete(self) -> None:
+            state["local_deleted"] = True
+
+    class FakeProviderModelsService:
+        def delete_remote_model_entry(self, *, provider, model_slug, fastapi_model_id):  # type: ignore[no-untyped-def]
+            raise ProviderModelsServiceError(
+                "Ainda existem registros remotos para este modelo apos a tentativa de limpeza."
+            )
+
+    monkeypatch.setattr(
+        "models_catalog.views.get_object_or_404",
+        lambda model, pk: FakeModel(),  # type: ignore[no-untyped-def]
+    )
+    monkeypatch.setattr(
+        "models_catalog.views.ProviderModelsService",
+        lambda: FakeProviderModelsService(),  # type: ignore[no-untyped-def]
+    )
+
+    request = _build_request()
+    response = provider_model_delete(request, pk=1)
+    messages = [str(item.message) for item in get_messages(request)]
+
+    assert response.status_code == 302
+    assert response.url == reverse("models_catalog:list")
+    assert state["local_deleted"] is False
+    assert any("exclusao local foi cancelada" in message.lower() for message in messages)
+    assert any("ainda existem registros remotos" in message.lower() for message in messages)

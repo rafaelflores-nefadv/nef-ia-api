@@ -49,7 +49,7 @@ class FakeDeleteFastAPIClient:
 
 
 class FakeRemoteModelEntryClient:
-    def __init__(self, responses: dict[tuple[str, str], ApiResponse]) -> None:
+    def __init__(self, responses: dict[tuple[str, str], ApiResponse | list[ApiResponse]]) -> None:
         self.responses = responses
         self.calls: list[tuple[str, str]] = []
 
@@ -63,7 +63,12 @@ class FakeRemoteModelEntryClient:
         key = (method, path)
         if key not in self.responses:
             raise AssertionError(f"Unexpected request: {key}")
-        return self.responses[key]
+        response = self.responses[key]
+        if isinstance(response, list):
+            if not response:
+                raise AssertionError(f"No more queued responses for request: {key}")
+            return response.pop(0)
+        return response
 
 
 def _provider(slug: str = "openai"):  # type: ignore[no-untyped-def]
@@ -221,21 +226,24 @@ def test_delete_remote_model_entry_removes_by_slug_when_fastapi_id_missing() -> 
         (
             "GET",
             f"/api/v1/admin/providers/{provider.fastapi_provider_id}/models",
-        ): ApiResponse(
-            status_code=200,
-            data=[
-                {
-                    "id": str(remote_id),
-                    "provider_id": str(provider.fastapi_provider_id),
-                    "model_name": "gpt-4o-mini",
-                    "model_slug": "gpt-4o-mini",
-                    "context_limit": 128000,
-                    "cost_input_per_1k_tokens": "0.000150",
-                    "cost_output_per_1k_tokens": "0.000600",
-                    "is_active": True,
-                }
-            ],
-        ),
+        ): [
+            ApiResponse(
+                status_code=200,
+                data=[
+                    {
+                        "id": str(remote_id),
+                        "provider_id": str(provider.fastapi_provider_id),
+                        "model_name": "gpt-4o-mini",
+                        "model_slug": "gpt-4o-mini",
+                        "context_limit": 128000,
+                        "cost_input_per_1k_tokens": "0.000150",
+                        "cost_output_per_1k_tokens": "0.000600",
+                        "is_active": True,
+                    }
+                ],
+            ),
+            ApiResponse(status_code=200, data=[]),
+        ],
         ("DELETE", f"/api/v1/admin/models/{remote_id}"): ApiResponse(status_code=204, data={}),
     }
     client = FakeRemoteModelEntryClient(responses)
@@ -257,7 +265,7 @@ def test_delete_remote_model_entry_deletes_residual_when_fastapi_id_wrong() -> N
     provider = _provider(slug="openai")
     wrong_id = uuid4()
     real_id = uuid4()
-    responses = {
+    responses: dict[tuple[str, str], ApiResponse | list[ApiResponse]] = {
         ("DELETE", f"/api/v1/admin/models/{wrong_id}"): ApiResponse(
             status_code=404,
             data={"error": {"code": "provider_model_not_found", "message": "not found"}},
@@ -266,21 +274,24 @@ def test_delete_remote_model_entry_deletes_residual_when_fastapi_id_wrong() -> N
         (
             "GET",
             f"/api/v1/admin/providers/{provider.fastapi_provider_id}/models",
-        ): ApiResponse(
-            status_code=200,
-            data=[
-                {
-                    "id": str(real_id),
-                    "provider_id": str(provider.fastapi_provider_id),
-                    "model_name": "gpt-4o-mini",
-                    "model_slug": "gpt-4o-mini",
-                    "context_limit": 128000,
-                    "cost_input_per_1k_tokens": "0.000150",
-                    "cost_output_per_1k_tokens": "0.000600",
-                    "is_active": True,
-                }
-            ],
-        ),
+        ): [
+            ApiResponse(
+                status_code=200,
+                data=[
+                    {
+                        "id": str(real_id),
+                        "provider_id": str(provider.fastapi_provider_id),
+                        "model_name": "gpt-4o-mini",
+                        "model_slug": "gpt-4o-mini",
+                        "context_limit": 128000,
+                        "cost_input_per_1k_tokens": "0.000150",
+                        "cost_output_per_1k_tokens": "0.000600",
+                        "is_active": True,
+                    }
+                ],
+            ),
+            ApiResponse(status_code=200, data=[]),
+        ],
         ("DELETE", f"/api/v1/admin/models/{real_id}"): ApiResponse(status_code=204, data={}),
     }
     client = FakeRemoteModelEntryClient(responses)
@@ -296,3 +307,124 @@ def test_delete_remote_model_entry_deletes_residual_when_fastapi_id_wrong() -> N
     assert deleted_count == 1
     assert ("DELETE", f"/api/v1/admin/models/{wrong_id}") in client.calls
     assert ("DELETE", f"/api/v1/admin/models/{real_id}") in client.calls
+
+
+def test_delete_remote_model_entry_fails_when_slug_residue_remains() -> None:
+    service = ProviderModelsService()
+    provider = _provider(slug="openai")
+    stuck_id = uuid4()
+    responses: dict[tuple[str, str], ApiResponse | list[ApiResponse]] = {
+        (
+            "GET",
+            f"/api/v1/admin/providers/{provider.fastapi_provider_id}/models",
+        ): [
+            ApiResponse(
+                status_code=200,
+                data=[
+                    {
+                        "id": str(stuck_id),
+                        "provider_id": str(provider.fastapi_provider_id),
+                        "model_name": "gpt-4o-mini",
+                        "model_slug": "gpt-4o-mini",
+                        "context_limit": 128000,
+                        "cost_input_per_1k_tokens": "0.000150",
+                        "cost_output_per_1k_tokens": "0.000600",
+                        "is_active": True,
+                    }
+                ],
+            ),
+            ApiResponse(
+                status_code=200,
+                data=[
+                    {
+                        "id": str(stuck_id),
+                        "provider_id": str(provider.fastapi_provider_id),
+                        "model_name": "gpt-4o-mini",
+                        "model_slug": "gpt-4o-mini",
+                        "context_limit": 128000,
+                        "cost_input_per_1k_tokens": "0.000150",
+                        "cost_output_per_1k_tokens": "0.000600",
+                        "is_active": True,
+                    }
+                ],
+            ),
+        ],
+        ("DELETE", f"/api/v1/admin/models/{stuck_id}"): ApiResponse(
+            status_code=404,
+            data={"error": {"code": "provider_model_not_found", "message": "not found"}},
+            error="not found",
+        ),
+    }
+    client = FakeRemoteModelEntryClient(responses)
+    service.client = client  # type: ignore[assignment]
+    service.admin_token = "test-token"
+
+    try:
+        service.delete_remote_model_entry(
+            provider=provider,
+            model_slug="gpt-4o-mini",
+            fastapi_model_id=None,
+        )
+    except ProviderModelsServiceError as exc:
+        assert "ainda existem registros remotos" in str(exc).lower()
+    else:
+        raise AssertionError("Expected ProviderModelsServiceError")
+
+
+def test_cleanup_complementar_updates_available_models_registered_flag() -> None:
+    service = ProviderModelsService()
+    provider = _provider(slug="openai")
+    stale_id = uuid4()
+    responses: dict[tuple[str, str], ApiResponse | list[ApiResponse]] = {
+        (
+            "GET",
+            f"/api/v1/admin/providers/{provider.fastapi_provider_id}/models",
+        ): [
+            ApiResponse(
+                status_code=200,
+                data=[
+                    {
+                        "id": str(stale_id),
+                        "provider_id": str(provider.fastapi_provider_id),
+                        "model_name": "gpt-4o-mini",
+                        "model_slug": "gpt-4o-mini",
+                        "context_limit": 128000,
+                        "cost_input_per_1k_tokens": "0.000150",
+                        "cost_output_per_1k_tokens": "0.000600",
+                        "is_active": True,
+                    }
+                ],
+            ),
+            ApiResponse(status_code=200, data=[]),
+        ],
+        ("DELETE", f"/api/v1/admin/models/{stale_id}"): ApiResponse(status_code=204, data={}),
+        (
+            "GET",
+            f"/api/v1/admin/providers/{provider.fastapi_provider_id}/available-models",
+        ): ApiResponse(
+            status_code=200,
+            data=[
+                {
+                    "id": "gpt-4o-mini",
+                    "model_name": "gpt-4o-mini",
+                    "model_slug": "gpt-4o-mini",
+                    "is_registered": False,
+                }
+            ],
+        ),
+    }
+    client = FakeRemoteModelEntryClient(responses)
+    service.client = client  # type: ignore[assignment]
+    service.admin_token = "test-token"
+
+    deleted_count = service.delete_remote_model_entry(
+        provider=provider,
+        model_slug="gpt-4o-mini",
+        fastapi_model_id=None,
+    )
+    payload = service.get_available_models(provider=provider)
+
+    assert deleted_count == 1
+    assert payload["source"] == "api_provider"
+    assert payload["items"][0]["slug"] == "gpt-4o-mini"
+    assert payload["items"][0]["is_registered"] is False

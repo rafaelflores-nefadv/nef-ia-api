@@ -1,5 +1,7 @@
 from uuid import UUID
 
+import logging
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -19,6 +21,8 @@ from providers.models import Provider
 
 from .forms import ProviderModelCreateForm, ProviderModelUpdateForm
 from .models import ProviderModel
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderModelListView(LoginRequiredMixin, ListView):
@@ -224,10 +228,19 @@ def provider_model_delete(request, pk: int):
 
     if provider.fastapi_provider_id is not None:
         try:
-            ProviderModelsService().delete_remote_model_entry(
+            deleted_remote_count = ProviderModelsService().delete_remote_model_entry(
                 provider=provider,
                 model_slug=provider_model.slug,
                 fastapi_model_id=remote_model_id,
+            )
+            logger.info(
+                "Limpeza remota concluida antes da exclusao local.",
+                extra={
+                    "provider_model_id": getattr(provider_model, "pk", None),
+                    "provider_slug": getattr(provider, "slug", None),
+                    "model_slug": provider_model.slug,
+                    "remote_deleted_count": deleted_remote_count,
+                },
             )
         except ProviderModelsServiceError as exc:
             messages.error(
