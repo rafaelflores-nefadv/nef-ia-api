@@ -11,6 +11,12 @@ class ProviderCredential(models.Model):
         verbose_name="Provider",
     )
     name = models.CharField("Nome", max_length=150)
+    fastapi_credential_id = models.UUIDField(
+        "ID da credencial na FastAPI",
+        null=True,
+        blank=True,
+        unique=True,
+    )
     api_key = models.TextField("API key")
     config_json = models.JSONField("Configuracao JSON", default=dict, blank=True)
     is_active = models.BooleanField("Ativo", default=True)

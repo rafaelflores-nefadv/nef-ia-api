@@ -18,7 +18,7 @@ class ProviderCredentialForm(forms.ModelForm):
         ),
     )
     config_json = forms.CharField(
-        label="Configuração JSON",
+        label="Configuracao JSON",
         required=False,
         widget=forms.Textarea(
             attrs={
@@ -55,7 +55,9 @@ class ProviderCredentialForm(forms.ModelForm):
 
             if self.instance.config_json:
                 self.initial["config_json"] = json.dumps(
-                    self.instance.config_json, indent=2, ensure_ascii=False
+                    self.instance.config_json,
+                    indent=2,
+                    ensure_ascii=False,
                 )
             else:
                 self.initial["config_json"] = ""
@@ -81,11 +83,11 @@ class ProviderCredentialForm(forms.ModelForm):
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise ValidationError(f"JSON inválido: {exc.msg}.") from exc
+            raise ValidationError(f"JSON invalido: {exc.msg}.") from exc
 
         if not isinstance(parsed, dict):
             raise ValidationError(
-                "A configuração deve ser um objeto JSON (chave/valor)."
+                "A configuracao deve ser um objeto JSON (chave/valor)."
             )
 
         return parsed
