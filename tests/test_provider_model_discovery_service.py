@@ -208,8 +208,56 @@ def test_discovery_supports_anthropic_and_normalizes_capabilities(monkeypatch) -
     assert payload[1]["description"] == "Modelo descoberto via API nativa Anthropic."
 
 
+def test_discovery_supports_gemini_and_normalizes_native_payload(monkeypatch) -> None:
+    provider = _build_provider(slug="google_gemini", is_active=True)
+    credential = _build_credential(provider_id=provider.id, api_key="gemini-live-key")
+    local_model = _build_model(provider_id=provider.id, model_slug="gemini-2.5-pro")
+    service = ProviderModelDiscoveryService(FakeSession())  # type: ignore[arg-type]
+    service.providers = FakeProviderRepository(provider=provider, credential=credential)  # type: ignore[assignment]
+    service.models = FakeProviderModelRepository(models=[local_model])  # type: ignore[assignment]
+
+    called: dict[str, str] = {}
+
+    def fake_fetch(self, *, api_key: str, config_json: dict):  # type: ignore[no-untyped-def]
+        called["api_key"] = api_key
+        return [
+            {
+                "name": "models/gemini-2.5-pro",
+                "displayName": "Gemini 2.5 Pro",
+                "inputTokenLimit": 1048576,
+                "outputTokenLimit": 65536,
+                "inputModalities": ["TEXT", "IMAGE"],
+            },
+            {
+                "name": "models/gemini-2.5-flash",
+                "displayName": "Gemini 2.5 Flash",
+                "inputTokenLimit": 1048576,
+                "inputModalities": ["TEXT"],
+            },
+        ]
+
+    monkeypatch.setattr(
+        ProviderModelDiscoveryService,
+        "_fetch_gemini_available_models",
+        fake_fetch,
+    )
+
+    payload = service.list_available_models(provider_id=provider.id)
+    assert called["api_key"] == "gemini-live-key"
+    assert [item["model_slug"] for item in payload] == ["gemini-2.5-flash", "gemini-2.5-pro"]
+    assert payload[0]["is_registered"] is False
+    assert payload[1]["is_registered"] is True
+    assert payload[1]["provider_model_id"] == "models/gemini-2.5-pro"
+    assert payload[1]["context_limit"] == 1048576
+    assert payload[1]["supports_vision"] is True
+    assert payload[0]["supports_vision"] is False
+    assert payload[0]["supports_reasoning"] is None
+    assert payload[0]["supports_thinking"] is None
+    assert payload[0]["description"] == "Modelo descoberto via API nativa Gemini."
+
+
 def test_discovery_fails_for_provider_not_supported() -> None:
-    provider = _build_provider(slug="gemini", is_active=True)
+    provider = _build_provider(slug="cohere", is_active=True)
     credential = _build_credential(provider_id=provider.id)
     service = ProviderModelDiscoveryService(FakeSession())  # type: ignore[arg-type]
     service.providers = FakeProviderRepository(provider=provider, credential=credential)  # type: ignore[assignment]

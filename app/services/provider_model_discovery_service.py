@@ -9,15 +9,16 @@ from app.core.exceptions import AppException
 from app.models.operational import DjangoAiProvider, DjangoAiProviderCredential
 from app.repositories.operational import ProviderModelRepository, ProviderRepository
 from app.services.providers.anthropic_client import AnthropicAdminClient
+from app.services.providers.gemini_client import GeminiClient
 from app.services.providers.openai_client import OpenAIAdminClient
 from app.services.providers.provider_resolution import (
-    SUPPORTED_DISCOVERY_PROVIDER_SLUGS,
+    SUPPORTED_DISCOVERY_PROVIDER_CANONICAL_SLUGS,
     resolve_discovery_provider_slug,
 )
 
 
 class ProviderModelDiscoveryService:
-    SUPPORTED_PROVIDER_SLUGS = set(SUPPORTED_DISCOVERY_PROVIDER_SLUGS)
+    SUPPORTED_PROVIDER_SLUGS = set(SUPPORTED_DISCOVERY_PROVIDER_CANONICAL_SLUGS)
 
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -26,6 +27,7 @@ class ProviderModelDiscoveryService:
         self.settings = get_settings()
         self.openai_client = OpenAIAdminClient()
         self.anthropic_client = AnthropicAdminClient()
+        self.gemini_client = GeminiClient()
 
     def list_available_models(self, *, provider_id: uuid.UUID) -> list[dict[str, Any]]:
         provider = self._get_provider_or_404(provider_id)
@@ -110,6 +112,11 @@ class ProviderModelDiscoveryService:
                 api_key=api_key,
                 config_json=config_json,
             )
+        if canonical_provider_slug == "gemini":
+            return self._fetch_gemini_available_models(
+                api_key=api_key,
+                config_json=config_json,
+            )
         raise AppException(
             "Provider model discovery is not supported for this provider yet.",
             status_code=422,
@@ -142,6 +149,18 @@ class ProviderModelDiscoveryService:
             api_key=api_key,
             config_json=config_json,
             anthropic_version=self.settings.anthropic_api_version,
+            default_timeout_seconds=self.settings.provider_timeout_seconds,
+        )
+
+    def _fetch_gemini_available_models(
+        self,
+        *,
+        api_key: str,
+        config_json: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        return self.gemini_client.list_models(
+            api_key=api_key,
+            config_json=config_json,
             default_timeout_seconds=self.settings.provider_timeout_seconds,
         )
 
@@ -178,6 +197,8 @@ class ProviderModelDiscoveryService:
             return self._normalize_openai_model_item(item)
         if canonical_provider_slug == "anthropic":
             return self._normalize_anthropic_model_item(item)
+        if canonical_provider_slug == "gemini":
+            return self._normalize_gemini_model_item(item)
         return None
 
     def _normalize_openai_model_item(self, item: dict[str, Any]) -> dict[str, Any] | None:
@@ -263,6 +284,49 @@ class ProviderModelDiscoveryService:
             "raw_payload": item,
         }
 
+    def _normalize_gemini_model_item(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        provider_model_id = str(item.get("name") or item.get("id") or "").strip()
+        model_slug = self._normalize_slug(self._strip_provider_model_prefix(provider_model_id))
+        if not model_slug:
+            return None
+
+        model_name = str(item.get("displayName") or item.get("name") or model_slug).strip() or model_slug
+        context_limit = self._coerce_int(
+            item.get("inputTokenLimit")
+            or item.get("context_window")
+            or item.get("max_input_tokens")
+        )
+
+        supports_vision = self._coerce_bool(item.get("supports_vision"))
+        if supports_vision is None:
+            modalities = item.get("inputModalities") or item.get("modalities")
+            if isinstance(modalities, list):
+                normalized_modalities = {str(value or "").strip().upper() for value in modalities}
+                if "IMAGE" in normalized_modalities or "VIDEO" in normalized_modalities:
+                    supports_vision = True
+                elif normalized_modalities:
+                    supports_vision = False
+
+        description = "Modelo descoberto via API nativa Gemini."
+        model_version = str(item.get("version") or "").strip()
+        if model_version:
+            description = f"Modelo descoberto via API nativa Gemini (version: {model_version})."
+
+        return {
+            "provider_model_id": provider_model_id or model_slug,
+            "model_name": model_name,
+            "model_slug": model_slug,
+            "context_limit": context_limit,
+            "context_window": context_limit,
+            "cost_input_per_1k_tokens": None,
+            "cost_output_per_1k_tokens": None,
+            "description": description,
+            "supports_vision": supports_vision,
+            "supports_reasoning": self._coerce_bool(item.get("supports_reasoning")),
+            "supports_thinking": self._coerce_bool(item.get("supports_thinking")),
+            "raw_payload": item,
+        }
+
     def _get_provider_or_404(self, provider_id: uuid.UUID) -> DjangoAiProvider:
         provider = self.providers.get_by_id(provider_id)
         if provider is None:
@@ -303,6 +367,13 @@ class ProviderModelDiscoveryService:
     @staticmethod
     def _normalize_slug(value: str) -> str:
         return value.strip().lower()
+
+    @staticmethod
+    def _strip_provider_model_prefix(value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized.startswith("models/"):
+            return normalized[len("models/") :]
+        return normalized
 
     @staticmethod
     def _coerce_int(value: Any) -> int | None:

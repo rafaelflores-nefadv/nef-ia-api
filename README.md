@@ -16,7 +16,7 @@ API operacional de IA com FastAPI, PostgreSQL, Redis e worker assincrono.
 - Seguranca com JWT admin, API tokens e middleware global
 - Upload/download de arquivos com checksum e storage local
 - Execucao assincrona com fila Redis + Dramatiq
-- Integracao real com provider (OpenAI) via camada abstraida
+- Integracao real com providers OpenAI, Anthropic/Claude e Gemini via camadas nativas
 - Resolucao de prompt oficial a partir do banco compartilhado
 - Registro de usage e custo em `django_ai_provider_usage`
 - Observabilidade e governanca:

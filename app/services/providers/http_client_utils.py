@@ -43,7 +43,13 @@ def extract_response_error_info(response: httpx.Response) -> dict[str, str]:
     # OpenAI-like: {"error": {"type": "...", "message": "..."}}
     error_payload = payload.get("error")
     if isinstance(error_payload, dict):
-        error_type = str(error_payload.get("type") or payload.get("type") or "").strip()
+        error_type = str(
+            error_payload.get("type")
+            or error_payload.get("status")
+            or payload.get("type")
+            or payload.get("status")
+            or ""
+        ).strip()
         message = str(error_payload.get("message") or payload.get("message") or "").strip()
         return {"type": error_type, "message": message}
 

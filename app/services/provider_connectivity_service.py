@@ -7,7 +7,7 @@ from app.core.exceptions import AppException
 from app.repositories.operational import ProviderRepository
 from app.services.provider_model_discovery_service import ProviderModelDiscoveryService
 from app.services.providers.provider_resolution import (
-    SUPPORTED_DISCOVERY_PROVIDER_SLUGS,
+    SUPPORTED_DISCOVERY_PROVIDER_CANONICAL_SLUGS,
     resolve_discovery_provider_slug,
 )
 
@@ -151,7 +151,7 @@ class ProviderConnectivityService:
                     "ok": False,
                     "message": (
                         "Provider ainda sem suporte de teste automatico. "
-                        "Atualmente o teste automatico esta disponivel para OpenAI e Anthropic/Claude."
+                        "Atualmente o teste automatico esta disponivel para OpenAI, Anthropic/Claude e Gemini."
                     ),
                     "code": "provider_discovery_not_supported",
                 }
@@ -161,7 +161,7 @@ class ProviderConnectivityService:
                 status_label="Provider sem suporte de teste",
                 message=(
                     "Provider ainda sem suporte de teste automatico. "
-                    "No momento, o teste automatico cobre OpenAI e Anthropic/Claude."
+                    "No momento, o teste automatico cobre OpenAI, Anthropic/Claude e Gemini."
                 ),
                 provider_id=provider_id,
                 provider_slug=provider.slug,
@@ -269,7 +269,7 @@ class ProviderConnectivityService:
                 f"Provider retornou erro HTTP {http_status or 'desconhecido'}.",
             )
         if code == "provider_discovery_not_supported":
-            supported = ", ".join(sorted(SUPPORTED_DISCOVERY_PROVIDER_SLUGS))
+            supported = ", ".join(sorted(SUPPORTED_DISCOVERY_PROVIDER_CANONICAL_SLUGS))
             return (
                 "provider_not_supported",
                 "Provider sem suporte",

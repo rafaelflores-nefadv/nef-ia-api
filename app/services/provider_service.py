@@ -8,6 +8,7 @@ from app.core.exceptions import AppException
 from app.integrations.providers import AiProviderClient, ProviderRegistry
 from app.models.operational import DjangoAiProvider, DjangoAiProviderCredential, DjangoAiProviderModel
 from app.repositories.operational import ProviderModelRepository, ProviderRepository
+from app.services.providers.provider_resolution import resolve_discovery_provider_slug
 
 settings = get_settings()
 
@@ -33,13 +34,21 @@ class ProviderService:
         provider_slug: str,
         model_slug: str,
     ) -> ProviderRuntimeSelection:
-        provider = self.providers.get_by_slug(provider_slug)
+        requested_provider_slug = str(provider_slug or "").strip().lower()
+        canonical_provider_slug = resolve_discovery_provider_slug(requested_provider_slug)
+
+        provider = self.providers.get_by_slug(requested_provider_slug)
+        if provider is None and canonical_provider_slug and canonical_provider_slug != requested_provider_slug:
+            provider = self.providers.get_by_slug(canonical_provider_slug)
         if provider is None:
             raise AppException(
                 "Configured provider does not exist in the operational catalog.",
                 status_code=404,
                 code="provider_not_found",
-                details={"provider_slug": provider_slug},
+                details={
+                    "provider_slug": requested_provider_slug,
+                    "canonical_provider_slug": canonical_provider_slug,
+                },
             )
 
         if not provider.is_active:
@@ -47,7 +56,7 @@ class ProviderService:
                 "Configured provider is inactive in the operational catalog.",
                 status_code=422,
                 code="provider_inactive",
-                details={"provider_slug": provider_slug},
+                details={"provider_slug": requested_provider_slug, "catalog_provider_slug": provider.slug},
             )
 
         credential = self.providers.get_active_credential(provider.id)
@@ -56,7 +65,11 @@ class ProviderService:
                 "No active credential found for configured provider.",
                 status_code=422,
                 code="provider_credential_not_found",
-                details={"provider_slug": provider_slug, "provider_id": str(provider.id)},
+                details={
+                    "provider_slug": requested_provider_slug,
+                    "catalog_provider_slug": provider.slug,
+                    "provider_id": str(provider.id),
+                },
             )
 
         model_for_provider = self.models.get_by_slug(provider.id, model_slug)
@@ -67,13 +80,21 @@ class ProviderService:
                     "Configured model does not exist in the operational catalog.",
                     status_code=404,
                     code="provider_model_not_found",
-                    details={"provider_slug": provider_slug, "model_slug": model_slug},
+                    details={
+                        "provider_slug": requested_provider_slug,
+                        "catalog_provider_slug": provider.slug,
+                        "model_slug": model_slug,
+                    },
                 )
             raise AppException(
                 "Configured model does not belong to configured provider.",
                 status_code=422,
                 code="provider_model_mismatch",
-                details={"provider_slug": provider_slug, "model_slug": model_slug},
+                details={
+                    "provider_slug": requested_provider_slug,
+                    "catalog_provider_slug": provider.slug,
+                    "model_slug": model_slug,
+                },
             )
 
         if not model_for_provider.is_active:
@@ -81,7 +102,11 @@ class ProviderService:
                 "Configured model is inactive in the operational catalog.",
                 status_code=422,
                 code="provider_model_inactive",
-                details={"provider_slug": provider_slug, "model_slug": model_slug},
+                details={
+                    "provider_slug": requested_provider_slug,
+                    "catalog_provider_slug": provider.slug,
+                    "model_slug": model_slug,
+                },
             )
 
         api_key = self._decrypt_api_key(credential.encrypted_api_key)

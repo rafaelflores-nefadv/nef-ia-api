@@ -116,6 +116,50 @@ def test_connectivity_maps_invalid_api_key_for_anthropic() -> None:
     assert payload["checks"][-1]["http_status"] == 401
 
 
+def test_connectivity_supports_gemini_success() -> None:
+    provider = _build_provider(slug="google-ai")
+    credential = _build_credential(provider.id)
+
+    service = ProviderConnectivityService(FakeSession())  # type: ignore[arg-type]
+    service.providers = FakeProviderRepository(provider=provider, credential=credential)  # type: ignore[assignment]
+    service.discovery = SimpleNamespace(  # type: ignore[assignment]
+        _decrypt_credential_or_422=lambda credential: "gemini-live-key",  # noqa: ARG005
+        fetch_raw_models=lambda **kwargs: ("gemini", [{"name": "models/gemini-2.5-pro"}]),  # noqa: ARG005
+    )
+
+    payload = service.test_provider_connectivity(provider_id=provider.id)
+    assert payload["ok"] is True
+    assert payload["status"] == "connected"
+    assert payload["provider_slug"] == "google-ai"
+    assert payload["checks"][-1]["ok"] is True
+
+
+def test_connectivity_maps_invalid_api_key_for_gemini() -> None:
+    provider = _build_provider(slug="gemini")
+    credential = _build_credential(provider.id)
+
+    def raise_invalid_key(**kwargs):  # type: ignore[no-untyped-def]
+        raise AppException(
+            "permission denied",
+            status_code=502,
+            code="provider_http_error",
+            details={"provider": "gemini", "status_code": 403},
+        )
+
+    service = ProviderConnectivityService(FakeSession())  # type: ignore[arg-type]
+    service.providers = FakeProviderRepository(provider=provider, credential=credential)  # type: ignore[assignment]
+    service.discovery = SimpleNamespace(  # type: ignore[assignment]
+        _decrypt_credential_or_422=lambda credential: "gemini-invalid",  # noqa: ARG005
+        fetch_raw_models=raise_invalid_key,
+    )
+
+    payload = service.test_provider_connectivity(provider_id=provider.id)
+    assert payload["ok"] is False
+    assert payload["status"] == "api_key_invalid"
+    assert payload["error_code"] == "provider_http_error"
+    assert payload["checks"][-1]["http_status"] == 403
+
+
 def test_connectivity_maps_timeout_and_network_errors() -> None:
     provider = _build_provider(slug="anthropic")
     credential = _build_credential(provider.id)
@@ -154,7 +198,7 @@ def test_connectivity_maps_timeout_and_network_errors() -> None:
 
 
 def test_connectivity_rejects_unsupported_provider() -> None:
-    provider = _build_provider(slug="gemini")
+    provider = _build_provider(slug="cohere")
     credential = _build_credential(provider.id)
     service = ProviderConnectivityService(FakeSession())  # type: ignore[arg-type]
     service.providers = FakeProviderRepository(provider=provider, credential=credential)  # type: ignore[assignment]

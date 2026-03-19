@@ -132,7 +132,7 @@ class ProviderModelsService:
         if code == "provider_discovery_not_supported":
             return (
                 "Descoberta dinamica ainda nao suportada para este provider. "
-                "No momento, o fluxo dinamico esta disponivel para OpenAI e Anthropic/Claude."
+                "No momento, o fluxo dinamico esta disponivel para OpenAI, Anthropic/Claude e Gemini."
             )
         if code == "provider_not_found":
             return "Provider remoto nao encontrado na FastAPI para o vinculo informado."

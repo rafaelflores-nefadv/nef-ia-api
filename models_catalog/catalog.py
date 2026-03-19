@@ -73,7 +73,7 @@ KNOWN_MODELS_BY_PROVIDER: dict[str, list[KnownModel]] = {
             description="Modelo equilibrado para analise e geracao de alto nivel.",
         ),
     ],
-    "google": [
+    "gemini": [
         KnownModel(
             key="gemini-1-5-pro",
             label="Gemini 1.5 Pro",
@@ -101,6 +101,10 @@ KNOWN_MODELS_BY_PROVIDER: dict[str, list[KnownModel]] = {
 
 
 PROVIDER_ALIASES: dict[str, str] = {
+    "gemini": "gemini",
+    "google": "gemini",
+    "google-ai": "gemini",
+    "google-gemini": "gemini",
     "azure": "azure-openai",
     "azure-openai": "azure-openai",
     "azure-open-ai": "azure-openai",

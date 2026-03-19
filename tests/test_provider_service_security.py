@@ -13,8 +13,8 @@ TEST_FERNET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
 
 class FakeProviderRepository:
-    def __init__(self, credential_value: str) -> None:
-        self.provider = SimpleNamespace(id=uuid4(), slug="openai", is_active=True)
+    def __init__(self, credential_value: str, *, provider_slug: str = "openai") -> None:
+        self.provider = SimpleNamespace(id=uuid4(), slug=provider_slug, is_active=True)
         self.credential = SimpleNamespace(id=uuid4(), encrypted_api_key=credential_value, is_active=True)
 
     def get_by_slug(self, slug: str):  # type: ignore[no-untyped-def]
@@ -29,11 +29,11 @@ class FakeProviderRepository:
 
 
 class FakeProviderModelRepository:
-    def __init__(self, provider_id) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, provider_id, *, model_slug: str = "gpt-5") -> None:  # type: ignore[no-untyped-def]
         self.model = SimpleNamespace(
             id=uuid4(),
             provider_id=provider_id,
-            model_slug="gpt-5",
+            model_slug=model_slug,
             is_active=True,
             cost_input_per_1k_tokens=Decimal("0.01"),
             cost_output_per_1k_tokens=Decimal("0.03"),
@@ -70,11 +70,19 @@ def _configure_encryption_key(monkeypatch):
     monkeypatch.setattr(get_settings(), "credentials_encryption_key", TEST_FERNET_KEY)
 
 
-def _build_service(credential_value: str) -> tuple[ProviderService, FakeRegistry]:
+def _build_service(
+    credential_value: str,
+    *,
+    provider_slug: str = "openai",
+    model_slug: str = "gpt-5",
+) -> tuple[ProviderService, FakeRegistry]:
     service = ProviderService(SimpleNamespace())  # type: ignore[arg-type]
-    fake_providers = FakeProviderRepository(credential_value)
+    fake_providers = FakeProviderRepository(credential_value, provider_slug=provider_slug)
     service.providers = fake_providers  # type: ignore[assignment]
-    service.models = FakeProviderModelRepository(fake_providers.provider.id)  # type: ignore[assignment]
+    service.models = FakeProviderModelRepository(
+        fake_providers.provider.id,
+        model_slug=model_slug,
+    )  # type: ignore[assignment]
     fake_registry = FakeRegistry()
     service.registry = fake_registry  # type: ignore[assignment]
     return service, fake_registry
@@ -105,3 +113,20 @@ def test_provider_service_fails_without_encryption_key(monkeypatch) -> None:
     with pytest.raises(AppException) as exc:
         service.resolve_runtime(provider_slug="openai", model_slug="gpt-5")
     assert exc.value.payload.code == "credentials_encryption_key_missing"
+
+
+def test_provider_service_resolves_gemini_alias_to_canonical_provider() -> None:
+    raw_secret = "gemini-live-key"
+    encrypted = encrypt_secret(raw_secret)
+    service, registry = _build_service(
+        encrypted,
+        provider_slug="gemini",
+        model_slug="gemini-2.5-pro",
+    )
+
+    runtime = service.resolve_runtime(provider_slug="google-ai", model_slug="gemini-2.5-pro")
+
+    assert runtime.provider.slug == "gemini"
+    assert runtime.model.model_slug == "gemini-2.5-pro"
+    assert registry.calls
+    assert registry.calls[0]["provider_slug"] == "gemini"
