@@ -214,13 +214,21 @@ def provider_model_toggle_status(request, pk: int):
 @login_required
 @require_POST
 def provider_model_delete(request, pk: int):
-    provider_model = get_object_or_404(ProviderModel, pk=pk)
+    provider_model = get_object_or_404(
+        ProviderModel.objects.select_related("provider"),
+        pk=pk,
+    )
     model_name = str(provider_model.name or "").strip() or "modelo"
     remote_model_id = provider_model.fastapi_model_id
+    provider = provider_model.provider
 
-    if remote_model_id is not None:
+    if provider.fastapi_provider_id is not None:
         try:
-            ProviderModelsService().delete_remote_model(fastapi_model_id=remote_model_id)
+            ProviderModelsService().delete_remote_model_entry(
+                provider=provider,
+                model_slug=provider_model.slug,
+                fastapi_model_id=remote_model_id,
+            )
         except ProviderModelsServiceError as exc:
             messages.error(
                 request,

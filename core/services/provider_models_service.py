@@ -503,9 +503,9 @@ class ProviderModelsService:
         self,
         *,
         fastapi_model_id: UUID | None,
-    ) -> None:
+    ) -> bool:
         if fastapi_model_id is None:
-            return
+            return False
 
         result = self.client.request_json(
             method="DELETE",
@@ -514,12 +514,12 @@ class ProviderModelsService:
             expect_dict=True,
         )
         if result.is_success:
-            return
+            return True
 
         code, message = self._extract_error_meta(result)
         if result.status_code == 404 and code == "provider_model_not_found":
             # Modelo nao existe mais no catalogo remoto. Permitimos limpeza local.
-            return
+            return False
 
         raise ProviderModelsServiceError(
             message
@@ -528,6 +528,76 @@ class ProviderModelsService:
                 f"(HTTP {result.status_code}, code={code})."
             )
         )
+
+    def _list_remote_provider_models(self, *, provider: Provider) -> list[dict[str, Any]]:
+        if provider.fastapi_provider_id is None:
+            return []
+
+        result = self.client.request_json(
+            method="GET",
+            path=f"/api/v1/admin/providers/{provider.fastapi_provider_id}/models",
+            headers=self._auth_headers(),
+            expect_dict=False,
+        )
+        if not result.is_success:
+            code, message = self._extract_error_meta(result)
+            raise ProviderModelsServiceError(
+                message
+                or (
+                    "Falha ao listar modelos do catalogo remoto na FastAPI "
+                    f"(HTTP {result.status_code}, code={code})."
+                )
+            )
+        return self._parse_model_payload(result, source="api_catalog")
+
+    def _find_remote_model_ids_by_slug(
+        self,
+        *,
+        provider: Provider,
+        model_slug: str,
+    ) -> list[UUID]:
+        target_key = self._normalize_lookup_key(model_slug)
+        if not target_key:
+            return []
+
+        candidates = self._list_remote_provider_models(provider=provider)
+        remote_ids: list[UUID] = []
+        for item in candidates:
+            candidate_key = self._normalize_lookup_key(item.get("slug") or item.get("provider_model_id"))
+            if candidate_key != target_key:
+                continue
+            candidate_id = _to_uuid(item.get("fastapi_model_id"))
+            if candidate_id is None:
+                continue
+            if candidate_id not in remote_ids:
+                remote_ids.append(candidate_id)
+        return remote_ids
+
+    def delete_remote_model_entry(
+        self,
+        *,
+        provider: Provider,
+        model_slug: str,
+        fastapi_model_id: UUID | None,
+    ) -> int:
+        if provider.fastapi_provider_id is None:
+            return 0
+
+        deleted_count = 0
+        if self.delete_remote_model(fastapi_model_id=fastapi_model_id):
+            deleted_count += 1
+
+        remaining_ids = self._find_remote_model_ids_by_slug(
+            provider=provider,
+            model_slug=model_slug,
+        )
+        for remote_id in remaining_ids:
+            if fastapi_model_id is not None and remote_id == fastapi_model_id:
+                continue
+            if self.delete_remote_model(fastapi_model_id=remote_id):
+                deleted_count += 1
+
+        return deleted_count
 
     def get_available_models(self, *, provider: Provider) -> dict[str, Any]:
         warnings: list[str] = []

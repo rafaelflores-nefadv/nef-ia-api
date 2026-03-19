@@ -48,6 +48,24 @@ class FakeDeleteFastAPIClient:
         return self.response
 
 
+class FakeRemoteModelEntryClient:
+    def __init__(self, responses: dict[tuple[str, str], ApiResponse]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, str]] = []
+
+    def get_admin_headers(self):  # type: ignore[no-untyped-def]
+        return {"Authorization": "Bearer test-token"}
+
+    def request_json(self, **kwargs):  # type: ignore[no-untyped-def]
+        method = str(kwargs.get("method") or "").upper()
+        path = str(kwargs.get("path") or "")
+        self.calls.append((method, path))
+        key = (method, path)
+        if key not in self.responses:
+            raise AssertionError(f"Unexpected request: {key}")
+        return self.responses[key]
+
+
 def _provider(slug: str = "openai"):  # type: ignore[no-untyped-def]
     return SimpleNamespace(
         id=1,
@@ -193,3 +211,88 @@ def test_delete_remote_model_raises_for_other_errors() -> None:
         assert "in use" in str(exc).lower()
     else:
         raise AssertionError("Expected ProviderModelsServiceError")
+
+
+def test_delete_remote_model_entry_removes_by_slug_when_fastapi_id_missing() -> None:
+    service = ProviderModelsService()
+    provider = _provider(slug="openai")
+    remote_id = uuid4()
+    responses = {
+        (
+            "GET",
+            f"/api/v1/admin/providers/{provider.fastapi_provider_id}/models",
+        ): ApiResponse(
+            status_code=200,
+            data=[
+                {
+                    "id": str(remote_id),
+                    "provider_id": str(provider.fastapi_provider_id),
+                    "model_name": "gpt-4o-mini",
+                    "model_slug": "gpt-4o-mini",
+                    "context_limit": 128000,
+                    "cost_input_per_1k_tokens": "0.000150",
+                    "cost_output_per_1k_tokens": "0.000600",
+                    "is_active": True,
+                }
+            ],
+        ),
+        ("DELETE", f"/api/v1/admin/models/{remote_id}"): ApiResponse(status_code=204, data={}),
+    }
+    client = FakeRemoteModelEntryClient(responses)
+    service.client = client  # type: ignore[assignment]
+    service.admin_token = "test-token"
+
+    deleted_count = service.delete_remote_model_entry(
+        provider=provider,
+        model_slug="gpt-4o-mini",
+        fastapi_model_id=None,
+    )
+
+    assert deleted_count == 1
+    assert ("DELETE", f"/api/v1/admin/models/{remote_id}") in client.calls
+
+
+def test_delete_remote_model_entry_deletes_residual_when_fastapi_id_wrong() -> None:
+    service = ProviderModelsService()
+    provider = _provider(slug="openai")
+    wrong_id = uuid4()
+    real_id = uuid4()
+    responses = {
+        ("DELETE", f"/api/v1/admin/models/{wrong_id}"): ApiResponse(
+            status_code=404,
+            data={"error": {"code": "provider_model_not_found", "message": "not found"}},
+            error="not found",
+        ),
+        (
+            "GET",
+            f"/api/v1/admin/providers/{provider.fastapi_provider_id}/models",
+        ): ApiResponse(
+            status_code=200,
+            data=[
+                {
+                    "id": str(real_id),
+                    "provider_id": str(provider.fastapi_provider_id),
+                    "model_name": "gpt-4o-mini",
+                    "model_slug": "gpt-4o-mini",
+                    "context_limit": 128000,
+                    "cost_input_per_1k_tokens": "0.000150",
+                    "cost_output_per_1k_tokens": "0.000600",
+                    "is_active": True,
+                }
+            ],
+        ),
+        ("DELETE", f"/api/v1/admin/models/{real_id}"): ApiResponse(status_code=204, data={}),
+    }
+    client = FakeRemoteModelEntryClient(responses)
+    service.client = client  # type: ignore[assignment]
+    service.admin_token = "test-token"
+
+    deleted_count = service.delete_remote_model_entry(
+        provider=provider,
+        model_slug="gpt-4o-mini",
+        fastapi_model_id=wrong_id,
+    )
+
+    assert deleted_count == 1
+    assert ("DELETE", f"/api/v1/admin/models/{wrong_id}") in client.calls
+    assert ("DELETE", f"/api/v1/admin/models/{real_id}") in client.calls

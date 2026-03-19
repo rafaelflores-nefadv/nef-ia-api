@@ -139,6 +139,35 @@ def test_discovery_returns_normalized_models_and_marks_registered(monkeypatch) -
     assert all("sk-live-abc" not in str(item) for item in payload)
 
 
+def test_discovery_marks_gpt4omini_as_unregistered_after_catalog_delete(monkeypatch) -> None:
+    provider = _build_provider(slug="openai", is_active=True)
+    credential = _build_credential(provider_id=provider.id, api_key="sk-live-abc")
+    local_model = _build_model(provider_id=provider.id, model_slug="gpt-4o-mini")
+    model_repository = FakeProviderModelRepository(models=[local_model])
+
+    service = ProviderModelDiscoveryService(FakeSession())  # type: ignore[arg-type]
+    service.providers = FakeProviderRepository(provider=provider, credential=credential)  # type: ignore[assignment]
+    service.models = model_repository  # type: ignore[assignment]
+
+    def fake_fetch(self, *, api_key: str, config_json: dict):  # type: ignore[no-untyped-def]
+        return [{"id": "gpt-4o-mini", "owned_by": "openai"}]
+
+    monkeypatch.setattr(
+        ProviderModelDiscoveryService,
+        "_fetch_openai_available_models",
+        fake_fetch,
+    )
+
+    before_delete = service.list_available_models(provider_id=provider.id)
+    assert before_delete[0]["model_slug"] == "gpt-4o-mini"
+    assert before_delete[0]["is_registered"] is True
+
+    model_repository.models = []
+    after_delete = service.list_available_models(provider_id=provider.id)
+    assert after_delete[0]["model_slug"] == "gpt-4o-mini"
+    assert after_delete[0]["is_registered"] is False
+
+
 def test_discovery_fails_for_inactive_provider() -> None:
     provider = _build_provider(slug="openai", is_active=False)
     credential = _build_credential(provider_id=provider.id)
