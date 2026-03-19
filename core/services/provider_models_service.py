@@ -44,6 +44,23 @@ def _to_decimal(value: Any) -> Decimal | None:
         return None
 
 
+def _to_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "sim"}:
+            return True
+        if normalized in {"0", "false", "no", "nao"}:
+            return False
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return None
+
+
 def _to_uuid(value: Any) -> UUID | None:
     raw = str(value or "").strip()
     if not raw:
@@ -115,7 +132,7 @@ class ProviderModelsService:
         if code == "provider_discovery_not_supported":
             return (
                 "Descoberta dinamica ainda nao suportada para este provider. "
-                "No momento, o fluxo dinamico esta disponivel apenas para OpenAI."
+                "No momento, o fluxo dinamico esta disponivel para OpenAI e Anthropic/Claude."
             )
         if code == "provider_not_found":
             return "Provider remoto nao encontrado na FastAPI para o vinculo informado."
@@ -162,6 +179,10 @@ class ProviderModelsService:
             or row.get("output_cost")
         )
         description = str(row.get("description") or "").strip()
+        supports_vision = _to_bool(row.get("supports_vision"))
+        supports_reasoning = _to_bool(row.get("supports_reasoning"))
+        supports_thinking = _to_bool(row.get("supports_thinking"))
+        raw_payload = row.get("raw_payload") if isinstance(row.get("raw_payload"), dict) else None
 
         raw_is_registered = row.get("is_registered")
         if isinstance(raw_is_registered, bool):
@@ -188,6 +209,10 @@ class ProviderModelsService:
             "output_cost_per_1k": output_cost,
             "description": description,
             "is_registered": is_registered,
+            "supports_vision": supports_vision,
+            "supports_reasoning": supports_reasoning,
+            "supports_thinking": supports_thinking,
+            "raw_payload": raw_payload,
         }
 
     def _parse_model_payload(self, result: ApiResponse, *, source: str) -> list[dict[str, Any]]:

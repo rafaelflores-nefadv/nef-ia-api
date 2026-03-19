@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     temperature: float = 0.2
     provider_timeout: int = 120
     provider_timeout_seconds: int = 120
+    anthropic_api_version: str = "2023-06-01"
     max_input_characters: int = 20000
     max_tokens_per_execution: int = 10000
     max_cost_per_execution: float = 10.0

@@ -68,9 +68,14 @@ class AvailableProviderModelResponse(BaseModel):
     model_name: str
     model_slug: str
     context_limit: int | None = None
+    context_window: int | None = None
     cost_input_per_1k_tokens: Decimal | None = None
     cost_output_per_1k_tokens: Decimal | None = None
     description: str | None = None
+    supports_vision: bool | None = None
+    supports_reasoning: bool | None = None
+    supports_thinking: bool | None = None
+    raw_payload: dict[str, Any] | None = None
     is_registered: bool = False
 
 

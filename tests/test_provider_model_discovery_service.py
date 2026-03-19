@@ -162,8 +162,54 @@ def test_discovery_fails_without_active_credential() -> None:
     assert exc.value.payload.code == "provider_credential_not_found"
 
 
+def test_discovery_supports_anthropic_and_normalizes_capabilities(monkeypatch) -> None:
+    provider = _build_provider(slug="claude", is_active=True)
+    credential = _build_credential(provider_id=provider.id, api_key="sk-ant-abc")
+    local_model = _build_model(provider_id=provider.id, model_slug="claude-3-5-haiku-latest")
+    service = ProviderModelDiscoveryService(FakeSession())  # type: ignore[arg-type]
+    service.providers = FakeProviderRepository(provider=provider, credential=credential)  # type: ignore[assignment]
+    service.models = FakeProviderModelRepository(models=[local_model])  # type: ignore[assignment]
+
+    called: dict[str, str] = {}
+
+    def fake_fetch(self, *, api_key: str, config_json: dict):  # type: ignore[no-untyped-def]
+        called["api_key"] = api_key
+        return [
+            {
+                "id": "claude-3-7-sonnet-latest",
+                "display_name": "Claude 3.7 Sonnet",
+                "capabilities": {"vision": True, "thinking": True},
+                "max_context_tokens": 200000,
+            },
+            {
+                "id": "claude-3-5-haiku-latest",
+                "display_name": "Claude 3.5 Haiku",
+            },
+        ]
+
+    monkeypatch.setattr(
+        ProviderModelDiscoveryService,
+        "_fetch_anthropic_available_models",
+        fake_fetch,
+    )
+
+    payload = service.list_available_models(provider_id=provider.id)
+    assert called["api_key"] == "sk-ant-abc"
+    assert [item["model_slug"] for item in payload] == [
+        "claude-3-5-haiku-latest",
+        "claude-3-7-sonnet-latest",
+    ]
+    assert payload[0]["is_registered"] is True
+    assert payload[1]["is_registered"] is False
+    assert payload[1]["supports_vision"] is True
+    assert payload[1]["supports_thinking"] is True
+    assert payload[1]["context_limit"] == 200000
+    assert payload[1]["provider_slug"] == "claude"
+    assert payload[1]["description"] == "Modelo descoberto via API nativa Anthropic."
+
+
 def test_discovery_fails_for_provider_not_supported() -> None:
-    provider = _build_provider(slug="anthropic", is_active=True)
+    provider = _build_provider(slug="gemini", is_active=True)
     credential = _build_credential(provider_id=provider.id)
     service = ProviderModelDiscoveryService(FakeSession())  # type: ignore[arg-type]
     service.providers = FakeProviderRepository(provider=provider, credential=credential)  # type: ignore[assignment]

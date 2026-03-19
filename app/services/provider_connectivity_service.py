@@ -6,6 +6,10 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import AppException
 from app.repositories.operational import ProviderRepository
 from app.services.provider_model_discovery_service import ProviderModelDiscoveryService
+from app.services.providers.provider_resolution import (
+    SUPPORTED_DISCOVERY_PROVIDER_SLUGS,
+    resolve_discovery_provider_slug,
+)
 
 
 class ProviderConnectivityService:
@@ -139,14 +143,15 @@ class ProviderConnectivityService:
             }
         )
 
-        if provider.slug not in ProviderModelDiscoveryService.SUPPORTED_PROVIDER_SLUGS:
+        canonical_provider_slug = resolve_discovery_provider_slug(provider.slug)
+        if canonical_provider_slug is None:
             checks.append(
                 {
                     "name": "provider_support",
                     "ok": False,
                     "message": (
                         "Provider ainda sem suporte de teste automatico. "
-                        "Atualmente o teste automatico esta disponivel apenas para OpenAI."
+                        "Atualmente o teste automatico esta disponivel para OpenAI e Anthropic/Claude."
                     ),
                     "code": "provider_discovery_not_supported",
                 }
@@ -156,7 +161,7 @@ class ProviderConnectivityService:
                 status_label="Provider sem suporte de teste",
                 message=(
                     "Provider ainda sem suporte de teste automatico. "
-                    "No momento, apenas OpenAI e validado ponta a ponta."
+                    "No momento, o teste automatico cobre OpenAI e Anthropic/Claude."
                 ),
                 provider_id=provider_id,
                 provider_slug=provider.slug,
@@ -168,12 +173,17 @@ class ProviderConnectivityService:
             {
                 "name": "provider_support",
                 "ok": True,
-                "message": "Provider com suporte de teste automatico.",
+                "message": (
+                    "Provider com suporte de teste automatico "
+                    f"(backend: {canonical_provider_slug})."
+                ),
             }
         )
 
         try:
-            raw_models = self.discovery._fetch_openai_available_models(
+            _, raw_models = self.discovery.fetch_raw_models(
+                provider_slug=provider.slug,
+                provider_id=provider.id,
                 api_key=api_key,
                 config_json=credential.config_json or {},
             )
@@ -257,6 +267,16 @@ class ProviderConnectivityService:
                 "provider_http_error",
                 "Erro de integracao",
                 f"Provider retornou erro HTTP {http_status or 'desconhecido'}.",
+            )
+        if code == "provider_discovery_not_supported":
+            supported = ", ".join(sorted(SUPPORTED_DISCOVERY_PROVIDER_SLUGS))
+            return (
+                "provider_not_supported",
+                "Provider sem suporte",
+                (
+                    "Provider ainda sem suporte de descoberta/conectividade automatica. "
+                    f"Suportados atualmente: {supported}."
+                ),
             )
         if code == "provider_invalid_response":
             return (

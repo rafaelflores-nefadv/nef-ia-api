@@ -218,6 +218,10 @@ class ProviderModelCreateForm(forms.ModelForm):
                             "input_cost_per_1k": item.get("input_cost_per_1k"),
                             "output_cost_per_1k": item.get("output_cost_per_1k"),
                             "description": item.get("description") or "",
+                            "supports_vision": item.get("supports_vision"),
+                            "supports_reasoning": item.get("supports_reasoning"),
+                            "supports_thinking": item.get("supports_thinking"),
+                            "raw_payload": item.get("raw_payload") if isinstance(item.get("raw_payload"), dict) else None,
                             "is_registered": bool(item.get("is_registered", False)),
                         }
                     )
