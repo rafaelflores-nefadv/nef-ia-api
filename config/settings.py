@@ -57,12 +57,15 @@ ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "nef-ia-api",
-        "USER": "postgres",
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": "nef_ia_api",
+        "USER": "nef_ia_api_user",
         "PASSWORD": "Nef@2026!",
-        "HOST": "127.0.0.1",  # ou IP/host do postgres
-        "PORT": "5432",
+        "HOST": "127.0.0.1",
+        "PORT": "3306",
+        "OPTIONS": {
+            "charset": "utf8mb4",
+        },
     }
 }
 
