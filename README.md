@@ -158,6 +158,16 @@ Servicos:
 python -m alembic upgrade head
 ```
 
+## Seed inicial (FastAPI)
+```bash
+python -m app.seed
+```
+
+Com atualizacao forcada dos dados padrao:
+```bash
+python -m app.seed --force
+```
+
 ## Testes
 ```bash
 python -m pytest -q
