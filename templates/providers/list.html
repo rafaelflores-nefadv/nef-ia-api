@@ -12,10 +12,11 @@
                     <tr>
                         <th>Nome</th>
                         <th>Slug</th>
-                        <th>Descrição</th>
+                        <th>Vinculo FastAPI</th>
+                        <th>Descricao</th>
                         <th>Status</th>
                         <th>Atualizado em</th>
-                        <th class="text-end">Ações</th>
+                        <th class="text-end">Acoes</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -23,6 +24,13 @@
                         <tr>
                             <td class="fw-semibold">{{ provider.name }}</td>
                             <td><code>{{ provider.slug }}</code></td>
+                            <td>
+                                {% if provider.fastapi_provider_id %}
+                                    <span class="status-pill status-success">Sincronizado</span>
+                                {% else %}
+                                    <span class="status-pill status-warning">Pendente</span>
+                                {% endif %}
+                            </td>
                             <td class="text-muted">{{ provider.description|default:"-"|truncatechars:90 }}</td>
                             <td>
                                 {% if provider.is_active %}
@@ -52,6 +60,6 @@
         </div>
     </section>
 {% else %}
-    {% include "includes/empty_state.html" with empty_icon="bi bi-diagram-3" empty_title="Nenhum provider cadastrado" empty_message="Cadastre o primeiro provider para liberar o catálogo de modelos e credenciais." empty_action_url=provider_create_url empty_action_label="Criar provider" empty_action_icon="bi bi-plus-lg" %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-diagram-3" empty_title="Nenhum provider cadastrado" empty_message="Cadastre o primeiro provider para liberar o catalogo de modelos e credenciais." empty_action_url=provider_create_url empty_action_label="Criar provider" empty_action_icon="bi bi-plus-lg" %}
 {% endif %}
 {% endblock %}

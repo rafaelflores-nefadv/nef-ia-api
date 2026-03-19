@@ -7,22 +7,44 @@
 <section class="panel-card">
     {% if is_create_mode %}
         <p class="admin-note mb-2">
-            Selecione um modelo disponivel do provider para evitar duplicidade e inconsistencias de catalogo.
+            O fluxo principal usa descoberta real via FastAPI/provider e cadastro no catalogo operacional remoto.
         </p>
         <p class="admin-note mb-3">
-            Nome e slug sao preenchidos automaticamente a partir da integracao FastAPI.
+            O fallback local so aparece quando houver falha real de integracao e sera sinalizado explicitamente.
         </p>
         <div class="d-flex align-items-center gap-2 mb-3">
-            {% include "includes/data_origin_badge.html" with source=form.available_models_source %}
-            {% if form.available_models_source == "api_provider" %}
-                <small class="admin-note">Origem atual: modelos descobertos no provider via FastAPI.</small>
-            {% elif form.available_models_source == "api_catalog" %}
-                <small class="admin-note">Origem atual: catalogo administrativo da FastAPI.</small>
-            {% elif form.available_models_source == "fallback_local" %}
-                <small class="admin-note">Origem atual: fallback local temporario.</small>
-            {% else %}
-                <small class="admin-note">Origem atual: integracao indisponivel.</small>
-            {% endif %}
+            <span id="models-source-badge" class="status-pill
+                {% if form.available_models_source == 'api_provider' %}status-success
+                {% elif form.available_models_source == 'api_catalog' %}status-warning
+                {% elif form.available_models_source == 'fallback_local' %}status-danger
+                {% elif form.available_models_source == 'provider_not_synced' %}status-danger
+                {% elif form.available_models_source == 'unavailable' %}status-neutral
+                {% else %}status-neutral{% endif %}">
+                {% if form.available_models_source == "api_provider" %}
+                    FastAPI / provider real
+                {% elif form.available_models_source == "api_catalog" %}
+                    FastAPI / catalogo
+                {% elif form.available_models_source == "fallback_local" %}
+                    Fallback local
+                {% elif form.available_models_source == "provider_not_synced" %}
+                    Provider nao sincronizado
+                {% else %}
+                    Integracao indisponivel
+                {% endif %}
+            </span>
+            <small id="models-source-note" class="admin-note">
+                {% if form.available_models_source == "api_provider" %}
+                    Origem atual: modelos descobertos no provider real via FastAPI.
+                {% elif form.available_models_source == "api_catalog" %}
+                    Origem atual: catalogo operacional da FastAPI.
+                {% elif form.available_models_source == "fallback_local" %}
+                    Origem atual: fallback local temporario por falha de integracao.
+                {% elif form.available_models_source == "provider_not_synced" %}
+                    Origem atual: provider sem vinculo remoto na FastAPI.
+                {% else %}
+                    Origem atual: integracao indisponivel.
+                {% endif %}
+            </small>
         </div>
     {% else %}
         <p class="admin-note mb-3">
@@ -47,19 +69,23 @@
     {% endif %}
 
     {% if form.catalog_warning %}
-        <div class="alert alert-warning" role="alert">
+        <div id="catalog-warning" class="alert alert-warning" role="alert">
             {{ form.catalog_warning }}
         </div>
+    {% else %}
+        <div id="catalog-warning" class="alert alert-warning d-none" role="alert"></div>
     {% endif %}
 
     {% if is_create_mode and form.available_models_warnings %}
-        <div class="alert alert-info" role="alert">
+        <div id="available-model-warnings" class="alert alert-info" role="alert">
             <ul class="mb-0 ps-3">
                 {% for warning in form.available_models_warnings %}
                     <li>{{ warning }}</li>
                 {% endfor %}
             </ul>
         </div>
+    {% else %}
+        <div id="available-model-warnings" class="alert alert-info d-none" role="alert"></div>
     {% endif %}
 
     {% if form.non_field_errors %}
@@ -87,59 +113,58 @@
                 <div class="col-12 col-lg-6">
                     <label for="{{ form.known_model.id_for_label }}" class="form-label fw-semibold">{{ form.known_model.label }}</label>
                     {{ form.known_model }}
-                    <div class="form-text">{{ form.catalog_help_text }}</div>
-                    {% if form.selectable_models_count %}
-                        <div class="form-text">{{ form.selectable_models_count }} modelo(s) disponivel(is) para cadastro.</div>
-                    {% endif %}
+                    <div id="catalog-help-text" class="form-text">{{ form.catalog_help_text }}</div>
+                    <div id="selectable-model-count" class="form-text {% if not form.selectable_models_count %}d-none{% endif %}">
+                        {{ form.selectable_models_count }} modelo(s) disponivel(is) para cadastro.
+                    </div>
                     {% for error in form.known_model.errors %}
                         <div class="invalid-feedback d-block">{{ error }}</div>
                     {% endfor %}
                 </div>
 
-                {% if form.registered_models %}
-                    <div class="col-12">
-                        <small class="text-secondary d-block mb-2">Modelos ja cadastrados para este provider</small>
-                        <div class="d-flex flex-wrap gap-2">
-                            {% for item in form.registered_models %}
-                                <span class="status-pill status-neutral">{{ item.label|default:item.name }}</span>
-                            {% endfor %}
-                        </div>
+                <div class="col-12 {% if not form.registered_models %}d-none{% endif %}" id="registered-models-wrapper">
+                    <small class="text-secondary d-block mb-2">Modelos ja cadastrados para este provider</small>
+                    <div id="registered-models" class="d-flex flex-wrap gap-2">
+                        {% for item in form.registered_models %}
+                            <span class="status-pill status-neutral">{{ item.label|default:item.name }}</span>
+                        {% endfor %}
                     </div>
-                {% endif %}
+                </div>
 
                 <div class="col-12">
                     <div class="border rounded-3 p-3 bg-light-subtle">
                         <small class="text-secondary d-block mb-2">Preview do modelo selecionado</small>
-                        {% if form.selected_known_model %}
+                        <div id="selected-model-preview"{% if not form.selected_known_model %} class="d-none"{% endif %}>
                             <div class="row g-2">
                                 <div class="col-12 col-lg-4">
                                     <small class="text-secondary d-block">Nome</small>
-                                    <strong>{{ form.selected_known_model.name|default:"-" }}</strong>
+                                    <strong id="preview-name">{{ form.selected_known_model.name|default:"-" }}</strong>
                                 </div>
                                 <div class="col-12 col-lg-4">
                                     <small class="text-secondary d-block">Slug</small>
-                                    <code>{{ form.selected_known_model.slug|default:"-" }}</code>
+                                    <code id="preview-slug">{{ form.selected_known_model.slug|default:"-" }}</code>
                                 </div>
                                 <div class="col-12 col-lg-4">
                                     <small class="text-secondary d-block">Contexto</small>
-                                    <strong>{{ form.selected_known_model.context_window|default:"-" }}</strong>
+                                    <strong id="preview-context">{{ form.selected_known_model.context_window|default:"-" }}</strong>
                                 </div>
                                 <div class="col-12 col-lg-4">
                                     <small class="text-secondary d-block">Custo input / 1k</small>
-                                    <strong>{{ form.selected_known_model.input_cost_per_1k|default:"-" }}</strong>
+                                    <strong id="preview-input">{{ form.selected_known_model.input_cost_per_1k|default:"-" }}</strong>
                                 </div>
                                 <div class="col-12 col-lg-4">
                                     <small class="text-secondary d-block">Custo output / 1k</small>
-                                    <strong>{{ form.selected_known_model.output_cost_per_1k|default:"-" }}</strong>
+                                    <strong id="preview-output">{{ form.selected_known_model.output_cost_per_1k|default:"-" }}</strong>
                                 </div>
                                 <div class="col-12">
                                     <small class="text-secondary d-block">Descricao</small>
-                                    <span>{{ form.selected_known_model.description|default:"-" }}</span>
+                                    <span id="preview-description">{{ form.selected_known_model.description|default:"-" }}</span>
                                 </div>
                             </div>
-                        {% else %}
-                            <span class="admin-note">Selecione um modelo para visualizar nome, slug e metadados sugeridos.</span>
-                        {% endif %}
+                        </div>
+                        <span id="empty-preview-message" class="admin-note{% if form.selected_known_model %} d-none{% endif %}">
+                            Selecione um modelo para visualizar nome, slug e metadados sugeridos.
+                        </span>
                     </div>
                 </div>
             {% endif %}
@@ -200,39 +225,254 @@
             (function () {
                 const providerField = document.getElementById("id_provider");
                 const modelField = document.getElementById("id_known_model");
-                if (!providerField) {
+                const endpoint = "{{ available_models_endpoint }}";
+                if (!providerField || !modelField || !endpoint) {
                     return;
+                }
+
+                const badge = document.getElementById("models-source-badge");
+                const sourceNote = document.getElementById("models-source-note");
+                const warningBox = document.getElementById("available-model-warnings");
+                const catalogWarning = document.getElementById("catalog-warning");
+                const catalogHelpText = document.getElementById("catalog-help-text");
+                const selectableModelCount = document.getElementById("selectable-model-count");
+                const registeredModels = document.getElementById("registered-models");
+                const registeredModelsWrapper = document.getElementById("registered-models-wrapper");
+                const preview = document.getElementById("selected-model-preview");
+                const emptyPreview = document.getElementById("empty-preview-message");
+                const previewName = document.getElementById("preview-name");
+                const previewSlug = document.getElementById("preview-slug");
+                const previewContext = document.getElementById("preview-context");
+                const previewInput = document.getElementById("preview-input");
+                const previewOutput = document.getElementById("preview-output");
+                const previewDescription = document.getElementById("preview-description");
+
+                let currentModels = {};
+
+                function setSourceUi(source) {
+                    const mapping = {
+                        api_provider: {
+                            label: "FastAPI / provider real",
+                            note: "Origem atual: modelos descobertos no provider real via FastAPI.",
+                            className: "status-pill status-success",
+                            helpText: "Modelos carregados da API do provider via FastAPI.",
+                        },
+                        api_catalog: {
+                            label: "FastAPI / catalogo",
+                            note: "Origem atual: catalogo operacional da FastAPI.",
+                            className: "status-pill status-warning",
+                            helpText: "Modelos carregados da FastAPI (catalogo administrativo).",
+                        },
+                        fallback_local: {
+                            label: "Fallback local",
+                            note: "Origem atual: fallback local temporario por falha de integracao.",
+                            className: "status-pill status-danger",
+                            helpText: "Fallback local ativado por falha real de integracao.",
+                        },
+                        provider_not_synced: {
+                            label: "Provider nao sincronizado",
+                            note: "Origem atual: provider sem vinculo remoto na FastAPI.",
+                            className: "status-pill status-danger",
+                            helpText: "Provider sem vinculo remoto na FastAPI.",
+                        },
+                        unavailable: {
+                            label: "Integracao indisponivel",
+                            note: "Origem atual: integracao indisponivel.",
+                            className: "status-pill status-neutral",
+                            helpText: "Integracao indisponivel. Revise mensagens de erro.",
+                        },
+                    };
+                    const item = mapping[source] || mapping.unavailable;
+                    if (badge) {
+                        badge.className = item.className;
+                        badge.textContent = item.label;
+                    }
+                    if (sourceNote) {
+                        sourceNote.textContent = item.note;
+                    }
+                    if (catalogHelpText) {
+                        catalogHelpText.textContent = item.helpText;
+                    }
+                }
+
+                function setWarnings(warnings) {
+                    const warningList = Array.isArray(warnings)
+                        ? warnings.filter((item) => String(item || "").trim())
+                        : [];
+                    if (!warningBox) {
+                        return;
+                    }
+                    if (!warningList.length) {
+                        warningBox.classList.add("d-none");
+                        warningBox.innerHTML = "";
+                        return;
+                    }
+                    warningBox.classList.remove("d-none");
+                    warningBox.innerHTML = "<ul class='mb-0 ps-3'>" + warningList.map((item) => "<li>" + item + "</li>").join("") + "</ul>";
+                }
+
+                function setCatalogWarning(message) {
+                    if (!catalogWarning) {
+                        return;
+                    }
+                    const normalized = String(message || "").trim();
+                    if (!normalized) {
+                        catalogWarning.classList.add("d-none");
+                        catalogWarning.textContent = "";
+                        return;
+                    }
+                    catalogWarning.classList.remove("d-none");
+                    catalogWarning.textContent = normalized;
+                }
+
+                function renderOptions(items, selectedKey) {
+                    currentModels = {};
+                    modelField.innerHTML = "";
+
+                    if (!Array.isArray(items) || !items.length) {
+                        const option = document.createElement("option");
+                        option.value = "";
+                        option.textContent = "Nenhum modelo disponivel para este provider";
+                        modelField.appendChild(option);
+                        if (selectableModelCount) {
+                            selectableModelCount.classList.add("d-none");
+                            selectableModelCount.textContent = "";
+                        }
+                        renderRegisteredModels([]);
+                        setPreview(null);
+                        return;
+                    }
+
+                    const placeholder = document.createElement("option");
+                    placeholder.value = "";
+                    placeholder.textContent = "Selecione um modelo";
+                    modelField.appendChild(placeholder);
+
+                    const registered = [];
+                    const selectable = [];
+                    items.forEach((item) => {
+                        const key = String(item.key || item.slug || "").trim();
+                        if (!key) {
+                            return;
+                        }
+                        currentModels[key] = item;
+                        const option = document.createElement("option");
+                        option.value = key;
+                        let label = String(item.label || item.name || key);
+                        if (item.is_registered) {
+                            label += " (ja cadastrado)";
+                            option.disabled = true;
+                            registered.push(item);
+                        } else {
+                            selectable.push(item);
+                        }
+                        option.textContent = label;
+                        modelField.appendChild(option);
+                    });
+
+                    if (selectedKey && currentModels[selectedKey]) {
+                        modelField.value = selectedKey;
+                    } else {
+                        modelField.value = "";
+                    }
+
+                    if (selectableModelCount) {
+                        if (!selectable.length) {
+                            selectableModelCount.classList.add("d-none");
+                            selectableModelCount.textContent = "";
+                        } else {
+                            selectableModelCount.classList.remove("d-none");
+                            selectableModelCount.textContent = selectable.length + " modelo(s) disponivel(is) para cadastro.";
+                        }
+                    }
+
+                    renderRegisteredModels(registered);
+                    setPreview(currentModels[modelField.value] || null);
+                }
+
+                function renderRegisteredModels(items) {
+                    if (!registeredModels || !registeredModelsWrapper) {
+                        return;
+                    }
+                    if (!Array.isArray(items) || !items.length) {
+                        registeredModelsWrapper.classList.add("d-none");
+                        registeredModels.innerHTML = "";
+                        return;
+                    }
+                    registeredModelsWrapper.classList.remove("d-none");
+                    registeredModels.innerHTML = items
+                        .map((item) => "<span class='status-pill status-neutral'>" + String(item.label || item.name || item.slug || "-") + "</span>")
+                        .join("");
+                }
+
+                function setPreview(item) {
+                    if (!preview || !emptyPreview) {
+                        return;
+                    }
+                    if (!item) {
+                        preview.classList.add("d-none");
+                        emptyPreview.classList.remove("d-none");
+                        return;
+                    }
+                    preview.classList.remove("d-none");
+                    emptyPreview.classList.add("d-none");
+                    if (previewName) previewName.textContent = String(item.name || "-");
+                    if (previewSlug) previewSlug.textContent = String(item.slug || "-");
+                    if (previewContext) previewContext.textContent = String(item.context_window || "-");
+                    if (previewInput) previewInput.textContent = String(item.input_cost_per_1k || "-");
+                    if (previewOutput) previewOutput.textContent = String(item.output_cost_per_1k || "-");
+                    if (previewDescription) previewDescription.textContent = String(item.description || "-");
+                }
+
+                async function loadProviderModels(providerId, selectedKey) {
+                    if (!providerId) {
+                        setSourceUi("unavailable");
+                        setWarnings([]);
+                        setCatalogWarning("");
+                        renderOptions([], "");
+                        return;
+                    }
+
+                    try {
+                        const response = await fetch(endpoint + "?provider=" + encodeURIComponent(providerId), {
+                            method: "GET",
+                            headers: {"X-Requested-With": "XMLHttpRequest"},
+                        });
+                        const payload = await response.json();
+                        const source = String(payload.source || "unavailable");
+                        const items = Array.isArray(payload.items) ? payload.items : [];
+                        const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+
+                        setSourceUi(source);
+                        setWarnings(warnings);
+                        if (source === "provider_not_synced") {
+                            setCatalogWarning("Provider sem vinculo remoto na FastAPI. Sincronize o provider antes de cadastrar modelos.");
+                        } else if (!items.length) {
+                            setCatalogWarning("Nenhum modelo disponivel foi retornado para este provider.");
+                        } else {
+                            setCatalogWarning("");
+                        }
+                        renderOptions(items, selectedKey);
+                    } catch (error) {
+                        setSourceUi("unavailable");
+                        setWarnings(["Falha ao carregar modelos disponiveis via integracao FastAPI."]);
+                        setCatalogWarning("Falha de integracao. Tente novamente.");
+                        renderOptions([], "");
+                    }
                 }
 
                 providerField.addEventListener("change", function () {
-                    const selected = providerField.value;
-                    const url = new URL(window.location.href);
-                    if (selected) {
-                        url.searchParams.set("provider", selected);
-                    } else {
-                        url.searchParams.delete("provider");
-                    }
-                    url.searchParams.delete("model");
-                    window.location.assign(url.pathname + url.search);
+                    loadProviderModels(providerField.value, "");
                 });
-
-                if (!modelField) {
-                    return;
-                }
 
                 modelField.addEventListener("change", function () {
-                    const selected = modelField.value;
-                    const url = new URL(window.location.href);
-                    if (providerField.value) {
-                        url.searchParams.set("provider", providerField.value);
-                    }
-                    if (selected) {
-                        url.searchParams.set("model", selected);
-                    } else {
-                        url.searchParams.delete("model");
-                    }
-                    window.location.assign(url.pathname + url.search);
+                    const selected = String(modelField.value || "").trim();
+                    setPreview(currentModels[selected] || null);
                 });
+
+                if (providerField.value) {
+                    loadProviderModels(providerField.value, modelField.value || "");
+                }
             })();
         </script>
     {% endif %}

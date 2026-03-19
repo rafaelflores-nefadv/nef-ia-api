@@ -12,6 +12,8 @@ from app.repositories.operational import ProviderModelRepository, ProviderReposi
 
 
 class ProviderModelDiscoveryService:
+    SUPPORTED_PROVIDER_SLUGS = {"openai"}
+
     def __init__(self, session: Session) -> None:
         self.session = session
         self.providers = ProviderRepository(session)
@@ -31,12 +33,16 @@ class ProviderModelDiscoveryService:
         credential = self._get_active_credential_or_422(provider)
         api_key = self._decrypt_credential_or_422(credential)
 
-        if provider.slug != "openai":
+        if provider.slug not in self.SUPPORTED_PROVIDER_SLUGS:
             raise AppException(
                 "Provider model discovery is not supported for this provider yet.",
                 status_code=422,
                 code="provider_discovery_not_supported",
-                details={"provider_slug": provider.slug, "provider_id": str(provider.id)},
+                details={
+                    "provider_slug": provider.slug,
+                    "provider_id": str(provider.id),
+                    "supported_provider_slugs": sorted(self.SUPPORTED_PROVIDER_SLUGS),
+                },
             )
 
         raw_models = self._fetch_openai_available_models(

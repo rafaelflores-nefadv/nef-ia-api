@@ -10,6 +10,12 @@ class ProviderModel(models.Model):
         related_name="provider_models",
         verbose_name="Provider",
     )
+    fastapi_model_id = models.UUIDField(
+        "ID do modelo na FastAPI",
+        null=True,
+        blank=True,
+        unique=True,
+    )
     name = models.CharField("Nome", max_length=150)
     slug = models.SlugField("Slug", max_length=160)
     description = models.TextField("Descricao", blank=True)

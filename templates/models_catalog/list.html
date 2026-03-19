@@ -13,6 +13,7 @@
                         <th>Provider</th>
                         <th>Nome</th>
                         <th>Slug</th>
+                        <th>Vinculo FastAPI</th>
                         <th>Janela de contexto</th>
                         <th>Custo input/1k</th>
                         <th>Custo output/1k</th>
@@ -27,6 +28,13 @@
                             <td class="fw-semibold">{{ model.provider.name }}</td>
                             <td>{{ model.name }}</td>
                             <td><code>{{ model.slug }}</code></td>
+                            <td>
+                                {% if model.fastapi_model_id %}
+                                    <span class="status-pill status-success">Sincronizado</span>
+                                {% else %}
+                                    <span class="status-pill status-warning">Pendente</span>
+                                {% endif %}
+                            </td>
                             <td>{{ model.context_window|default:"-" }}</td>
                             <td class="text-nowrap">{{ model.input_cost_per_1k|floatformat:6 }}</td>
                             <td class="text-nowrap">{{ model.output_cost_per_1k|floatformat:6 }}</td>

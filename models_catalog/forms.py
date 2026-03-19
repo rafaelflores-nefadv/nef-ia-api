@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from uuid import UUID
 
 from django import forms
 
 from providers.models import Provider
 
-from .catalog import get_known_models
 from .models import ProviderModel
 
 
@@ -157,6 +157,10 @@ class ProviderModelCreateForm(forms.ModelForm):
             self.catalog_help_text = (
                 "Selecione um provider para carregar os modelos disponiveis via FastAPI."
             )
+        elif self.available_models_source == "provider_not_synced":
+            self.catalog_warning = (
+                "Provider sem vinculo remoto na FastAPI. Sincronize o provider antes de cadastrar modelos."
+            )
         elif not known_models and self.available_models_source == "unavailable":
             self.catalog_warning = (
                 "Nao foi possivel carregar modelos disponiveis para este provider."
@@ -174,9 +178,9 @@ class ProviderModelCreateForm(forms.ModelForm):
                 "Modelos carregados da FastAPI (catalogo administrativo)."
             )
         elif self.available_models_source == "fallback_local":
-            self.catalog_help_text = "Exibindo catalogo local como fallback temporario."
+            self.catalog_help_text = "Fallback local ativado por falha real de integracao."
         else:
-            self.catalog_help_text = "Integracao indisponivel. Tente novamente em instantes."
+            self.catalog_help_text = "Integracao indisponivel. Revise mensagens de erro."
 
         selected_model_key = (
             self.data.get("known_model")
@@ -208,6 +212,8 @@ class ProviderModelCreateForm(forms.ModelForm):
                             "label": label or name,
                             "name": name or slug,
                             "slug": slug,
+                            "fastapi_model_id": item.get("fastapi_model_id"),
+                            "provider_model_id": item.get("provider_model_id") or key,
                             "context_window": item.get("context_window"),
                             "input_cost_per_1k": item.get("input_cost_per_1k"),
                             "output_cost_per_1k": item.get("output_cost_per_1k"),
@@ -229,28 +235,13 @@ class ProviderModelCreateForm(forms.ModelForm):
 
         if selected_provider is None:
             return {"items": [], "source": "unavailable", "warnings": []}
-
-        fallback_items = []
-        for model in get_known_models(selected_provider.slug):
-            fallback_items.append(
-                {
-                    "key": model.key,
-                    "label": model.label,
-                    "name": model.name,
-                    "slug": model.slug,
-                    "context_window": model.context_window,
-                    "input_cost_per_1k": model.input_cost_per_1k,
-                    "output_cost_per_1k": model.output_cost_per_1k,
-                    "description": model.description,
-                    "is_registered": False,
-                }
-            )
-
-        if fallback_items:
+        if selected_provider.fastapi_provider_id is None:
             return {
-                "items": fallback_items,
-                "source": "fallback_local",
-                "warnings": ["Exibindo catalogo local como fallback temporario."],
+                "items": [],
+                "source": "provider_not_synced",
+                "warnings": [
+                    "Provider nao sincronizado com a FastAPI. Edite/salve o provider para criar o vinculo remoto."
+                ],
             }
         return {"items": [], "source": "unavailable", "warnings": []}
 
@@ -303,10 +294,19 @@ class ProviderModelCreateForm(forms.ModelForm):
             return cleaned_data
 
         known_models = list(self.known_models_by_key.values())
-        if not known_models:
+        if self.available_models_source == "provider_not_synced":
             self.add_error(
                 "provider",
-                "Nao foi possivel carregar modelos disponiveis para este provider.",
+                "Provider nao sincronizado com a FastAPI. Salve o provider para gerar vinculo remoto.",
+            )
+            return cleaned_data
+        if not known_models:
+            warning_message = str(self.catalog_warning or "").strip()
+            if not warning_message and self.available_models_warnings:
+                warning_message = str(self.available_models_warnings[0]).strip()
+            self.add_error(
+                "provider",
+                warning_message or "Nao foi possivel carregar modelos disponiveis para este provider.",
             )
             return cleaned_data
 
@@ -359,6 +359,12 @@ class ProviderModelCreateForm(forms.ModelForm):
         if known_model is not None:
             instance.name = known_model["name"]
             instance.slug = known_model["slug"]
+            fastapi_model_id = str(known_model.get("fastapi_model_id") or "").strip()
+            if fastapi_model_id:
+                try:
+                    instance.fastapi_model_id = UUID(fastapi_model_id)
+                except ValueError:
+                    instance.fastapi_model_id = None
         else:
             instance.name = self.cleaned_data["name"]
             instance.slug = self.cleaned_data["slug"]

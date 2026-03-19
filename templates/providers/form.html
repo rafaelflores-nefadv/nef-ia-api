@@ -5,7 +5,15 @@
 {% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Providers" breadcrumb_parent_url=providers_list_url breadcrumb_current=form_title %}
 
 <section class="panel-card">
-    <p class="admin-note mb-3">Use um slug único e estável para facilitar futuras integrações via API.</p>
+    <p class="admin-note mb-3">
+        O provider sera sincronizado com a FastAPI no momento do salvamento, usando vinculo explicito por ID remoto.
+    </p>
+
+    {% if object and object.fastapi_provider_id %}
+        <div class="alert alert-info" role="alert">
+            Provider remoto vinculado: <code>{{ object.fastapi_provider_id }}</code>
+        </div>
+    {% endif %}
 
     {% if form.non_field_errors %}
         <div class="alert alert-danger" role="alert">

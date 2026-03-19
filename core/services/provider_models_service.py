@@ -3,22 +3,26 @@ from __future__ import annotations
 import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any
-
-from django.utils.text import slugify
+from uuid import UUID
 
 from models_catalog.catalog import get_known_models
 from providers.models import Provider
 
-from .api_client import FastAPIClient
+from .api_client import ApiResponse, FastAPIClient
 
 logger = logging.getLogger(__name__)
+
+
+class ProviderModelsServiceError(Exception):
+    pass
 
 
 def _dedupe(values: list[str]) -> list[str]:
     unique: list[str] = []
     for value in values:
-        if value and value not in unique:
-            unique.append(value)
+        normalized = str(value or "").strip()
+        if normalized and normalized not in unique:
+            unique.append(normalized)
     return unique
 
 
@@ -40,6 +44,16 @@ def _to_decimal(value: Any) -> Decimal | None:
         return None
 
 
+def _to_uuid(value: Any) -> UUID | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return UUID(raw)
+    except ValueError:
+        return None
+
+
 class ProviderModelsService:
     def __init__(self):
         self.client = FastAPIClient()
@@ -57,75 +71,81 @@ class ProviderModelsService:
                     "label": model.label,
                     "name": model.name,
                     "slug": model.slug,
+                    "fastapi_model_id": None,
+                    "provider_model_id": model.key,
                     "context_window": model.context_window,
                     "input_cost_per_1k": model.input_cost_per_1k,
                     "output_cost_per_1k": model.output_cost_per_1k,
                     "description": model.description,
+                    "is_registered": False,
                 }
             )
         return items
 
-    def _fetch_admin_providers(self) -> tuple[list[dict[str, Any]], list[str]]:
-        warnings: list[str] = []
-        result = self.client.get_json(
-            "/api/v1/admin/providers",
-            headers=self._auth_headers(),
-            expect_dict=False,
-        )
+    def _extract_error_meta(self, result: ApiResponse) -> tuple[str | None, str]:
+        code: str | None = None
+        message = str(result.error or "").strip()
+        if isinstance(result.data, dict):
+            error_payload = result.data.get("error")
+            if isinstance(error_payload, dict):
+                code_value = str(error_payload.get("code") or "").strip()
+                if code_value:
+                    code = code_value
+                payload_message = str(error_payload.get("message") or "").strip()
+                if payload_message:
+                    message = payload_message
+        return code, message
 
-        if result.status_code in {401, 403} and not self.admin_token:
-            warnings.append(
-                "Configure o token administrativo da FastAPI nas configuracoes."
-            )
-            return [], warnings
-        if result.status_code in {401, 403} and self.admin_token:
-            warnings.append("Token administrativo invalido ou sem permissao para providers.")
-            return [], warnings
+    def _is_integration_failure(self, result: ApiResponse) -> bool:
         if result.status_code is None:
-            warnings.append(result.error or "Falha de conexao com a FastAPI.")
-            return [], warnings
-        if result.error:
-            warnings.append(result.error)
+            return True
+        return result.status_code >= 500
 
-        if isinstance(result.data, list):
-            return [item for item in result.data if isinstance(item, dict)], warnings
-
-        warnings.append("Resposta inesperada ao consultar providers administrativos.")
-        return [], warnings
-
-    def _match_remote_provider_id(
+    def _format_provider_discovery_error(
         self,
         *,
         provider: Provider,
-        remote_providers: list[dict[str, Any]],
-    ) -> str | None:
-        local_slug = (provider.slug or "").strip().lower()
-        local_name_slug = slugify(provider.name)
+        result: ApiResponse,
+    ) -> str:
+        code, message = self._extract_error_meta(result)
+        if code == "provider_credential_not_found":
+            return "Provider remoto sem credencial ativa na FastAPI."
+        if code == "provider_inactive":
+            return "Provider remoto esta inativo na FastAPI."
+        if code == "provider_discovery_not_supported":
+            return (
+                "Descoberta dinamica ainda nao suportada para este provider. "
+                "No momento, o fluxo dinamico esta disponivel apenas para OpenAI."
+            )
+        if code == "provider_not_found":
+            return "Provider remoto nao encontrado na FastAPI para o vinculo informado."
+        if code in {"invalid_integration_token", "deactivated_integration_token"}:
+            return "Token de integracao FastAPI invalido ou desativado."
+        if code == "integration_token_owner_unavailable":
+            return "Token de integracao FastAPI sem usuario administrativo ativo."
+        if result.status_code in {401, 403}:
+            if self.admin_token:
+                return "Token administrativo FastAPI invalido ou sem permissao."
+            return "Token administrativo FastAPI nao configurado."
+        return message or f"Falha ao consultar modelos na FastAPI (HTTP {result.status_code})."
 
-        for row in remote_providers:
-            remote_slug = str(row.get("slug") or "").strip().lower()
-            remote_name_slug = slugify(str(row.get("name") or ""))
-            if remote_slug and remote_slug == local_slug:
-                return str(row.get("id") or "")
-            if remote_name_slug and remote_name_slug == local_name_slug:
-                return str(row.get("id") or "")
-        return None
-
-    def _normalize_model_item(self, row: dict[str, Any]) -> dict[str, Any] | None:
+    def _normalize_model_item(
+        self,
+        row: dict[str, Any],
+        *,
+        source: str,
+    ) -> dict[str, Any] | None:
         raw_name = row.get("model_name") or row.get("name") or row.get("label") or row.get("id")
         raw_slug = row.get("model_slug") or row.get("slug") or row.get("id") or raw_name
 
         name = str(raw_name or "").strip()
         slug = str(raw_slug or "").strip().lower()
-
         if not name and slug:
             name = slug
-        if not slug and name:
-            slug = slugify(name)
-        if not name or not slug:
+        if not slug:
             return None
 
-        label = str(row.get("label") or name).strip() or name
+        label = str(row.get("label") or name or slug).strip() or slug
         context_window = _to_int(
             row.get("context_window")
             or row.get("context_limit")
@@ -142,20 +162,27 @@ class ProviderModelsService:
             or row.get("output_cost")
         )
         description = str(row.get("description") or "").strip()
+
         raw_is_registered = row.get("is_registered")
-        is_registered = False
         if isinstance(raw_is_registered, bool):
             is_registered = raw_is_registered
         elif isinstance(raw_is_registered, str):
             is_registered = raw_is_registered.strip().lower() in {"1", "true", "yes", "sim"}
         elif isinstance(raw_is_registered, (int, float)):
             is_registered = bool(raw_is_registered)
+        else:
+            is_registered = source == "api_catalog"
+
+        fastapi_model_id = str(row.get("id") or "").strip() or None
+        provider_model_id = str(row.get("provider_model_id") or slug).strip() or slug
 
         return {
             "key": slug,
             "label": label,
-            "name": name,
+            "name": name or slug,
             "slug": slug,
+            "fastapi_model_id": fastapi_model_id,
+            "provider_model_id": provider_model_id,
             "context_window": context_window,
             "input_cost_per_1k": input_cost,
             "output_cost_per_1k": output_cost,
@@ -163,195 +190,314 @@ class ProviderModelsService:
             "is_registered": is_registered,
         }
 
-    def _fetch_models_from_fastapi(
-        self,
-        *,
-        remote_provider_id: str,
-    ) -> tuple[list[dict[str, Any]], str | None, list[str]]:
-        warnings: list[str] = []
-        candidates = [
-            (
-                f"/api/v1/admin/providers/{remote_provider_id}/available-models",
-                "api_provider",
-            ),
-            (
-                f"/api/v1/admin/providers/{remote_provider_id}/models",
-                "api_catalog",
-            ),
-        ]
+    def _parse_model_payload(self, result: ApiResponse, *, source: str) -> list[dict[str, Any]]:
+        raw_items: list[dict[str, Any]] = []
+        if isinstance(result.data, list):
+            raw_items = [item for item in result.data if isinstance(item, dict)]
+        elif isinstance(result.data, dict):
+            candidate_items = result.data.get("items")
+            if isinstance(candidate_items, list):
+                raw_items = [item for item in candidate_items if isinstance(item, dict)]
 
-        for path, source in candidates:
-            result = self.client.get_json(
-                path,
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in raw_items:
+            item = self._normalize_model_item(row, source=source)
+            if item is None:
+                continue
+            slug = str(item.get("slug") or "")
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            normalized.append(item)
+        return normalized
+
+    def sync_provider(self, *, provider: Provider) -> UUID:
+        payload = {
+            "name": str(provider.name or "").strip(),
+            "slug": str(provider.slug or "").strip().lower(),
+            "description": str(provider.description or "").strip() or None,
+            "is_active": bool(provider.is_active),
+        }
+
+        remote_id = provider.fastapi_provider_id
+        if remote_id is not None:
+            result = self.client.request_json(
+                method="PATCH",
+                path=f"/api/v1/admin/providers/{remote_id}",
+                json_body=payload,
                 headers=self._auth_headers(),
-                expect_dict=False,
+                expect_dict=True,
+            )
+            if result.is_success and isinstance(result.data, dict):
+                parsed_remote_id = _to_uuid(result.data.get("id"))
+                if parsed_remote_id is not None:
+                    return parsed_remote_id
+                return remote_id
+
+            if result.status_code != 404:
+                code, message = self._extract_error_meta(result)
+                raise ProviderModelsServiceError(
+                    message
+                    or f"Falha ao atualizar provider remoto na FastAPI (HTTP {result.status_code}, code={code})."
+                )
+
+        create_result = self.client.request_json(
+            method="POST",
+            path="/api/v1/admin/providers",
+            json_body=payload,
+            headers=self._auth_headers(),
+            expect_dict=True,
+        )
+        create_code, create_message = self._extract_error_meta(create_result)
+        if create_result.status_code == 409 and create_code == "provider_slug_conflict":
+            recovered_id = self._recover_provider_id_by_slug_conflict(slug=payload["slug"])
+            if recovered_id is not None:
+                update_result = self.client.request_json(
+                    method="PATCH",
+                    path=f"/api/v1/admin/providers/{recovered_id}",
+                    json_body=payload,
+                    headers=self._auth_headers(),
+                    expect_dict=True,
+                )
+                if update_result.is_success and isinstance(update_result.data, dict):
+                    parsed_remote_id = _to_uuid(update_result.data.get("id"))
+                    if parsed_remote_id is not None:
+                        return parsed_remote_id
+                    return recovered_id
+
+        if not create_result.is_success or not isinstance(create_result.data, dict):
+            raise ProviderModelsServiceError(
+                create_message
+                or (
+                    "Falha ao criar provider remoto na FastAPI "
+                    f"(HTTP {create_result.status_code}, code={create_code})."
+                )
             )
 
-            if result.status_code == 404:
-                if source == "api_catalog":
-                    warnings.append(
-                        "Endpoint administrativo de modelos nao disponivel nesta versao da API."
-                    )
-                continue
+        created_id = _to_uuid(create_result.data.get("id"))
+        if created_id is None:
+            raise ProviderModelsServiceError(
+                "FastAPI nao retornou ID valido ao sincronizar provider."
+            )
+        return created_id
 
-            if result.status_code in {401, 403} and not self.admin_token:
-                warnings.append(
-                    "Configure o token administrativo da FastAPI nas configuracoes."
+    def _recover_provider_id_by_slug_conflict(self, *, slug: str) -> UUID | None:
+        result = self.client.request_json(
+            method="GET",
+            path="/api/v1/admin/providers",
+            headers=self._auth_headers(),
+            expect_dict=False,
+        )
+        if not result.is_success or not isinstance(result.data, list):
+            return None
+
+        for item in result.data:
+            if not isinstance(item, dict):
+                continue
+            remote_slug = str(item.get("slug") or "").strip().lower()
+            if remote_slug != str(slug or "").strip().lower():
+                continue
+            remote_id = _to_uuid(item.get("id"))
+            if remote_id is not None:
+                logger.warning(
+                    "Provider slug conflict recovered by exact slug lookup.",
+                    extra={"provider_slug": slug, "recovered_remote_id": str(remote_id)},
                 )
-                return [], None, warnings
-            if result.status_code in {401, 403} and self.admin_token:
-                warnings.append("Token administrativo invalido ou sem permissao para modelos.")
-                return [], None, warnings
-            if result.status_code is None:
-                warnings.append(result.error or "Falha de conexao com a FastAPI.")
-                return [], None, warnings
-            if result.error:
-                warnings.append(result.error)
-                continue
+                return remote_id
+        return None
 
-            raw_items: list[dict[str, Any]] = []
-            if isinstance(result.data, list):
-                raw_items = [item for item in result.data if isinstance(item, dict)]
-            elif isinstance(result.data, dict):
-                candidate_items = result.data.get("items")
-                if isinstance(candidate_items, list):
-                    raw_items = [
-                        item for item in candidate_items if isinstance(item, dict)
-                    ]
+    def create_remote_model(
+        self,
+        *,
+        provider: Provider,
+        model_name: str,
+        model_slug: str,
+        context_window: int | None,
+        input_cost_per_1k: Decimal | None,
+        output_cost_per_1k: Decimal | None,
+        is_active: bool,
+    ) -> dict[str, Any]:
+        if provider.fastapi_provider_id is None:
+            raise ProviderModelsServiceError(
+                "Provider sem vinculo com FastAPI. Sincronize o provider antes de cadastrar modelos."
+            )
 
-            normalized: list[dict[str, Any]] = []
-            for row in raw_items:
-                item = self._normalize_model_item(row)
-                if item:
-                    normalized.append(item)
+        payload = {
+            "model_name": str(model_name or "").strip(),
+            "model_slug": str(model_slug or "").strip().lower(),
+            "context_limit": int(context_window or 8192),
+            "cost_input_per_1k_tokens": str(input_cost_per_1k or Decimal("0")),
+            "cost_output_per_1k_tokens": str(output_cost_per_1k or Decimal("0")),
+            "is_active": bool(is_active),
+        }
 
-            deduped: list[dict[str, Any]] = []
-            seen: set[str] = set()
-            for item in normalized:
-                if item["slug"] in seen:
-                    continue
-                seen.add(item["slug"])
-                if source == "api_catalog":
-                    item["is_registered"] = True
-                deduped.append(item)
+        result = self.client.request_json(
+            method="POST",
+            path=f"/api/v1/admin/providers/{provider.fastapi_provider_id}/models",
+            json_body=payload,
+            headers=self._auth_headers(),
+            expect_dict=True,
+        )
+        if not result.is_success or not isinstance(result.data, dict):
+            code, message = self._extract_error_meta(result)
+            raise ProviderModelsServiceError(
+                message
+                or f"Falha ao cadastrar modelo no catalogo da FastAPI (HTTP {result.status_code}, code={code})."
+        )
+        return result.data
 
-            return deduped, source, warnings
+    def update_remote_model(
+        self,
+        *,
+        fastapi_model_id: UUID | None,
+        context_window: int | None = None,
+        input_cost_per_1k: Decimal | None = None,
+        output_cost_per_1k: Decimal | None = None,
+        is_active: bool | None = None,
+    ) -> dict[str, Any]:
+        if fastapi_model_id is None:
+            raise ProviderModelsServiceError(
+                "Modelo local sem vinculo com a FastAPI. Refaça o cadastro pelo fluxo integrado."
+            )
 
-        return [], None, warnings
+        payload: dict[str, Any] = {
+            "context_limit": int(context_window or 8192),
+            "cost_input_per_1k_tokens": str(input_cost_per_1k or Decimal("0")),
+            "cost_output_per_1k_tokens": str(output_cost_per_1k or Decimal("0")),
+            "is_active": is_active,
+        }
+
+        result = self.client.request_json(
+            method="PATCH",
+            path=f"/api/v1/admin/models/{fastapi_model_id}",
+            json_body=payload,
+            headers=self._auth_headers(),
+            expect_dict=True,
+        )
+        if not result.is_success or not isinstance(result.data, dict):
+            code, message = self._extract_error_meta(result)
+            raise ProviderModelsServiceError(
+                message
+                or (
+                    "Falha ao atualizar modelo no catalogo da FastAPI "
+                    f"(HTTP {result.status_code}, code={code})."
+                )
+            )
+        return result.data
 
     def get_available_models(self, *, provider: Provider) -> dict[str, Any]:
         warnings: list[str] = []
-        fallback_reason = "api_error"
 
-        remote_providers, provider_warnings = self._fetch_admin_providers()
-        warnings.extend(provider_warnings)
-        remote_provider_id = self._match_remote_provider_id(
-            provider=provider,
-            remote_providers=remote_providers,
+        remote_provider_id = provider.fastapi_provider_id
+        if remote_provider_id is None:
+            warnings.append(
+                "Provider nao sincronizado com a FastAPI. Edite/salve o provider para criar o vinculo remoto."
+            )
+            return {
+                "items": [],
+                "source": "provider_not_synced",
+                "warnings": _dedupe(warnings),
+                "provider_remote_id": None,
+            }
+
+        available_result = self.client.request_json(
+            method="GET",
+            path=f"/api/v1/admin/providers/{remote_provider_id}/available-models",
+            headers=self._auth_headers(),
+            expect_dict=False,
         )
 
-        api_items: list[dict[str, Any]] = []
-        source = None
+        if available_result.is_success:
+            api_items = self._parse_model_payload(available_result, source="api_provider")
+            if api_items:
+                return {
+                    "items": api_items,
+                    "source": "api_provider",
+                    "warnings": _dedupe(warnings),
+                    "provider_remote_id": str(remote_provider_id),
+                }
+            warnings.append("FastAPI nao retornou modelos disponiveis para este provider.")
+            return {
+                "items": [],
+                "source": "api_provider",
+                "warnings": _dedupe(warnings),
+                "provider_remote_id": str(remote_provider_id),
+            }
 
-        if remote_provider_id:
-            api_items, source, model_warnings = self._fetch_models_from_fastapi(
-                remote_provider_id=remote_provider_id
+        if available_result.status_code == 404:
+            catalog_result = self.client.request_json(
+                method="GET",
+                path=f"/api/v1/admin/providers/{remote_provider_id}/models",
+                headers=self._auth_headers(),
+                expect_dict=False,
             )
-            warnings.extend(model_warnings)
-            if not api_items:
-                if model_warnings:
-                    fallback_reason = "api_error"
-                else:
-                    fallback_reason = "api_no_data"
-        else:
-            warnings.append(
-                "Provider local nao encontrado no catalogo administrativo da FastAPI."
-            )
-            fallback_reason = "provider_not_found"
+            if catalog_result.is_success:
+                catalog_items = self._parse_model_payload(catalog_result, source="api_catalog")
+                return {
+                    "items": catalog_items,
+                    "source": "api_catalog",
+                    "warnings": _dedupe(warnings),
+                    "provider_remote_id": str(remote_provider_id),
+                }
 
-        if api_items:
-            if source == "api_provider":
-                source_label = "api_provider"
-                logger.info(
-                    "Modelos carregados via descoberta do provider.",
-                    extra={
-                        "provider_slug": provider.slug,
-                        "provider_id": provider.id,
-                        "remote_provider_id": remote_provider_id,
-                        "source": source_label,
-                        "items_count": len(api_items),
-                    },
-                )
-            else:
-                source_label = "api_catalog"
+            if self._is_integration_failure(catalog_result):
                 warnings.append(
-                    "A API nao retornou descoberta direta do provider nesta consulta."
+                    self._format_provider_discovery_error(provider=provider, result=catalog_result)
                 )
-                logger.info(
-                    "Modelos carregados via catalogo administrativo da FastAPI.",
-                    extra={
-                        "provider_slug": provider.slug,
-                        "provider_id": provider.id,
-                        "remote_provider_id": remote_provider_id,
-                        "source": source_label,
-                        "items_count": len(api_items),
-                    },
-                )
-            return {
-                "items": api_items,
-                "source": source_label,
-                "warnings": _dedupe(warnings),
-                "provider_remote_id": remote_provider_id,
-            }
-
-        fallback_items = self._fallback_items(provider)
-        if fallback_items:
-            warnings.append("Exibindo catalogo local como fallback temporario.")
-            if fallback_reason == "api_no_data":
-                logger.info(
-                    "Fallback local ativado por ausencia de dados da API.",
-                    extra={
-                        "provider_slug": provider.slug,
-                        "provider_id": provider.id,
-                        "remote_provider_id": remote_provider_id,
+                fallback_items = self._fallback_items(provider)
+                if fallback_items:
+                    warnings.append(
+                        "Fallback local ativado por falha real de integracao com FastAPI/provider."
+                    )
+                    return {
+                        "items": fallback_items,
                         "source": "fallback_local",
-                        "fallback_reason": fallback_reason,
-                        "items_count": len(fallback_items),
-                    },
-                )
-            else:
-                logger.warning(
-                    "Fallback local ativado por erro de integracao administrativa.",
-                    extra={
-                        "provider_slug": provider.slug,
-                        "provider_id": provider.id,
-                        "remote_provider_id": remote_provider_id,
-                        "source": "fallback_local",
-                        "fallback_reason": fallback_reason,
-                        "items_count": len(fallback_items),
-                    },
-                )
-            return {
-                "items": fallback_items,
-                "source": "fallback_local",
-                "warnings": _dedupe(warnings),
-                "provider_remote_id": remote_provider_id,
-            }
+                        "warnings": _dedupe(warnings),
+                        "provider_remote_id": str(remote_provider_id),
+                    }
 
-        warnings.append("Nenhum modelo disponivel foi retornado para este provider.")
-        logger.warning(
-            "Nenhum modelo disponivel na API e no fallback local.",
-            extra={
-                "provider_slug": provider.slug,
-                "provider_id": provider.id,
-                "remote_provider_id": remote_provider_id,
+            warnings.append(
+                self._format_provider_discovery_error(provider=provider, result=catalog_result)
+            )
+            return {
+                "items": [],
                 "source": "unavailable",
-                "fallback_reason": fallback_reason,
-            },
+                "warnings": _dedupe(warnings),
+                "provider_remote_id": str(remote_provider_id),
+            }
+
+        if self._is_integration_failure(available_result):
+            warnings.append(
+                self._format_provider_discovery_error(provider=provider, result=available_result)
+            )
+            fallback_items = self._fallback_items(provider)
+            if fallback_items:
+                warnings.append(
+                    "Fallback local ativado por falha real de integracao com FastAPI/provider."
+                )
+                logger.warning(
+                    "Fallback local ativado por falha de integracao.",
+                    extra={
+                        "provider_id": provider.id,
+                        "provider_slug": provider.slug,
+                        "remote_provider_id": str(remote_provider_id),
+                        "status_code": available_result.status_code,
+                    },
+                )
+                return {
+                    "items": fallback_items,
+                    "source": "fallback_local",
+                    "warnings": _dedupe(warnings),
+                    "provider_remote_id": str(remote_provider_id),
+                }
+
+        warnings.append(
+            self._format_provider_discovery_error(provider=provider, result=available_result)
         )
         return {
             "items": [],
             "source": "unavailable",
             "warnings": _dedupe(warnings),
-            "provider_remote_id": remote_provider_id,
+            "provider_remote_id": str(remote_provider_id),
         }

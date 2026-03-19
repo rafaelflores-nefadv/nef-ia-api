@@ -1,12 +1,18 @@
+from uuid import UUID
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 from django.views.generic import CreateView, ListView, UpdateView
 
-from core.services.provider_models_service import ProviderModelsService
+from core.services.provider_models_service import (
+    ProviderModelsService,
+    ProviderModelsServiceError,
+)
 from providers.models import Provider
 
 from .forms import ProviderModelCreateForm, ProviderModelUpdateForm
@@ -86,14 +92,47 @@ class ProviderModelCreateView(LoginRequiredMixin, CreateView):
                 "active_menu": "modelos",
                 "submit_label": "Salvar modelo",
                 "is_create_mode": True,
+                "available_models_endpoint": reverse_lazy("models_catalog:available_models"),
             }
         )
         return context
 
     def form_valid(self, form):
-        response = super().form_valid(form)
+        provider = form.cleaned_data["provider"]
+        known_model = form.selected_known_model or {}
+        model_name = str(known_model.get("name") or "").strip()
+        model_slug = str(known_model.get("slug") or "").strip().lower()
+        if not model_name or not model_slug:
+            form.add_error("known_model", "Modelo selecionado invalido para cadastro remoto.")
+            return self.form_invalid(form)
+
+        try:
+            remote_model = ProviderModelsService().create_remote_model(
+                provider=provider,
+                model_name=model_name,
+                model_slug=model_slug,
+                context_window=form.cleaned_data.get("context_window"),
+                input_cost_per_1k=form.cleaned_data.get("input_cost_per_1k"),
+                output_cost_per_1k=form.cleaned_data.get("output_cost_per_1k"),
+                is_active=bool(form.cleaned_data.get("is_active", True)),
+            )
+        except ProviderModelsServiceError as exc:
+            form.add_error(None, str(exc))
+            return self.form_invalid(form)
+
+        instance = form.save(commit=False)
+        instance.name = str(remote_model.get("model_name") or model_name).strip()
+        instance.slug = str(remote_model.get("model_slug") or model_slug).strip().lower()
+        remote_model_id_raw = str(remote_model.get("id") or "").strip()
+        if remote_model_id_raw:
+            try:
+                instance.fastapi_model_id = UUID(remote_model_id_raw)
+            except ValueError:
+                instance.fastapi_model_id = None
+        instance.save()
+        self.object = instance
         messages.success(self.request, "Modelo criado com sucesso.")
-        return response
+        return redirect(self.get_success_url())
 
 
 class ProviderModelUpdateView(LoginRequiredMixin, UpdateView):
@@ -125,6 +164,18 @@ class ProviderModelUpdateView(LoginRequiredMixin, UpdateView):
         return context
 
     def form_valid(self, form):
+        try:
+            ProviderModelsService().update_remote_model(
+                fastapi_model_id=self.object.fastapi_model_id,
+                context_window=form.cleaned_data.get("context_window"),
+                input_cost_per_1k=form.cleaned_data.get("input_cost_per_1k"),
+                output_cost_per_1k=form.cleaned_data.get("output_cost_per_1k"),
+                is_active=bool(form.cleaned_data.get("is_active", True)),
+            )
+        except ProviderModelsServiceError as exc:
+            form.add_error(None, str(exc))
+            return self.form_invalid(form)
+
         response = super().form_valid(form)
         messages.success(self.request, "Modelo atualizado com sucesso.")
         return response
@@ -134,7 +185,20 @@ class ProviderModelUpdateView(LoginRequiredMixin, UpdateView):
 @require_POST
 def provider_model_toggle_status(request, pk: int):
     provider_model = get_object_or_404(ProviderModel, pk=pk)
-    provider_model.is_active = not provider_model.is_active
+    new_status = not bool(provider_model.is_active)
+    try:
+        ProviderModelsService().update_remote_model(
+            fastapi_model_id=provider_model.fastapi_model_id,
+            context_window=provider_model.context_window,
+            input_cost_per_1k=provider_model.input_cost_per_1k,
+            output_cost_per_1k=provider_model.output_cost_per_1k,
+            is_active=new_status,
+        )
+    except ProviderModelsServiceError as exc:
+        messages.error(request, f"Nao foi possivel sincronizar status do modelo na FastAPI: {exc}")
+        return redirect("models_catalog:list")
+
+    provider_model.is_active = new_status
     provider_model.save(update_fields=["is_active", "updated_at"])
 
     if provider_model.is_active:
@@ -143,3 +207,34 @@ def provider_model_toggle_status(request, pk: int):
         messages.success(request, "Modelo desativado com sucesso.")
 
     return redirect("models_catalog:list")
+
+
+@login_required
+@require_GET
+def provider_available_models(request):
+    provider_value = str(request.GET.get("provider") or "").strip()
+    if not provider_value.isdigit():
+        return JsonResponse(
+            {
+                "items": [],
+                "source": "unavailable",
+                "warnings": ["Provider informado e invalido."],
+                "provider_remote_id": None,
+            },
+            status=400,
+        )
+
+    provider = Provider.objects.filter(pk=int(provider_value)).first()
+    if provider is None:
+        return JsonResponse(
+            {
+                "items": [],
+                "source": "unavailable",
+                "warnings": ["Provider nao encontrado."],
+                "provider_remote_id": None,
+            },
+            status=404,
+        )
+
+    payload = ProviderModelsService().get_available_models(provider=provider)
+    return JsonResponse(payload, status=200)

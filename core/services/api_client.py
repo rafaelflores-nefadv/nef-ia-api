@@ -135,6 +135,24 @@ class FastAPIClient:
         headers: dict[str, str] | None = None,
         expect_dict: bool = True,
     ) -> ApiResponse:
+        return self.request_json(
+            method="GET",
+            path=path,
+            params=params,
+            headers=headers,
+            expect_dict=expect_dict,
+        )
+
+    def request_json(
+        self,
+        *,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        expect_dict: bool = True,
+    ) -> ApiResponse:
         if not self.integration_active:
             return ApiResponse(
                 status_code=None,
@@ -147,9 +165,16 @@ class FastAPIClient:
         if resolved_headers is None and path.startswith("/api/v1/admin"):
             resolved_headers = self.get_admin_headers()
 
+        normalized_method = str(method or "GET").upper()
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(url, params=params, headers=resolved_headers)
+                response = client.request(
+                    normalized_method,
+                    url,
+                    params=params,
+                    json=json_body,
+                    headers=resolved_headers,
+                )
         except httpx.TimeoutException:
             return ApiResponse(
                 status_code=None,
@@ -162,6 +187,9 @@ class FastAPIClient:
                 data=None,
                 error="Falha de conexao com a FastAPI.",
             )
+
+        if response.status_code == 204:
+            return ApiResponse(status_code=response.status_code, data={}, error=None)
 
         try:
             decoded = response.json()
