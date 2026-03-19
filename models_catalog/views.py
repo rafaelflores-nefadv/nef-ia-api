@@ -216,6 +216,18 @@ def provider_model_toggle_status(request, pk: int):
 def provider_model_delete(request, pk: int):
     provider_model = get_object_or_404(ProviderModel, pk=pk)
     model_name = str(provider_model.name or "").strip() or "modelo"
+    remote_model_id = provider_model.fastapi_model_id
+
+    if remote_model_id is not None:
+        try:
+            ProviderModelsService().delete_remote_model(fastapi_model_id=remote_model_id)
+        except ProviderModelsServiceError as exc:
+            messages.error(
+                request,
+                "Nao foi possivel excluir o modelo no catalogo remoto da FastAPI. "
+                f"A exclusao local foi cancelada para manter consistencia: {exc}",
+            )
+            return redirect("models_catalog:list")
 
     try:
         provider_model.delete()

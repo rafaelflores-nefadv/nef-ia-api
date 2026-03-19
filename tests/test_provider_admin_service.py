@@ -62,6 +62,7 @@ class FakeProviderRepository:
 class FakeProviderModelRepository:
     def __init__(self) -> None:
         self.items: dict[UUID, DjangoAiProviderModel] = {}
+        self.usage_model_ids: set[UUID] = set()
 
     def add(self, model: DjangoAiProviderModel) -> DjangoAiProviderModel:
         if model.id is None:
@@ -89,6 +90,15 @@ class FakeProviderModelRepository:
             if item.model_slug == model_slug:
                 return item
         return None
+
+    def has_usage(self, model_id: UUID) -> bool:
+        return model_id in self.usage_model_ids
+
+    def delete(self, model_id: UUID) -> bool:
+        if model_id in self.items:
+            del self.items[model_id]
+            return True
+        return False
 
 
 class FakeProviderCredentialRepository:
@@ -201,6 +211,68 @@ def test_create_model_for_provider() -> None:
     )
     assert model.provider_id == provider.id
     assert model.model_slug == "claude-sonnet"
+
+
+def test_delete_model_removes_entry() -> None:
+    service = _build_service()
+    provider = service.create_provider(
+        name="OpenAI",
+        slug="openai",
+        description=None,
+        is_active=True,
+        actor_user_id=uuid4(),
+        ip_address=None,
+    )
+    model = service.create_model(
+        provider_id=provider.id,
+        model_name="GPT 4.1",
+        model_slug="gpt-4.1",
+        context_limit=128000,
+        cost_input_per_1k_tokens=Decimal("0.01"),
+        cost_output_per_1k_tokens=Decimal("0.03"),
+        is_active=True,
+        actor_user_id=uuid4(),
+        ip_address=None,
+    )
+
+    service.delete_model(
+        model_id=model.id,
+        actor_user_id=uuid4(),
+        ip_address=None,
+    )
+    assert service.models.get_by_id(model.id) is None
+
+
+def test_delete_model_fails_when_usage_exists() -> None:
+    service = _build_service()
+    provider = service.create_provider(
+        name="OpenAI",
+        slug="openai",
+        description=None,
+        is_active=True,
+        actor_user_id=uuid4(),
+        ip_address=None,
+    )
+    model = service.create_model(
+        provider_id=provider.id,
+        model_name="GPT 4.1",
+        model_slug="gpt-4.1",
+        context_limit=128000,
+        cost_input_per_1k_tokens=Decimal("0.01"),
+        cost_output_per_1k_tokens=Decimal("0.03"),
+        is_active=True,
+        actor_user_id=uuid4(),
+        ip_address=None,
+    )
+    service.models.usage_model_ids.add(model.id)  # type: ignore[attr-defined]
+
+    with pytest.raises(AppException) as exc:
+        service.delete_model(
+            model_id=model.id,
+            actor_user_id=uuid4(),
+            ip_address=None,
+        )
+    assert exc.value.payload.code == "provider_model_in_use"
 
 
 def test_activate_model_fails_when_provider_inactive() -> None:

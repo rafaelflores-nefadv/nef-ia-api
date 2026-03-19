@@ -9,7 +9,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
 from core.services.api_client import ApiResponse
-from core.services.provider_models_service import ProviderModelsService
+from core.services.provider_models_service import ProviderModelsService, ProviderModelsServiceError
 from models_catalog.catalog import KnownModel
 
 
@@ -31,6 +31,21 @@ class FakeFastAPIClient:
         if path.endswith("/models") and self.catalog_response is not None:
             return self.catalog_response
         raise AssertionError(f"Unexpected request: {method} {path}")
+
+
+class FakeDeleteFastAPIClient:
+    def __init__(self, response: ApiResponse) -> None:
+        self.response = response
+        self.calls: list[tuple[str, str]] = []
+
+    def get_admin_headers(self):  # type: ignore[no-untyped-def]
+        return {"Authorization": "Bearer test-token"}
+
+    def request_json(self, **kwargs):  # type: ignore[no-untyped-def]
+        method = str(kwargs.get("method") or "").upper()
+        path = str(kwargs.get("path") or "")
+        self.calls.append((method, path))
+        return self.response
 
 
 def _provider(slug: str = "openai"):  # type: ignore[no-untyped-def]
@@ -127,3 +142,54 @@ def test_available_models_preserves_api_metadata_when_already_present(monkeypatc
     assert item["input_cost_per_1k"] == Decimal("0.123456")
     assert item["output_cost_per_1k"] == Decimal("0.654321")
     assert item["description"] == "Descricao vinda da FastAPI."
+
+
+def test_delete_remote_model_accepts_success() -> None:
+    service = ProviderModelsService()
+    model_id = uuid4()
+    client = FakeDeleteFastAPIClient(ApiResponse(status_code=204, data={}))
+    service.client = client  # type: ignore[assignment]
+    service.admin_token = "test-token"
+
+    service.delete_remote_model(fastapi_model_id=model_id)
+
+    assert client.calls == [("DELETE", f"/api/v1/admin/models/{model_id}")]
+
+
+def test_delete_remote_model_ignores_remote_not_found() -> None:
+    service = ProviderModelsService()
+    model_id = uuid4()
+    client = FakeDeleteFastAPIClient(
+        ApiResponse(
+            status_code=404,
+            data={"error": {"code": "provider_model_not_found", "message": "not found"}},
+            error="not found",
+        )
+    )
+    service.client = client  # type: ignore[assignment]
+    service.admin_token = "test-token"
+
+    service.delete_remote_model(fastapi_model_id=model_id)
+
+    assert client.calls == [("DELETE", f"/api/v1/admin/models/{model_id}")]
+
+
+def test_delete_remote_model_raises_for_other_errors() -> None:
+    service = ProviderModelsService()
+    model_id = uuid4()
+    client = FakeDeleteFastAPIClient(
+        ApiResponse(
+            status_code=422,
+            data={"error": {"code": "provider_model_in_use", "message": "in use"}},
+            error="in use",
+        )
+    )
+    service.client = client  # type: ignore[assignment]
+    service.admin_token = "test-token"
+
+    try:
+        service.delete_remote_model(fastapi_model_id=model_id)
+    except ProviderModelsServiceError as exc:
+        assert "in use" in str(exc).lower()
+    else:
+        raise AssertionError("Expected ProviderModelsServiceError")

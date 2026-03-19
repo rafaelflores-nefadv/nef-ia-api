@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from app.core.exceptions import AppException
@@ -376,6 +377,55 @@ class ProviderAdminService:
         self.session.commit()
         self._refresh(model)
         return model
+
+    def delete_model(
+        self,
+        *,
+        model_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+        ip_address: str | None,
+    ) -> None:
+        model = self._get_model_or_404(model_id)
+        if self.models.has_usage(model.id):
+            raise AppException(
+                "Cannot delete model while it has usage records.",
+                status_code=422,
+                code="provider_model_in_use",
+                details={"model_id": str(model.id)},
+            )
+
+        before_state = {
+            "provider_id": str(model.provider_id),
+            "model_slug": model.model_slug,
+            "model_name": model.model_name,
+            "is_active": model.is_active,
+        }
+        self._register_audit(
+            action_type="model_deleted",
+            entity_type="django_ai_provider_models",
+            entity_id=str(model.id),
+            actor_user_id=actor_user_id,
+            ip_address=ip_address,
+            changes_json=before_state,
+        )
+        try:
+            deleted = self.models.delete(model.id)
+            if not deleted:
+                raise AppException(
+                    "Provider model not found.",
+                    status_code=404,
+                    code="provider_model_not_found",
+                    details={"model_id": str(model.id)},
+                )
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            raise AppException(
+                "Cannot delete model while it has related records.",
+                status_code=422,
+                code="provider_model_in_use",
+                details={"model_id": str(model.id)},
+            ) from exc
 
     def list_credentials(self, *, provider_id: uuid.UUID) -> list[DjangoAiProviderCredential]:
         self._get_provider_or_404(provider_id)

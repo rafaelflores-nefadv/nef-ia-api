@@ -499,6 +499,36 @@ class ProviderModelsService:
             )
         return result.data
 
+    def delete_remote_model(
+        self,
+        *,
+        fastapi_model_id: UUID | None,
+    ) -> None:
+        if fastapi_model_id is None:
+            return
+
+        result = self.client.request_json(
+            method="DELETE",
+            path=f"/api/v1/admin/models/{fastapi_model_id}",
+            headers=self._auth_headers(),
+            expect_dict=True,
+        )
+        if result.is_success:
+            return
+
+        code, message = self._extract_error_meta(result)
+        if result.status_code == 404 and code == "provider_model_not_found":
+            # Modelo nao existe mais no catalogo remoto. Permitimos limpeza local.
+            return
+
+        raise ProviderModelsServiceError(
+            message
+            or (
+                "Falha ao excluir modelo no catalogo da FastAPI "
+                f"(HTTP {result.status_code}, code={code})."
+            )
+        )
+
     def get_available_models(self, *, provider: Provider) -> dict[str, Any]:
         warnings: list[str] = []
 

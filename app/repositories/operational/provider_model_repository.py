@@ -1,9 +1,9 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models.operational import DjangoAiProviderModel
+from app.models.operational import DjangoAiProviderModel, DjangoAiProviderUsage
 
 
 class ProviderModelRepository:
@@ -68,3 +68,16 @@ class ProviderModelRepository:
             .limit(1)
         )
         return self.session.execute(stmt).scalar_one_or_none()
+
+    def has_usage(self, model_id: uuid.UUID) -> bool:
+        stmt = (
+            select(DjangoAiProviderUsage.id)
+            .where(DjangoAiProviderUsage.model_id == model_id)
+            .limit(1)
+        )
+        return self.session.execute(stmt).scalar_one_or_none() is not None
+
+    def delete(self, model_id: uuid.UUID) -> bool:
+        stmt = delete(DjangoAiProviderModel).where(DjangoAiProviderModel.id == model_id)
+        result = self.session.execute(stmt)
+        return bool(result.rowcount)

@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import get_current_admin_user
@@ -250,6 +250,21 @@ def deactivate_provider_model(
         ip_address=request.client.host if request.client else None,
     )
     return _model_to_response(model)
+
+
+@router.delete("/models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_provider_model(
+    model_id: UUID,
+    request: Request,
+    current_user: DjangoAiUser = Depends(get_current_admin_user),
+    session: Session = Depends(get_operational_session),
+) -> Response:
+    ProviderAdminService(session).delete_model(
+        model_id=model_id,
+        actor_user_id=current_user.id,
+        ip_address=request.client.host if request.client else None,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/providers/{provider_id}/credentials", response_model=list[ProviderCredentialResponse])
