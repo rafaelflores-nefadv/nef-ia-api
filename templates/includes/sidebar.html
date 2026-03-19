@@ -20,6 +20,10 @@
             <i class="bi bi-boxes"></i>
             <span>Modelos</span>
         </a>
+        <a class="sidebar-link {% if active_menu == 'prompts' %}active{% endif %}" href="{% url 'prompts:list' %}">
+            <i class="bi bi-chat-square-text"></i>
+            <span>Prompts</span>
+        </a>
         <a class="sidebar-link {% if active_menu == 'credenciais' %}active{% endif %}" href="{% url 'credentials:list' %}">
             <i class="bi bi-key"></i>
             <span>Credenciais</span>

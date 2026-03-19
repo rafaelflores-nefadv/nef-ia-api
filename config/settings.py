@@ -18,6 +18,7 @@ INSTALLED_APPS = [
     "accounts",
     "providers",
     "models_catalog",
+    "prompts",
     "credentials",
     "operations",
     "executions",

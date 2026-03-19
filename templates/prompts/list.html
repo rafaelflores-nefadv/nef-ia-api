@@ -1,0 +1,167 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "prompts:create" as prompt_create_url %}
+{% url "prompts:list" as prompts_list_url %}
+{% include "includes/page_header.html" with header_title="Prompts" header_subtitle=page_subtitle breadcrumb_current="Prompts" header_action_url=prompt_create_url header_action_label="Novo prompt" header_action_icon="bi bi-plus-lg" header_side_text=list_counter_label %}
+
+<section class="panel-card mb-3">
+    <form method="get" class="row g-2">
+        <div class="col-12 col-md-4">
+            <label class="form-label small fw-semibold mb-1">Status</label>
+            <select name="status" class="form-select">
+                {% for value, label in status_options %}
+                    <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-4">
+            <label class="form-label small fw-semibold mb-1">Modelo de IA</label>
+            <select name="modelo" class="form-select">
+                <option value="">Todos os modelos</option>
+                {% for model in model_options %}
+                    <option value="{{ model.id }}" {% if selected_model == model.id|stringformat:"s" %}selected{% endif %}>
+                        {{ model.provider.name }} - {{ model.name }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-4">
+            <label class="form-label small fw-semibold mb-1">Busca</label>
+            <input
+                type="text"
+                name="q"
+                class="form-control"
+                placeholder="Titulo ou conteudo"
+                value="{{ search_query }}"
+            >
+        </div>
+        <div class="col-12 d-flex gap-2">
+            <button type="submit" class="btn btn-dark">Filtrar</button>
+            <a href="{{ prompts_list_url }}" class="btn btn-outline-secondary">Limpar</a>
+        </div>
+    </form>
+</section>
+
+{% if prompts %}
+    <section class="panel-card p-0 overflow-hidden">
+        <div class="table-responsive">
+            <table class="table admin-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Titulo</th>
+                        <th>Modelo de IA</th>
+                        <th>Conteudo</th>
+                        <th>Status</th>
+                        <th>Atualizado em</th>
+                        <th class="text-end">Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for prompt in prompts %}
+                        <tr>
+                            <td class="fw-semibold">{{ prompt.title }}</td>
+                            <td>{{ prompt.ai_model.provider.name }} - {{ prompt.ai_model.name }}</td>
+                            <td class="text-muted">{{ prompt.content|truncatechars:120 }}</td>
+                            <td>
+                                {% if prompt.is_active %}
+                                    <span class="status-pill status-success">Ativo</span>
+                                {% else %}
+                                    <span class="status-pill status-neutral">Inativo</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ prompt.updated_at|date:"d/m/Y H:i" }}</td>
+                            <td class="text-end">
+                                <div class="table-actions">
+                                    <a href="{% url 'prompts:edit' prompt.id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
+                                    <form method="post" action="{% url 'prompts:toggle_status' prompt.id %}">
+                                        {% csrf_token %}
+                                        {% if prompt.is_active %}
+                                            <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
+                                        {% else %}
+                                            <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
+                                        {% endif %}
+                                    </form>
+                                    <button
+                                        type="button"
+                                        class="btn btn-sm btn-outline-danger"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#deletePromptModal"
+                                        data-delete-url="{% url 'prompts:delete' prompt.id %}"
+                                        data-prompt-title="{{ prompt.title|escape }}"
+                                    >
+                                        Excluir
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+{% else %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-chat-square-text" empty_title="Nenhum prompt cadastrado" empty_message="Cadastre prompts para centralizar instrucoes administrativas de IA." empty_action_url=prompt_create_url empty_action_label="Criar prompt" empty_action_icon="bi bi-plus-lg" %}
+{% endif %}
+
+{% if prompts %}
+    <div class="modal fade" id="deletePromptModal" tabindex="-1" aria-labelledby="deletePromptModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="deletePromptModalLabel">Excluir prompt</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2">Tem certeza que deseja excluir este prompt? Essa acao nao podera ser desfeita.</p>
+                    <small id="deletePromptName" class="text-secondary d-none"></small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <form id="deletePromptForm" method="post" action="">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-danger">Excluir prompt</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+    {{ block.super }}
+    {% if prompts %}
+        <script>
+            (function () {
+                const deleteModal = document.getElementById("deletePromptModal");
+                const deleteForm = document.getElementById("deletePromptForm");
+                const deletePromptName = document.getElementById("deletePromptName");
+                if (!deleteModal || !deleteForm) {
+                    return;
+                }
+
+                deleteModal.addEventListener("show.bs.modal", function (event) {
+                    const trigger = event.relatedTarget;
+                    if (!trigger) {
+                        return;
+                    }
+                    const action = String(trigger.getAttribute("data-delete-url") || "").trim();
+                    const promptTitle = String(trigger.getAttribute("data-prompt-title") || "").trim();
+
+                    deleteForm.setAttribute("action", action);
+                    if (!deletePromptName) {
+                        return;
+                    }
+                    if (!promptTitle) {
+                        deletePromptName.classList.add("d-none");
+                        deletePromptName.textContent = "";
+                        return;
+                    }
+                    deletePromptName.classList.remove("d-none");
+                    deletePromptName.textContent = "Prompt selecionado: " + promptTitle;
+                });
+            })();
+        </script>
+    {% endif %}
+{% endblock %}
