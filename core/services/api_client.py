@@ -75,7 +75,9 @@ class FastAPIClient:
                 if db_base_url:
                     resolved_base_url = db_base_url
             if admin_token is None:
-                resolved_admin_token = str(db_config.get("integration_token") or "").strip()
+                db_admin_token = str(db_config.get("integration_token") or "").strip()
+                if db_admin_token:
+                    resolved_admin_token = db_admin_token
             if integration_active is None:
                 resolved_integration_active = bool(db_config.get("is_active", True))
 
@@ -87,16 +89,34 @@ class FastAPIClient:
 
     def _load_db_integration_config(self) -> dict[str, Any] | None:
         try:
-            from core.models import FastAPIIntegrationConfig
+            from core.models import FastAPIIntegrationConfig, FastAPIIntegrationToken
 
-            config = FastAPIIntegrationConfig.objects.filter(pk=1).first()
+            config = FastAPIIntegrationConfig.objects.select_related(
+                "selected_integration_token"
+            ).filter(pk=1).first()
             if config is None:
-                config = FastAPIIntegrationConfig.objects.order_by("-updated_at").first()
+                config = FastAPIIntegrationConfig.objects.select_related(
+                    "selected_integration_token"
+                ).order_by("-updated_at").first()
             if config is None:
                 return None
+
+            selected_token = config.selected_integration_token
+            if selected_token and selected_token.config_id != config.id:
+                selected_token = None
+
+            if selected_token and not selected_token.is_active:
+                selected_token = None
+
+            if selected_token is None:
+                selected_token = FastAPIIntegrationToken.objects.filter(
+                    config_id=config.id,
+                    is_active=True,
+                ).order_by("-updated_at", "-id").first()
+
             return {
                 "base_url": config.base_url,
-                "integration_token": config.integration_token,
+                "integration_token": selected_token.integration_token if selected_token else "",
                 "is_active": config.is_active,
             }
         except (OperationalError, ProgrammingError, DatabaseError):

@@ -12,13 +12,24 @@
         {% if config.last_validated_at %}
             <small class="text-secondary">Ultima validacao: {{ config.last_validated_at|date:"d/m/Y H:i:s" }}</small>
         {% endif %}
+        {% if selected_token %}
+            <small class="text-secondary">Token selecionado: <strong>{{ selected_token.name }}</strong></small>
+        {% endif %}
     </div>
     <p class="admin-note mb-0">{{ connection_summary.message }}</p>
 </section>
 
-<section class="panel-card">
+{% if created_token_value %}
+    <section class="panel-card mb-3 border border-success-subtle">
+        <p class="mb-2"><strong>Novo token gerado (exibido apenas uma vez):</strong></p>
+        <code class="d-block p-2 rounded bg-light">{{ created_token_value }}</code>
+        <p class="admin-note mt-2 mb-0">Armazene este valor em local seguro. Depois desta resposta, ele nao volta a ser exibido na tela.</p>
+    </section>
+{% endif %}
+
+<section class="panel-card mb-3">
     <p class="admin-note mb-3">
-        Configure os dados de integracao administrativa com a FastAPI. O token sera usado automaticamente nas chamadas de endpoints administrativos.
+        Configure os dados gerais de integracao com a FastAPI. O cliente administrativo usa o token ativo selecionado.
     </p>
 
     {% if form.non_field_errors %}
@@ -58,31 +69,6 @@
             {% endfor %}
         </div>
 
-        <div class="mb-3">
-            <label for="{{ form.token_name.id_for_label }}" class="form-label fw-semibold">{{ form.token_name.label }}</label>
-            {{ form.token_name }}
-            <div class="form-text">Campo opcional para identificar o token em uso.</div>
-            {% for error in form.token_name.errors %}
-                <div class="invalid-feedback d-block">{{ error }}</div>
-            {% endfor %}
-        </div>
-
-        <div class="mb-3">
-            <label for="{{ form.integration_token.id_for_label }}" class="form-label fw-semibold">{{ form.integration_token.label }}</label>
-            {{ form.integration_token }}
-            <div class="form-text">
-                Deixe em branco para manter o token atual.
-                {% if config.integration_token %}
-                    Token ja configurado.
-                {% else %}
-                    Nenhum token cadastrado.
-                {% endif %}
-            </div>
-            {% for error in form.integration_token.errors %}
-                <div class="invalid-feedback d-block">{{ error }}</div>
-            {% endfor %}
-        </div>
-
         <div class="form-check form-switch mb-4">
             {{ form.is_active }}
             <label for="{{ form.is_active.id_for_label }}" class="form-check-label">{{ form.is_active.label }}</label>
@@ -96,5 +82,103 @@
             <button type="submit" name="action" value="test" class="btn btn-outline-primary">Testar conexao</button>
         </div>
     </form>
+</section>
+
+<section class="panel-card mb-3">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div>
+            <h3 class="panel-title mb-1">Tokens de integracao</h3>
+            <p class="admin-note mb-0">Gerencie multiplos tokens por aplicacao (Django, sistema geral, jobs, etc).</p>
+        </div>
+    </div>
+
+    <form method="post" class="row g-2 align-items-end mb-3">
+        {% csrf_token %}
+        <div class="col-12 col-md-8">
+            <label for="{{ token_form.name.id_for_label }}" class="form-label fw-semibold">{{ token_form.name.label }}</label>
+            {{ token_form.name }}
+            {% for error in token_form.name.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+        </div>
+        <div class="col-12 col-md-4 d-grid">
+            <button type="submit" name="action" value="create_token" class="btn btn-outline-dark">Criar novo token</button>
+        </div>
+    </form>
+
+    {% if tokens %}
+        <div class="table-responsive">
+            <table class="table admin-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Token</th>
+                        <th>Status</th>
+                        <th>Selecionado</th>
+                        <th>Atualizado em</th>
+                        <th class="text-end">Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for token in tokens %}
+                        <tr>
+                            <td class="fw-semibold">{{ token.name }}</td>
+                            <td><code>{{ token.masked_token }}</code></td>
+                            <td>
+                                {% if token.is_active %}
+                                    <span class="status-pill status-success">Ativo</span>
+                                {% else %}
+                                    <span class="status-pill status-neutral">Inativo</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if selected_token and selected_token.id == token.id %}
+                                    <span class="status-pill status-success">Em uso</span>
+                                {% else %}
+                                    <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ token.updated_at|date:"d/m/Y H:i" }}</td>
+                            <td class="text-end">
+                                <div class="table-actions">
+                                    {% if token.is_active %}
+                                        {% if not selected_token or selected_token.id != token.id %}
+                                            <form method="post">
+                                                {% csrf_token %}
+                                                <input type="hidden" name="token_id" value="{{ token.id }}">
+                                                <button type="submit" name="action" value="select_token" class="btn btn-sm btn-outline-secondary">Selecionar</button>
+                                            </form>
+                                        {% endif %}
+                                    {% endif %}
+
+                                    {% if token.is_active %}
+                                        <form method="post">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="token_id" value="{{ token.id }}">
+                                            <button type="submit" name="action" value="revoke_token" class="btn btn-sm btn-outline-danger">Revogar token</button>
+                                        </form>
+                                    {% else %}
+                                        <form method="post">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="token_id" value="{{ token.id }}">
+                                            <button type="submit" name="action" value="activate_token" class="btn btn-sm btn-outline-success">Ativar</button>
+                                        </form>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="admin-empty-state border rounded-3">
+            <span class="empty-state-icon"><i class="bi bi-key"></i></span>
+            <h3 class="empty-state-title">Nenhum token cadastrado</h3>
+            <p class="empty-state-message mb-0">
+                Crie o primeiro token para habilitar autenticacao administrativa dedicada por aplicacao.
+            </p>
+        </div>
+    {% endif %}
 </section>
 {% endblock %}
