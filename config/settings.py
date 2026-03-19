@@ -57,8 +57,12 @@ ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "nef-ia-api",
+        "USER": "postgres",
+        "PASSWORD": "Nef@2026!",
+        "HOST": "127.0.0.1",  # ou IP/host do postgres
+        "PORT": "5432",
     }
 }
 
