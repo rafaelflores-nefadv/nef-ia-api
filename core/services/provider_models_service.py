@@ -237,6 +237,94 @@ class ProviderModelsService:
             normalized.append(item)
         return normalized
 
+    @staticmethod
+    def _normalize_lookup_key(value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return ""
+        if raw.startswith("models/"):
+            raw = raw[len("models/") :]
+        raw = (
+            raw.replace("_", "-")
+            .replace(".", "-")
+            .replace(" ", "-")
+            .replace("/", "-")
+        )
+        parts = [part for part in raw.split("-") if part]
+        return "-".join(parts)
+
+    @staticmethod
+    def _is_missing_value(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return value.strip() == ""
+        return False
+
+    def _with_known_model_metadata_fallback(
+        self,
+        *,
+        provider: Provider,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        known_models = list(get_known_models(provider.slug))
+        if not known_models:
+            return items
+
+        known_index: dict[str, Any] = {}
+        for known in known_models:
+            for candidate in (known.slug, known.key, known.name, known.label):
+                normalized_candidate = self._normalize_lookup_key(candidate)
+                if normalized_candidate:
+                    known_index[normalized_candidate] = known
+
+        enriched: list[dict[str, Any]] = []
+        for item in items:
+            lookup_candidates = (
+                item.get("slug"),
+                item.get("key"),
+                item.get("provider_model_id"),
+                item.get("name"),
+                item.get("label"),
+            )
+            known = None
+            for candidate in lookup_candidates:
+                normalized_candidate = self._normalize_lookup_key(candidate)
+                if not normalized_candidate:
+                    continue
+                known = known_index.get(normalized_candidate)
+                if known is not None:
+                    break
+
+            if known is None:
+                enriched.append(item)
+                continue
+
+            normalized_item = dict(item)
+            if (
+                self._is_missing_value(normalized_item.get("context_window"))
+                and known.context_window is not None
+            ):
+                normalized_item["context_window"] = known.context_window
+            if (
+                self._is_missing_value(normalized_item.get("input_cost_per_1k"))
+                and known.input_cost_per_1k is not None
+            ):
+                normalized_item["input_cost_per_1k"] = known.input_cost_per_1k
+            if (
+                self._is_missing_value(normalized_item.get("output_cost_per_1k"))
+                and known.output_cost_per_1k is not None
+            ):
+                normalized_item["output_cost_per_1k"] = known.output_cost_per_1k
+            if (
+                self._is_missing_value(normalized_item.get("description"))
+                and str(known.description or "").strip()
+            ):
+                normalized_item["description"] = known.description
+
+            enriched.append(normalized_item)
+        return enriched
+
     def sync_provider(self, *, provider: Provider) -> UUID:
         payload = {
             "name": str(provider.name or "").strip(),
@@ -435,6 +523,10 @@ class ProviderModelsService:
 
         if available_result.is_success:
             api_items = self._parse_model_payload(available_result, source="api_provider")
+            api_items = self._with_known_model_metadata_fallback(
+                provider=provider,
+                items=api_items,
+            )
             if api_items:
                 return {
                     "items": api_items,
@@ -459,6 +551,10 @@ class ProviderModelsService:
             )
             if catalog_result.is_success:
                 catalog_items = self._parse_model_payload(catalog_result, source="api_catalog")
+                catalog_items = self._with_known_model_metadata_fallback(
+                    provider=provider,
+                    items=catalog_items,
+                )
                 return {
                     "items": catalog_items,
                     "source": "api_catalog",
