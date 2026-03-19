@@ -41,3 +41,34 @@ class FastAPIIntegrationTokenCreateForm(forms.Form):
 
     def clean_name(self) -> str:
         return str(self.cleaned_data.get("name") or "").strip()
+
+
+class FastAPIIntegrationTokenRegisterForm(forms.Form):
+    name = forms.CharField(
+        label="Nome do token existente",
+        min_length=3,
+        max_length=120,
+        initial="django-bootstrap",
+        widget=forms.TextInput(
+            attrs={
+                "class": "form-control",
+                "placeholder": "Ex.: django-bootstrap",
+            }
+        ),
+    )
+    integration_token = forms.CharField(
+        label="Token bootstrap (plaintext)",
+        min_length=10,
+        widget=forms.TextInput(
+            attrs={
+                "class": "form-control",
+                "placeholder": "Ex.: ia_int_xxxxx",
+            }
+        ),
+    )
+
+    def clean_name(self) -> str:
+        return str(self.cleaned_data.get("name") or "").strip()
+
+    def clean_integration_token(self) -> str:
+        return str(self.cleaned_data.get("integration_token") or "").strip()

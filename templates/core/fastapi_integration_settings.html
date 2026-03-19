@@ -88,9 +88,30 @@
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div>
             <h3 class="panel-title mb-1">Tokens de integracao</h3>
-            <p class="admin-note mb-0">Gerencie multiplos tokens por aplicacao (Django, sistema geral, jobs, etc).</p>
+            <p class="admin-note mb-0">Cadastre o token bootstrap inicial e depois gere/revogue tokens pela interface.</p>
         </div>
     </div>
+
+    <form method="post" class="row g-2 align-items-end mb-4">
+        {% csrf_token %}
+        <div class="col-12 col-md-4">
+            <label for="{{ register_token_form.name.id_for_label }}" class="form-label fw-semibold">{{ register_token_form.name.label }}</label>
+            {{ register_token_form.name }}
+            {% for error in register_token_form.name.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+        </div>
+        <div class="col-12 col-md-5">
+            <label for="{{ register_token_form.integration_token.id_for_label }}" class="form-label fw-semibold">{{ register_token_form.integration_token.label }}</label>
+            {{ register_token_form.integration_token }}
+            {% for error in register_token_form.integration_token.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+        </div>
+        <div class="col-12 col-md-3 d-grid">
+            <button type="submit" name="action" value="register_token" class="btn btn-dark">Cadastrar token bootstrap</button>
+        </div>
+    </form>
 
     <form method="post" class="row g-2 align-items-end mb-3">
         {% csrf_token %}
@@ -102,7 +123,7 @@
             {% endfor %}
         </div>
         <div class="col-12 col-md-4 d-grid">
-            <button type="submit" name="action" value="create_token" class="btn btn-outline-dark">Criar novo token</button>
+            <button type="submit" name="action" value="create_token" class="btn btn-outline-dark">Criar novo token na FastAPI</button>
         </div>
     </form>
 
@@ -176,7 +197,7 @@
             <span class="empty-state-icon"><i class="bi bi-key"></i></span>
             <h3 class="empty-state-title">Nenhum token cadastrado</h3>
             <p class="empty-state-message mb-0">
-                Crie o primeiro token para habilitar autenticacao administrativa dedicada por aplicacao.
+                Cadastre o token bootstrap inicial para habilitar a gestao administrativa pela interface.
             </p>
         </div>
     {% endif %}

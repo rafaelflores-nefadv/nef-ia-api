@@ -31,6 +31,7 @@ class FastAPIIntegrationToken(models.Model):
         related_name="integration_tokens",
         verbose_name="Configuracao",
     )
+    external_token_id = models.UUIDField("ID externo na FastAPI", null=True, blank=True)
     name = models.CharField("Nome", max_length=120)
     integration_token = models.TextField("Token de integracao")
     is_active = models.BooleanField("Ativo", default=True)

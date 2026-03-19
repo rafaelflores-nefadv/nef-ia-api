@@ -4,7 +4,11 @@ from django.conf import settings
 from django.utils import timezone
 from django.views.generic import TemplateView
 
-from core.forms import FastAPIIntegrationConfigForm, FastAPIIntegrationTokenCreateForm
+from core.forms import (
+    FastAPIIntegrationConfigForm,
+    FastAPIIntegrationTokenCreateForm,
+    FastAPIIntegrationTokenRegisterForm,
+)
 from core.models import FastAPIIntegrationConfig, FastAPIIntegrationToken
 from core.services.health_service import get_operational_health
 from core.services.fastapi_integration_service import (
@@ -103,7 +107,7 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
                 "status_css_class": meta["css_class"],
                 "message": "Nenhum token ativo selecionado. "
                 + (
-                    "Token de ambiente FASTAPI_ADMIN_TOKEN sera usado como fallback."
+                    "Fallback legado FASTAPI_ADMIN_TOKEN sera usado temporariamente."
                     if has_env_fallback
                     else "Cadastre e selecione um token para chamadas administrativas."
                 ),
@@ -132,6 +136,7 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
         config = kwargs.get("config") or self._get_config()
         form = kwargs.get("form") or FastAPIIntegrationConfigForm(instance=config)
         token_form = kwargs.get("token_form") or FastAPIIntegrationTokenCreateForm()
+        register_token_form = kwargs.get("register_token_form") or FastAPIIntegrationTokenRegisterForm()
         tokens = kwargs.get("tokens") or FastAPIIntegrationService.list_tokens(config=config)
         selected_token = FastAPIIntegrationService.get_selected_token(
             config=config,
@@ -153,6 +158,7 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
                 "active_menu": "configuracoes",
                 "form": form,
                 "token_form": token_form,
+                "register_token_form": register_token_form,
                 "config": config,
                 "tokens": tokens,
                 "selected_token": selected_token,
@@ -171,6 +177,7 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
 
         form = FastAPIIntegrationConfigForm(instance=config)
         token_form = FastAPIIntegrationTokenCreateForm()
+        register_token_form = FastAPIIntegrationTokenRegisterForm()
 
         if action in {"save", "test"}:
             form = FastAPIIntegrationConfigForm(request.POST, instance=config)
@@ -221,6 +228,27 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
             else:
                 messages.error(request, "Informe um nome valido para criar o token.")
 
+        elif action == "register_token":
+            register_token_form = FastAPIIntegrationTokenRegisterForm(request.POST)
+            if register_token_form.is_valid():
+                token_name = register_token_form.cleaned_data["name"]
+                integration_token = register_token_form.cleaned_data["integration_token"]
+                try:
+                    token = FastAPIIntegrationService.register_existing_token(
+                        config=config,
+                        name=token_name,
+                        integration_token=integration_token,
+                    )
+                    register_token_form = FastAPIIntegrationTokenRegisterForm()
+                    messages.success(
+                        request,
+                        f"Token bootstrap '{token.name}' cadastrado e selecionado para uso.",
+                    )
+                except FastAPIIntegrationServiceError as exc:
+                    messages.error(request, str(exc))
+            else:
+                messages.error(request, "Informe nome e token bootstrap validos.")
+
         elif action in {"select_token", "activate_token", "deactivate_token", "revoke_token"}:
             token_id = self._extract_token_id(request.POST.get("token_id"))
             if token_id is None:
@@ -256,6 +284,7 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
         context = self.get_context_data(
             form=form,
             token_form=token_form,
+            register_token_form=register_token_form,
             config=config,
             tokens=tokens,
             test_result=test_result,

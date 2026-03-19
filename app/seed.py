@@ -6,13 +6,15 @@ from collections.abc import Iterable
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from app.core.security import generate_integration_token, hash_token
 from app.core.security import hash_password
 from app.db.session import SessionLocal
-from app.models.operational import DjangoAiRole, DjangoAiUser
+from app.models.operational import DjangoAiAuditLog, DjangoAiIntegrationToken, DjangoAiRole, DjangoAiUser
 
 DEFAULT_ADMIN_NAME = "Administrador"
 DEFAULT_ADMIN_EMAIL = "admin@nef.local"
 DEFAULT_ADMIN_PASSWORD = "123456"
+DEFAULT_BOOTSTRAP_INTEGRATION_TOKEN_NAME = "django-bootstrap"
 
 ROLE_DEFINITIONS: tuple[tuple[str, int], ...] = (
     ("admin", 100),
@@ -78,6 +80,11 @@ def _get_admin_user_by_name(session: Session) -> DjangoAiUser | None:
     return session.execute(stmt).scalar_one_or_none()
 
 
+def _get_integration_token_by_name(session: Session, *, token_name: str) -> DjangoAiIntegrationToken | None:
+    stmt = select(DjangoAiIntegrationToken).where(func.lower(DjangoAiIntegrationToken.name) == token_name.lower())
+    return session.execute(stmt).scalar_one_or_none()
+
+
 def seed_admin_user(
     session: Session,
     *,
@@ -129,17 +136,77 @@ def seed_admin_user(
     return user
 
 
-def run_seed(*, force: bool = False) -> None:
+def seed_bootstrap_integration_token(
+    session: Session,
+    *,
+    created_by_user_id,
+    token_name: str = DEFAULT_BOOTSTRAP_INTEGRATION_TOKEN_NAME,
+) -> str | None:
+    normalized_name = str(token_name or "").strip()[:120]
+    if not normalized_name:
+        normalized_name = DEFAULT_BOOTSTRAP_INTEGRATION_TOKEN_NAME
+
+    existing = _get_integration_token_by_name(session, token_name=normalized_name)
+    if existing is not None:
+        _log(
+            f"token bootstrap '{normalized_name}' ja existia; "
+            "o valor em texto plano nao sera exibido novamente."
+        )
+        return None
+
+    raw_token = generate_integration_token()
+    token = DjangoAiIntegrationToken(
+        name=normalized_name,
+        token_hash=hash_token(raw_token),
+        is_active=True,
+        last_used_at=None,
+        created_by_user_id=created_by_user_id,
+    )
+    session.add(token)
+    session.flush()
+
+    session.add(
+        DjangoAiAuditLog(
+            action_type="integration_token_bootstrap_created",
+            entity_type="django_ai_integration_tokens",
+            entity_id=str(token.id),
+            performed_by_user_id=created_by_user_id,
+            changes_json={"name": token.name, "is_active": token.is_active, "bootstrap": True},
+            ip_address=None,
+        )
+    )
+    session.flush()
+    _log(f"token bootstrap '{normalized_name}' criado.")
+    return raw_token
+
+
+def run_seed(
+    *,
+    force: bool = False,
+    with_bootstrap_token: bool = False,
+    bootstrap_token_name: str = DEFAULT_BOOTSTRAP_INTEGRATION_TOKEN_NAME,
+) -> None:
     _log("iniciando seed inicial do sistema...")
+    created_bootstrap_token: str | None = None
     with SessionLocal() as session:
         try:
             with session.begin():
                 roles = seed_roles(session, force=force)
-                seed_admin_user(session, roles=roles, force=force)
+                admin_user = seed_admin_user(session, roles=roles, force=force)
+                if with_bootstrap_token:
+                    created_bootstrap_token = seed_bootstrap_integration_token(
+                        session,
+                        created_by_user_id=admin_user.id,
+                        token_name=bootstrap_token_name,
+                    )
         except Exception:
             session.rollback()
             _log("erro durante seed; transacao revertida.")
             raise
+
+    if with_bootstrap_token and created_bootstrap_token:
+        _log("copie agora o token bootstrap (exibicao unica):")
+        print(created_bootstrap_token)
     _log("seed concluido com sucesso.")
 
 
@@ -150,12 +217,32 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="atualiza dados padrao mesmo quando os registros ja existem.",
     )
+    parser.add_argument(
+        "--with-bootstrap-token",
+        action="store_true",
+        help=(
+            "cria token de integracao bootstrap padrao "
+            f"('{DEFAULT_BOOTSTRAP_INTEGRATION_TOKEN_NAME}') se ainda nao existir."
+        ),
+    )
+    parser.add_argument(
+        "--bootstrap-token-name",
+        default=DEFAULT_BOOTSTRAP_INTEGRATION_TOKEN_NAME,
+        help=(
+            "nome do token bootstrap para uso com --with-bootstrap-token "
+            f"(padrao: {DEFAULT_BOOTSTRAP_INTEGRATION_TOKEN_NAME})."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    run_seed(force=bool(args.force))
+    run_seed(
+        force=bool(args.force),
+        with_bootstrap_token=bool(args.with_bootstrap_token),
+        bootstrap_token_name=str(args.bootstrap_token_name or DEFAULT_BOOTSTRAP_INTEGRATION_TOKEN_NAME),
+    )
 
 
 if __name__ == "__main__":

@@ -168,6 +168,40 @@ Com atualizacao forcada dos dados padrao:
 python -m app.seed --force
 ```
 
+Com criacao do token bootstrap para integracao com Django:
+```bash
+python -m app.seed --with-bootstrap-token
+```
+
+Opcionalmente, para nomear o token bootstrap:
+```bash
+python -m app.seed --with-bootstrap-token --bootstrap-token-name django-bootstrap
+```
+
+Ao usar `--with-bootstrap-token`, o seed cria `django-bootstrap` (ou o nome informado) somente se ainda nao existir, salva apenas o hash no banco e exibe o plaintext apenas nessa execucao.
+
+## Bootstrap Django <-> FastAPI (sem JWT manual)
+1. Instale dependencias e configure `.env`.
+2. Rode as migrations:
+```bash
+python -m alembic upgrade head
+python manage.py migrate
+```
+3. Rode o seed da FastAPI com bootstrap:
+```bash
+python -m app.seed --with-bootstrap-token
+```
+4. Copie o token bootstrap exibido no terminal (exibicao unica).
+5. No Django, acesse `Configuracoes > Integracao FastAPI`.
+6. Em `Cadastrar token bootstrap`, informe nome e token plaintext copiado.
+7. Salve e use a mesma tela para:
+- criar novos tokens na FastAPI
+- listar tokens
+- revogar tokens
+- selecionar o token ativo usado pelo Django
+
+`FASTAPI_ADMIN_TOKEN` permanece apenas como fallback legado temporario quando nenhum token ativo estiver cadastrado na tela.
+
 ## Testes
 ```bash
 python -m pytest -q
