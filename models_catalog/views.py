@@ -3,6 +3,8 @@ from uuid import UUID
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db import IntegrityError
+from django.db.models.deletion import ProtectedError
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
@@ -206,6 +208,37 @@ def provider_model_toggle_status(request, pk: int):
     else:
         messages.success(request, "Modelo desativado com sucesso.")
 
+    return redirect("models_catalog:list")
+
+
+@login_required
+@require_POST
+def provider_model_delete(request, pk: int):
+    provider_model = get_object_or_404(ProviderModel, pk=pk)
+    model_name = str(provider_model.name or "").strip() or "modelo"
+
+    try:
+        provider_model.delete()
+    except ProtectedError:
+        messages.error(
+            request,
+            "Nao foi possivel excluir este modelo porque existem vinculos que impedem a exclusao.",
+        )
+        return redirect("models_catalog:list")
+    except IntegrityError:
+        messages.error(
+            request,
+            "Nao foi possivel excluir este modelo no momento. Verifique se ele possui vinculacoes ativas.",
+        )
+        return redirect("models_catalog:list")
+    except Exception:
+        messages.error(
+            request,
+            "Nao foi possivel excluir este modelo no momento. Tente novamente.",
+        )
+        return redirect("models_catalog:list")
+
+    messages.success(request, f'Modelo "{model_name}" excluido com sucesso.')
     return redirect("models_catalog:list")
 
 

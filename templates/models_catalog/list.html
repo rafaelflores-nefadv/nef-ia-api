@@ -57,6 +57,16 @@
                                             <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
                                         {% endif %}
                                     </form>
+                                    <button
+                                        type="button"
+                                        class="btn btn-sm btn-outline-danger"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#deleteModelModal"
+                                        data-delete-url="{% url 'models_catalog:delete' model.id %}"
+                                        data-model-name="{{ model.name|escape }}"
+                                    >
+                                        Excluir
+                                    </button>
                                 </div>
                             </td>
                         </tr>
@@ -68,4 +78,65 @@
 {% else %}
     {% include "includes/empty_state.html" with empty_icon="bi bi-boxes" empty_title="Nenhum modelo cadastrado" empty_message="Cadastre um modelo conhecido para disponibilizar operacoes de IA no ambiente." empty_action_url=model_create_url empty_action_label="Criar modelo" empty_action_icon="bi bi-plus-lg" %}
 {% endif %}
+
+{% if models %}
+    <div class="modal fade" id="deleteModelModal" tabindex="-1" aria-labelledby="deleteModelModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="deleteModelModalLabel">Excluir modelo</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2">Tem certeza que deseja excluir este modelo? Essa ação não poderá ser desfeita.</p>
+                    <small id="deleteModelName" class="text-secondary d-none"></small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <form id="deleteModelForm" method="post" action="">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-danger">Excluir modelo</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+    {{ block.super }}
+    {% if models %}
+        <script>
+            (function () {
+                const deleteModal = document.getElementById("deleteModelModal");
+                const deleteForm = document.getElementById("deleteModelForm");
+                const deleteModelName = document.getElementById("deleteModelName");
+                if (!deleteModal || !deleteForm) {
+                    return;
+                }
+
+                deleteModal.addEventListener("show.bs.modal", function (event) {
+                    const trigger = event.relatedTarget;
+                    if (!trigger) {
+                        return;
+                    }
+                    const action = String(trigger.getAttribute("data-delete-url") || "").trim();
+                    const modelName = String(trigger.getAttribute("data-model-name") || "").trim();
+
+                    deleteForm.setAttribute("action", action);
+                    if (!deleteModelName) {
+                        return;
+                    }
+                    if (!modelName) {
+                        deleteModelName.classList.add("d-none");
+                        deleteModelName.textContent = "";
+                        return;
+                    }
+                    deleteModelName.classList.remove("d-none");
+                    deleteModelName.textContent = "Modelo selecionado: " + modelName;
+                });
+            })();
+        </script>
+    {% endif %}
 {% endblock %}
