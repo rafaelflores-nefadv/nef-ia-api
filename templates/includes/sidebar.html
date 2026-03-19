@@ -36,9 +36,13 @@
             <i class="bi bi-folder2-open"></i>
             <span>Arquivos</span>
         </a>
-        <a class="sidebar-link {% if active_menu == 'configuracoes' %}active{% endif %}" href="{% url 'fastapi_integration_settings' %}">
+        <a class="sidebar-link {% if active_menu == 'integracao_fastapi' %}active{% endif %}" href="{% url 'fastapi_integration_settings' %}">
             <i class="bi bi-sliders"></i>
-            <span>Configurações</span>
+            <span>Integração FastAPI</span>
+        </a>
+        <a class="sidebar-link {% if active_menu == 'integracao_fastapi_bootstrap' %}active{% endif %}" href="{% url 'fastapi_integration_bootstrap' %}">
+            <i class="bi bi-exclamation-triangle"></i>
+            <span>Bootstrap Integração FastAPI</span>
         </a>
     </nav>
 </aside>

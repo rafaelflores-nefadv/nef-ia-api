@@ -136,7 +136,6 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
         config = kwargs.get("config") or self._get_config()
         form = kwargs.get("form") or FastAPIIntegrationConfigForm(instance=config)
         token_form = kwargs.get("token_form") or FastAPIIntegrationTokenCreateForm()
-        register_token_form = kwargs.get("register_token_form") or FastAPIIntegrationTokenRegisterForm()
         tokens = kwargs.get("tokens") or FastAPIIntegrationService.list_tokens(config=config)
         selected_token = FastAPIIntegrationService.get_selected_token(
             config=config,
@@ -155,10 +154,9 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
                 "page_title": "Integracao FastAPI",
                 "form_title": "Integracao FastAPI",
                 "form_subtitle": "Gerencie URL, status e tokens da integracao administrativa.",
-                "active_menu": "configuracoes",
+                "active_menu": "integracao_fastapi",
                 "form": form,
                 "token_form": token_form,
-                "register_token_form": register_token_form,
                 "config": config,
                 "tokens": tokens,
                 "selected_token": selected_token,
@@ -177,7 +175,6 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
 
         form = FastAPIIntegrationConfigForm(instance=config)
         token_form = FastAPIIntegrationTokenCreateForm()
-        register_token_form = FastAPIIntegrationTokenRegisterForm()
 
         if action in {"save", "test"}:
             form = FastAPIIntegrationConfigForm(request.POST, instance=config)
@@ -228,27 +225,6 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
             else:
                 messages.error(request, "Informe um nome valido para criar o token.")
 
-        elif action == "register_token":
-            register_token_form = FastAPIIntegrationTokenRegisterForm(request.POST)
-            if register_token_form.is_valid():
-                token_name = register_token_form.cleaned_data["name"]
-                integration_token = register_token_form.cleaned_data["integration_token"]
-                try:
-                    token = FastAPIIntegrationService.register_existing_token(
-                        config=config,
-                        name=token_name,
-                        integration_token=integration_token,
-                    )
-                    register_token_form = FastAPIIntegrationTokenRegisterForm()
-                    messages.success(
-                        request,
-                        f"Token bootstrap '{token.name}' cadastrado e selecionado para uso.",
-                    )
-                except FastAPIIntegrationServiceError as exc:
-                    messages.error(request, str(exc))
-            else:
-                messages.error(request, "Informe nome e token bootstrap validos.")
-
         elif action in {"select_token", "activate_token", "deactivate_token", "revoke_token"}:
             token_id = self._extract_token_id(request.POST.get("token_id"))
             if token_id is None:
@@ -284,10 +260,74 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
         context = self.get_context_data(
             form=form,
             token_form=token_form,
-            register_token_form=register_token_form,
             config=config,
             tokens=tokens,
             test_result=test_result,
             created_token_value=created_token_value,
+        )
+        return self.render_to_response(context)
+
+
+class FastAPIIntegrationBootstrapView(LoginRequiredMixin, TemplateView):
+    template_name = "core/fastapi_integration_bootstrap.html"
+
+    def _get_config(self) -> FastAPIIntegrationConfig:
+        return FastAPIIntegrationService.get_or_create_config()
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        config = kwargs.get("config") or self._get_config()
+        token_form = kwargs.get("token_form") or FastAPIIntegrationTokenRegisterForm()
+        tokens = kwargs.get("tokens") or FastAPIIntegrationService.list_tokens(config=config)
+        selected_token = FastAPIIntegrationService.get_selected_token(
+            config=config,
+            active_only=True,
+        )
+        bootstrap_already_done = bool(tokens)
+
+        context.update(
+            {
+                "page_title": "Bootstrap Integracao FastAPI",
+                "form_title": "Bootstrap Integracao FastAPI",
+                "form_subtitle": "Cadastre o token bootstrap inicial para liberar a gestao normal.",
+                "active_menu": "integracao_fastapi_bootstrap",
+                "config": config,
+                "token_form": token_form,
+                "tokens": tokens,
+                "selected_token": selected_token,
+                "bootstrap_already_done": bootstrap_already_done,
+            }
+        )
+        return context
+
+    def post(self, request, *args, **kwargs):
+        config = self._get_config()
+        token_form = FastAPIIntegrationTokenRegisterForm(request.POST)
+
+        if token_form.is_valid():
+            token_name = token_form.cleaned_data["name"]
+            integration_token = token_form.cleaned_data["integration_token"]
+            try:
+                token = FastAPIIntegrationService.register_existing_token(
+                    config=config,
+                    name=token_name,
+                    integration_token=integration_token,
+                )
+                token_form = FastAPIIntegrationTokenRegisterForm()
+                messages.success(
+                    request,
+                    f"Token bootstrap '{token.name}' cadastrado e selecionado para uso.",
+                )
+            except FastAPIIntegrationServiceError as exc:
+                messages.error(request, str(exc))
+        else:
+            messages.error(request, "Informe nome e token bootstrap validos.")
+
+        config.refresh_from_db()
+        tokens = FastAPIIntegrationService.list_tokens(config=config)
+        context = self.get_context_data(
+            config=config,
+            token_form=token_form,
+            tokens=tokens,
         )
         return self.render_to_response(context)
