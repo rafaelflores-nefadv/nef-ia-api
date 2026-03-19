@@ -6,10 +6,48 @@ from django.urls import reverse_lazy
 from django.views.decorators.http import require_POST
 from django.views.generic import CreateView, ListView, UpdateView
 
+from core.services.provider_connectivity_service import ProviderConnectivityClientService
 from core.services.provider_models_service import ProviderModelsService, ProviderModelsServiceError
 
 from .forms import ProviderForm
 from .models import Provider
+
+
+def _store_provider_connectivity_result(request, *, provider_id: int, result: dict) -> None:
+    cache = request.session.get("provider_connectivity_results", {})
+    cache[str(provider_id)] = {
+        "ok": bool(result.get("ok")),
+        "status": str(result.get("status") or ""),
+        "status_label": str(result.get("status_label") or ""),
+        "message": str(result.get("message") or ""),
+        "error_code": str(result.get("error_code") or ""),
+    }
+    request.session["provider_connectivity_results"] = cache
+
+
+def _publish_provider_connectivity_message(request, *, result: dict) -> None:
+    ok = bool(result.get("ok"))
+    status = str(result.get("status") or "").strip()
+    status_label = str(result.get("status_label") or "").strip() or "Status"
+    message = str(result.get("message") or "").strip() or "Teste concluido."
+    full_message = f"{status_label}: {message}"
+
+    if ok:
+        messages.success(request, full_message)
+        return
+
+    warning_statuses = {
+        "provider_not_synced",
+        "provider_inactive",
+        "credential_not_found",
+        "credential_inactive",
+        "provider_not_supported",
+    }
+    if status in warning_statuses:
+        messages.warning(request, full_message)
+        return
+
+    messages.error(request, full_message)
 
 
 class ProviderListView(LoginRequiredMixin, ListView):
@@ -19,10 +57,15 @@ class ProviderListView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        connectivity_results = self.request.session.get("provider_connectivity_results", {})
+        providers = context.get("providers")
+        if providers is not None:
+            for provider in providers:
+                provider.connectivity_result = connectivity_results.get(str(provider.id))
         context.update(
             {
                 "page_title": "Providers",
-                "page_subtitle": "Gestão administrativa de integrações disponíveis.",
+                "page_subtitle": "Gestao administrativa de integracoes disponiveis.",
                 "active_menu": "providers",
             }
         )
@@ -44,6 +87,7 @@ class ProviderCreateView(LoginRequiredMixin, CreateView):
                 "form_subtitle": "Cadastre um novo provider para a plataforma.",
                 "active_menu": "providers",
                 "submit_label": "Salvar provider",
+                "is_editing": False,
             }
         )
         return context
@@ -70,13 +114,17 @@ class ProviderUpdateView(LoginRequiredMixin, UpdateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        connectivity_results = self.request.session.get("provider_connectivity_results", {})
+        latest_result = connectivity_results.get(str(self.object.id))
         context.update(
             {
                 "page_title": "Editar provider",
                 "form_title": "Editar provider",
                 "form_subtitle": "Atualize os dados do provider selecionado.",
                 "active_menu": "providers",
-                "submit_label": "Salvar alterações",
+                "submit_label": "Salvar alteracoes",
+                "is_editing": True,
+                "latest_connectivity_result": latest_result,
             }
         )
         return context
@@ -119,4 +167,18 @@ def provider_toggle_status(request, pk: int):
     else:
         messages.success(request, "Provider desativado com sucesso.")
 
+    return redirect("providers:list")
+
+
+@login_required
+@require_POST
+def provider_test_connectivity(request, pk: int):
+    provider = get_object_or_404(Provider, pk=pk)
+    result = ProviderConnectivityClientService().test_provider_connectivity(provider=provider)
+    _store_provider_connectivity_result(request, provider_id=provider.id, result=result)
+    _publish_provider_connectivity_message(request, result=result)
+
+    next_url = str(request.POST.get("next") or "").strip()
+    if next_url:
+        return redirect(next_url)
     return redirect("providers:list")

@@ -74,6 +74,25 @@ class AvailableProviderModelResponse(BaseModel):
     is_registered: bool = False
 
 
+class ProviderConnectivityCheck(BaseModel):
+    name: str
+    ok: bool
+    message: str
+    code: str | None = None
+    http_status: int | None = None
+
+
+class ProviderConnectivityTestResponse(BaseModel):
+    ok: bool
+    status: str
+    status_label: str
+    message: str
+    provider_id: UUID
+    provider_slug: str | None = None
+    checks: list[ProviderConnectivityCheck] = Field(default_factory=list)
+    error_code: str | None = None
+
+
 class ProviderCredentialCreateRequest(BaseModel):
     credential_name: str = Field(min_length=2, max_length=120)
     api_key: str = Field(min_length=4, max_length=2000)

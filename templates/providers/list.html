@@ -13,6 +13,7 @@
                         <th>Nome</th>
                         <th>Slug</th>
                         <th>Vinculo FastAPI</th>
+                        <th>Conectividade</th>
                         <th>Descricao</th>
                         <th>Status</th>
                         <th>Atualizado em</th>
@@ -31,6 +32,23 @@
                                     <span class="status-pill status-warning">Pendente</span>
                                 {% endif %}
                             </td>
+                            <td>
+                                {% if provider.connectivity_result %}
+                                    {% if provider.connectivity_result.ok %}
+                                        <span class="status-pill status-success">{{ provider.connectivity_result.status_label|default:"Conectado" }}</span>
+                                    {% elif provider.connectivity_result.status == "provider_not_synced" or provider.connectivity_result.status == "credential_not_found" or provider.connectivity_result.status == "credential_inactive" or provider.connectivity_result.status == "provider_inactive" or provider.connectivity_result.status == "provider_not_supported" %}
+                                        <span class="status-pill status-warning">{{ provider.connectivity_result.status_label|default:"Atencao" }}</span>
+                                    {% else %}
+                                        <span class="status-pill status-danger">{{ provider.connectivity_result.status_label|default:"Falha" }}</span>
+                                    {% endif %}
+                                    <div class="admin-note mt-1">{{ provider.connectivity_result.message }}</div>
+                                    {% if not provider.connectivity_result.ok and provider.connectivity_result.error_code %}
+                                        <div class="admin-note">Codigo tecnico: <code>{{ provider.connectivity_result.error_code }}</code></div>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="status-pill status-neutral">Nao testado</span>
+                                {% endif %}
+                            </td>
                             <td class="text-muted">{{ provider.description|default:"-"|truncatechars:90 }}</td>
                             <td>
                                 {% if provider.is_active %}
@@ -42,6 +60,11 @@
                             <td>{{ provider.updated_at|date:"d/m/Y H:i" }}</td>
                             <td class="text-end">
                                 <div class="table-actions">
+                                    <form method="post" action="{% url 'providers:test_connectivity' provider.id %}">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="next" value="{% url 'providers:list' %}">
+                                        <button type="submit" class="btn btn-sm btn-outline-primary">Testar conectividade</button>
+                                    </form>
                                     <a href="{% url 'providers:edit' provider.id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
                                     <form method="post" action="{% url 'providers:toggle_status' provider.id %}">
                                         {% csrf_token %}

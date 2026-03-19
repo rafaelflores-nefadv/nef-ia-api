@@ -9,6 +9,33 @@
         O provider sera sincronizado com a FastAPI no momento do salvamento, usando vinculo explicito por ID remoto.
     </p>
 
+    {% if is_editing %}
+        <div class="d-flex flex-wrap gap-2 mb-3">
+            <form method="post" action="{% url 'providers:test_connectivity' object.id %}">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{% url 'providers:edit' object.id %}">
+                <button type="submit" class="btn btn-outline-primary">Testar conectividade</button>
+            </form>
+            {% if latest_connectivity_result %}
+                {% if latest_connectivity_result.ok %}
+                    <span class="status-pill status-success align-self-center">{{ latest_connectivity_result.status_label|default:"Conectado" }}</span>
+                {% elif latest_connectivity_result.status == "provider_not_synced" or latest_connectivity_result.status == "credential_not_found" or latest_connectivity_result.status == "credential_inactive" or latest_connectivity_result.status == "provider_inactive" or latest_connectivity_result.status == "provider_not_supported" %}
+                    <span class="status-pill status-warning align-self-center">{{ latest_connectivity_result.status_label|default:"Atencao" }}</span>
+                {% else %}
+                    <span class="status-pill status-danger align-self-center">{{ latest_connectivity_result.status_label|default:"Falha" }}</span>
+                {% endif %}
+            {% else %}
+                <span class="status-pill status-neutral align-self-center">Nao testado</span>
+            {% endif %}
+        </div>
+        {% if latest_connectivity_result %}
+            <p class="admin-note mb-3">{{ latest_connectivity_result.message }}</p>
+            {% if not latest_connectivity_result.ok and latest_connectivity_result.error_code %}
+                <p class="admin-note mb-3">Codigo tecnico: <code>{{ latest_connectivity_result.error_code }}</code></p>
+            {% endif %}
+        {% endif %}
+    {% endif %}
+
     {% if object and object.fastapi_provider_id %}
         <div class="alert alert-info" role="alert">
             Provider remoto vinculado: <code>{{ object.fastapi_provider_id }}</code>

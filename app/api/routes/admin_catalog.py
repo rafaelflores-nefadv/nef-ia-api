@@ -9,6 +9,7 @@ from app.models.operational import DjangoAiProvider, DjangoAiProviderCredential,
 from app.schemas.admin_catalog import (
     AvailableProviderModelResponse,
     CatalogStatusResponse,
+    ProviderConnectivityTestResponse,
     ProviderCreateRequest,
     ProviderCredentialCreateRequest,
     ProviderCredentialResponse,
@@ -20,6 +21,7 @@ from app.schemas.admin_catalog import (
     ProviderUpdateRequest,
 )
 from app.services.provider_admin_service import ProviderAdminService
+from app.services.provider_connectivity_service import ProviderConnectivityService
 from app.services.provider_model_discovery_service import ProviderModelDiscoveryService
 
 router = APIRouter(tags=["admin-catalog"])
@@ -161,6 +163,19 @@ def list_provider_available_models(
 ) -> list[AvailableProviderModelResponse]:
     payload = ProviderModelDiscoveryService(session).list_available_models(provider_id=provider_id)
     return [AvailableProviderModelResponse(**item) for item in payload]
+
+
+@router.post(
+    "/providers/{provider_id}/connectivity-test",
+    response_model=ProviderConnectivityTestResponse,
+)
+def test_provider_connectivity(
+    provider_id: UUID,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    session: Session = Depends(get_operational_session),
+) -> ProviderConnectivityTestResponse:
+    payload = ProviderConnectivityService(session).test_provider_connectivity(provider_id=provider_id)
+    return ProviderConnectivityTestResponse(**payload)
 
 
 @router.post("/providers/{provider_id}/models", response_model=ProviderModelResponse, status_code=status.HTTP_201_CREATED)

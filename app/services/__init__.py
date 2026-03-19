@@ -7,6 +7,7 @@ from app.services.file_service import FileService
 from app.services.integration_token_service import IntegrationTokenService
 from app.services.metrics_service import MetricsService
 from app.services.provider_admin_service import ProviderAdminService
+from app.services.provider_connectivity_service import ProviderConnectivityService
 from app.services.provider_model_discovery_service import ProviderModelDiscoveryService
 from app.services.provider_service import ProviderService
 from app.services.token_service import ApiTokenService
@@ -17,6 +18,7 @@ __all__ = [
     "ApiTokenService",
     "ProviderService",
     "ProviderAdminService",
+    "ProviderConnectivityService",
     "ProviderModelDiscoveryService",
     "IntegrationTokenService",
     "FileService",
