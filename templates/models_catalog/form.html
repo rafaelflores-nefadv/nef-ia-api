@@ -246,8 +246,117 @@
                 const previewInput = document.getElementById("preview-input");
                 const previewOutput = document.getElementById("preview-output");
                 const previewDescription = document.getElementById("preview-description");
+                const contextWindowField = document.getElementById("id_context_window");
+                const inputCostField = document.getElementById("id_input_cost_per_1k");
+                const outputCostField = document.getElementById("id_output_cost_per_1k");
+                const descriptionField = document.getElementById("id_description");
 
                 let currentModels = {};
+
+                function isBlank(value) {
+                    return String(value || "").trim() === "";
+                }
+
+                function isZeroNumber(value) {
+                    const normalized = String(value || "").replace(",", ".").trim();
+                    if (!normalized) {
+                        return false;
+                    }
+                    const numericValue = Number(normalized);
+                    return !Number.isNaN(numericValue) && numericValue === 0;
+                }
+
+                function markFieldAsUserEdited(field) {
+                    if (!field) {
+                        return;
+                    }
+                    field.dataset.userEdited = "1";
+                }
+
+                function initializeFieldEditTracking(field, options) {
+                    if (!field) {
+                        return;
+                    }
+                    const opts = options || {};
+                    const allowZeroAsUnfilled = Boolean(opts.allowZeroAsUnfilled);
+                    const initialValue = String(field.value || "").trim();
+                    const hasInitialValue = initialValue !== "";
+                    const shouldStartUnlocked = allowZeroAsUnfilled && isZeroNumber(initialValue);
+
+                    field.dataset.userEdited = hasInitialValue && !shouldStartUnlocked ? "1" : "0";
+                    field.addEventListener("input", function () {
+                        markFieldAsUserEdited(field);
+                    });
+                    field.addEventListener("change", function () {
+                        markFieldAsUserEdited(field);
+                    });
+                }
+
+                function canAutofillField(field, options) {
+                    if (!field || field.dataset.userEdited === "1") {
+                        return false;
+                    }
+                    const opts = options || {};
+                    const allowZeroAsUnfilled = Boolean(opts.allowZeroAsUnfilled);
+                    const currentValue = String(field.value || "").trim();
+                    if (currentValue === "") {
+                        return true;
+                    }
+                    if (allowZeroAsUnfilled && isZeroNumber(currentValue)) {
+                        return true;
+                    }
+                    return false;
+                }
+
+                function applyModelDefaultsToForm(item) {
+                    if (!item) {
+                        return;
+                    }
+
+                    const contextWindowValue = item.context_window;
+                    if (
+                        contextWindowField &&
+                        canAutofillField(contextWindowField) &&
+                        contextWindowValue !== null &&
+                        contextWindowValue !== undefined &&
+                        !isBlank(contextWindowValue)
+                    ) {
+                        contextWindowField.value = String(contextWindowValue);
+                    }
+
+                    const inputCostValue = item.input_cost_per_1k;
+                    if (
+                        inputCostField &&
+                        canAutofillField(inputCostField, {allowZeroAsUnfilled: true}) &&
+                        inputCostValue !== null &&
+                        inputCostValue !== undefined &&
+                        !isBlank(inputCostValue)
+                    ) {
+                        inputCostField.value = String(inputCostValue);
+                    }
+
+                    const outputCostValue = item.output_cost_per_1k;
+                    if (
+                        outputCostField &&
+                        canAutofillField(outputCostField, {allowZeroAsUnfilled: true}) &&
+                        outputCostValue !== null &&
+                        outputCostValue !== undefined &&
+                        !isBlank(outputCostValue)
+                    ) {
+                        outputCostField.value = String(outputCostValue);
+                    }
+
+                    const descriptionValue = item.description;
+                    if (
+                        descriptionField &&
+                        canAutofillField(descriptionField) &&
+                        descriptionValue !== null &&
+                        descriptionValue !== undefined &&
+                        !isBlank(descriptionValue)
+                    ) {
+                        descriptionField.value = String(descriptionValue);
+                    }
+                }
 
                 function setSourceUi(source) {
                     const mapping = {
@@ -422,6 +531,7 @@
                     if (previewInput) previewInput.textContent = String(item.input_cost_per_1k || "-");
                     if (previewOutput) previewOutput.textContent = String(item.output_cost_per_1k || "-");
                     if (previewDescription) previewDescription.textContent = String(item.description || "-");
+                    applyModelDefaultsToForm(item);
                 }
 
                 async function loadProviderModels(providerId, selectedKey) {
@@ -469,6 +579,11 @@
                     const selected = String(modelField.value || "").trim();
                     setPreview(currentModels[selected] || null);
                 });
+
+                initializeFieldEditTracking(contextWindowField);
+                initializeFieldEditTracking(inputCostField, {allowZeroAsUnfilled: true});
+                initializeFieldEditTracking(outputCostField, {allowZeroAsUnfilled: true});
+                initializeFieldEditTracking(descriptionField);
 
                 if (providerField.value) {
                     loadProviderModels(providerField.value, modelField.value || "");
