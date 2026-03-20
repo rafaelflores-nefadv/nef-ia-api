@@ -60,11 +60,34 @@ class TestPromptForm(forms.Form):
 
 
 class TestPromptExecutionForm(forms.Form):
+    automation = forms.ChoiceField(
+        label="Automacao de teste",
+        required=True,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
     request_file = forms.FileField(
         label="Arquivo de entrada",
         required=True,
         widget=forms.ClearableFileInput(attrs={"class": "form-control"}),
     )
+
+    def __init__(self, *args, **kwargs):
+        automation_choices = kwargs.pop("automation_choices", [])
+        selected_automation = kwargs.pop("selected_automation", None)
+        super().__init__(*args, **kwargs)
+
+        self.fields["automation"].choices = [("", "Selecione uma automacao de teste")] + [
+            (str(automation_id), label)
+            for automation_id, label in automation_choices
+        ]
+        if selected_automation is not None and not self.is_bound:
+            self.fields["automation"].initial = str(selected_automation)
+
+    def clean_automation(self) -> str:
+        value = str(self.cleaned_data.get("automation") or "").strip()
+        if not value:
+            raise ValidationError("Selecione uma automacao de teste.")
+        return value
 
     def clean_request_file(self):
         uploaded_file = self.cleaned_data.get("request_file")

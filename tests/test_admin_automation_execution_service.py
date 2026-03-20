@@ -116,34 +116,49 @@ def test_admin_execution_requires_official_prompt_when_override_missing() -> Non
     assert exc.value.payload.code == "prompt_not_found"
 
 
-def test_admin_test_prompt_execution_uses_technical_runtime_automation() -> None:
+def test_admin_create_test_automation_uses_selected_provider_model() -> None:
     automation_id = uuid4()
     analysis_request_id = uuid4()
-    service = _build_service(automation_id=automation_id, runtime=None)
-    service.shared_analysis.latest_request = SimpleNamespace(  # type: ignore[attr-defined]
-        id=analysis_request_id,
-        automation_id=automation_id,
-        created_at=datetime.now(timezone.utc),
+    provider_id = uuid4()
+    model_id = uuid4()
+    service = _build_service(automation_id=uuid4(), runtime=None)
+    service.providers = SimpleNamespace(  # type: ignore[assignment]
+        get_by_id=lambda current_provider_id: (
+            SimpleNamespace(id=provider_id, slug="openai", is_active=True, name="OpenAI")
+            if current_provider_id == provider_id
+            else None
+        )
+    )
+    service.provider_models = SimpleNamespace(  # type: ignore[assignment]
+        get_by_id=lambda current_model_id: (
+            SimpleNamespace(
+                id=model_id,
+                provider_id=provider_id,
+                model_slug="gpt-4.1-mini",
+                is_active=True,
+            )
+            if current_model_id == model_id
+            else None
+        )
     )
     service.test_prompt_runtime = SimpleNamespace(  # type: ignore[assignment]
-        ensure_runtime_context=lambda: SimpleNamespace(
+        create_manual_test_automation=lambda **_: SimpleNamespace(
             automation_id=automation_id,
-            automation_name="Automacao Tecnica de Teste",
-            automation_slug="system-test-automation",
+            automation_name="Teste OCR",
+            automation_slug="test-prompt-ocr",
+            provider_slug="openai",
+            model_slug="gpt-4.1-mini",
             analysis_request_id=analysis_request_id,
-            created_automation=False,
-            created_analysis_request=False,
         )
     )
 
-    result = service.start_execution_for_test_prompt(
-        upload_file=SimpleNamespace(filename="input.csv"),
-        prompt_override="override tecnico",
-        actor_user_id=uuid4(),
-        ip_address="127.0.0.1",
-        correlation_id="corr-3",
+    result = service.create_test_automation(
+        name="Teste OCR",
+        provider_id=provider_id,
+        model_id=model_id,
     )
 
-    assert result.automation_id == automation_id
-    assert result.prompt_override_applied is True
-    assert service.execution_service.calls[0]["prompt_override"] == "override tecnico"  # type: ignore[index]
+    assert result["automation_id"] == automation_id
+    assert result["analysis_request_id"] == analysis_request_id
+    assert result["provider_slug"] == "openai"
+    assert result["model_slug"] == "gpt-4.1-mini"

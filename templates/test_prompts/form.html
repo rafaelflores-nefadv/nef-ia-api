@@ -10,31 +10,6 @@
     </p>
 </section>
 
-<div class="d-flex align-items-center gap-2 mb-3">
-    {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Execucao sempre usa automacao tecnica interna de teste.</span>
-</div>
-
-{% if test_runtime %}
-    <section class="panel-card mb-3">
-        <div class="admin-note">
-            Runtime tecnico:
-            <strong>{{ test_runtime.automation_name }}</strong>
-            (<code>{{ test_runtime.automation_slug }}</code>)
-        </div>
-    </section>
-{% endif %}
-
-{% if integration_warnings %}
-    <div class="alert alert-warning" role="alert">
-        <ul class="mb-0 ps-3">
-            {% for warning in integration_warnings %}
-                <li>{{ warning }}</li>
-            {% endfor %}
-        </ul>
-    </div>
-{% endif %}
-
 <section class="panel-card">
     {% if form.non_field_errors %}
         <div class="alert alert-danger" role="alert">

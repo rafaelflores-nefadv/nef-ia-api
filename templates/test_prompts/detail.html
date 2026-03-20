@@ -18,7 +18,7 @@
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Execucao vinculada a runtime tecnico interno.</span>
+    <span class="admin-note">A automacao de teste e selecionada manualmente na tela de execucao.</span>
 </div>
 
 {% if integration_warnings %}
@@ -61,18 +61,18 @@
     <div class="col-12 col-xl-6">
         <article class="panel-card h-100">
             <div class="panel-title-wrap">
-                <h3 class="panel-title">Runtime tecnico</h3>
+                <h3 class="panel-title">Automacao de teste atual</h3>
             </div>
             <dl class="row mb-0">
                 <dt class="col-sm-4 text-secondary">Automation ID</dt>
-                <dd class="col-sm-8"><code>{{ test_runtime.automation_id|default:"-" }}</code></dd>
+                <dd class="col-sm-8"><code>{{ selected_automation.automation_id|default:test_prompt.automation_id|default:"-" }}</code></dd>
 
                 <dt class="col-sm-4 text-secondary">Nome</dt>
-                <dd class="col-sm-8">{{ test_runtime.automation_name|default:"-" }}</dd>
+                <dd class="col-sm-8">{{ selected_automation.automation_name|default:"Nao definida" }}</dd>
 
                 <dt class="col-sm-4 text-secondary">Slug</dt>
                 <dd class="col-sm-8">
-                    <code>{{ test_runtime.automation_slug|default:"-" }}</code>
+                    <code>{{ selected_automation.automation_slug|default:"-" }}</code>
                 </dd>
             </dl>
         </article>

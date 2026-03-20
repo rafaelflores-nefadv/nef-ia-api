@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .views import (
+    TestAutomationCreateView,
+    TestAutomationProviderModelsView,
     TestPromptCreateView,
     TestPromptDetailView,
     TestPromptExecutionCreateView,
@@ -17,6 +19,8 @@ app_name = "test_prompts"
 urlpatterns = [
     path("", TestPromptListView.as_view(), name="list"),
     path("novo/", TestPromptCreateView.as_view(), name="create"),
+    path("automacoes/criar/", TestAutomationCreateView.as_view(), name="automation_create"),
+    path("automacoes/modelos/", TestAutomationProviderModelsView.as_view(), name="automation_provider_models"),
     path("<int:pk>/", TestPromptDetailView.as_view(), name="detail"),
     path("<int:pk>/editar/", TestPromptUpdateView.as_view(), name="edit"),
     path("<int:pk>/executar/", TestPromptExecutionCreateView.as_view(), name="execute"),
@@ -25,4 +29,3 @@ urlpatterns = [
     path("<int:pk>/toggle-status/", test_prompt_toggle_status, name="toggle_status"),
     path("<int:pk>/duplicar/", test_prompt_duplicate, name="duplicate"),
 ]
-

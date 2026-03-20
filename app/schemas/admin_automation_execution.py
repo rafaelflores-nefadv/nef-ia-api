@@ -30,13 +30,20 @@ class AutomationRuntimeListResponse(BaseModel):
     items: list[AutomationRuntimeItemResponse] = Field(default_factory=list)
 
 
-class TestPromptRuntimeResponse(BaseModel):
+class TestAutomationCreateRequest(BaseModel):
+    name: str = Field(min_length=3, max_length=180)
+    provider_id: UUID
+    model_id: UUID
+
+
+class TestAutomationCreateResponse(BaseModel):
     automation_id: UUID
     automation_name: str
-    automation_slug: str
+    automation_slug: str | None = None
     analysis_request_id: UUID
-    created_automation: bool = False
-    created_analysis_request: bool = False
+    provider_slug: str
+    model_slug: str
+    is_test_automation: bool = True
 
 
 class AutomationExecutionCreateResponse(BaseModel):

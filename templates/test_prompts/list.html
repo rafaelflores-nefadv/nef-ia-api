@@ -12,18 +12,8 @@
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Execucao em automacao tecnica interna (sem selecao manual).</span>
+    <span class="admin-note">Automacoes de teste disponiveis: <strong>{{ test_automations_count }}</strong>.</span>
 </div>
-
-{% if test_runtime %}
-    <section class="panel-card mb-3">
-        <div class="admin-note">
-            Runtime tecnico ativo:
-            <strong>{{ test_runtime.automation_name }}</strong>
-            (<code>{{ test_runtime.automation_slug }}</code>)
-        </div>
-    </section>
-{% endif %}
 
 {% if integration_warnings %}
     <div class="alert alert-warning" role="alert">

@@ -5,7 +5,7 @@ from uuid import UUID
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.views import View
@@ -17,7 +17,9 @@ from core.services.automation_prompts_execution_service import (
     AutomationExecutionStatusItem,
     AutomationPromptsExecutionService,
     AutomationPromptsExecutionServiceError,
-    TestPromptRuntimeReadItem,
+    AutomationRuntimeReadItem,
+    ProviderModelReadItem,
+    ProviderReadItem,
 )
 
 from .forms import TestPromptExecutionForm, TestPromptForm
@@ -52,12 +54,46 @@ def _format_file_size(size_bytes: int) -> str:
     return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-def _load_test_prompt_runtime_payload() -> tuple[TestPromptRuntimeReadItem | None, str, list[str]]:
+def _load_test_automations_payload() -> tuple[list[AutomationRuntimeReadItem], str, list[str]]:
+    payload = AutomationPromptsExecutionService().list_automations_runtime()
+    raw_items = payload.get("items") or []
+    items: list[AutomationRuntimeReadItem] = []
+    for item in raw_items:
+        if not isinstance(item, AutomationRuntimeReadItem):
+            continue
+        if not item.automation_is_active:
+            continue
+        if not bool(item.is_test_automation):
+            continue
+        items.append(item)
+    return items, str(payload.get("source") or "unavailable"), list(payload.get("warnings") or [])
+
+
+def _build_automation_choices(automations: list[AutomationRuntimeReadItem]) -> list[tuple[UUID, str]]:
+    choices: list[tuple[UUID, str]] = []
+    for item in automations:
+        runtime_label = ""
+        if item.provider_slug and item.model_slug:
+            runtime_label = f" ({item.provider_slug} / {item.model_slug})"
+        label = f"{item.automation_name}{runtime_label}"
+        choices.append((item.automation_id, label))
+    return choices
+
+
+def _load_provider_options() -> tuple[list[ProviderReadItem], str, list[str]]:
     service = AutomationPromptsExecutionService()
     try:
-        return service.get_test_prompt_runtime(), "api", []
+        return service.list_providers(), "api", []
     except AutomationPromptsExecutionServiceError as exc:
-        return None, "unavailable", [str(exc)]
+        return [], "unavailable", [str(exc)]
+
+
+def _load_provider_models(provider_id: UUID) -> tuple[list[ProviderModelReadItem], list[str]]:
+    service = AutomationPromptsExecutionService()
+    try:
+        return service.list_provider_models(provider_id=provider_id), []
+    except AutomationPromptsExecutionServiceError as exc:
+        return [], [str(exc)]
 
 
 class TestPromptListView(LoginRequiredMixin, ListView):
@@ -81,17 +117,17 @@ class TestPromptListView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        test_runtime, integration_source, integration_warnings = _load_test_prompt_runtime_payload()
+        automations, integration_source, integration_warnings = _load_test_automations_payload()
         prompts = context.get("test_prompts") or []
 
         context.update(
             {
                 "page_title": "Prompts de teste",
-                "page_subtitle": "Uso local da interface. Nao exige selecao manual de automacao.",
+                "page_subtitle": "Uso local da interface com automacao de teste selecionada manualmente na execucao.",
                 "active_menu": "prompts_teste",
                 "integration_source": integration_source,
                 "integration_warnings": integration_warnings,
-                "test_runtime": test_runtime,
+                "test_automations_count": len(automations),
                 "search_query": str(self.request.GET.get("q") or "").strip(),
                 "selected_status": str(self.request.GET.get("status") or "").strip().lower(),
                 "total_count": TestPrompt.objects.count(),
@@ -107,10 +143,9 @@ class TestPromptCreateView(LoginRequiredMixin, FormView):
     form_class = TestPromptForm
 
     def form_valid(self, form):
-        test_runtime, _, _ = _load_test_prompt_runtime_payload()
         prompt = TestPrompt(
             name=form.cleaned_data["name"],
-            automation_id=test_runtime.automation_id if test_runtime is not None else None,
+            automation_id=None,
             prompt_text=form.cleaned_data["prompt_text"],
             notes=form.cleaned_data.get("notes") or "",
             is_active=bool(form.cleaned_data.get("is_active", False)),
@@ -123,7 +158,6 @@ class TestPromptCreateView(LoginRequiredMixin, FormView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        test_runtime, integration_source, integration_warnings = _load_test_prompt_runtime_payload()
         context.update(
             {
                 "page_title": "Novo prompt de teste",
@@ -132,9 +166,6 @@ class TestPromptCreateView(LoginRequiredMixin, FormView):
                 "active_menu": "prompts_teste",
                 "submit_label": "Salvar prompt de teste",
                 "is_editing": False,
-                "test_runtime": test_runtime,
-                "integration_source": integration_source,
-                "integration_warnings": integration_warnings,
             }
         )
         return context
@@ -158,21 +189,17 @@ class TestPromptUpdateView(LoginRequiredMixin, FormView):
         }
 
     def form_valid(self, form):
-        test_runtime, _, _ = _load_test_prompt_runtime_payload()
         self.test_prompt.name = form.cleaned_data["name"]
-        if test_runtime is not None:
-            self.test_prompt.automation_id = test_runtime.automation_id
         self.test_prompt.prompt_text = form.cleaned_data["prompt_text"]
         self.test_prompt.notes = form.cleaned_data.get("notes") or ""
         self.test_prompt.is_active = bool(form.cleaned_data.get("is_active", False))
         self.test_prompt.updated_by = self.request.user if self.request.user.is_authenticated else None
-        self.test_prompt.save(update_fields=["name", "automation_id", "prompt_text", "notes", "is_active", "updated_by", "updated_at"])
+        self.test_prompt.save(update_fields=["name", "prompt_text", "notes", "is_active", "updated_by", "updated_at"])
         messages.success(self.request, "Prompt de teste atualizado com sucesso.")
         return redirect("test_prompts:detail", pk=self.test_prompt.pk)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        test_runtime, integration_source, integration_warnings = _load_test_prompt_runtime_payload()
         context.update(
             {
                 "page_title": "Editar prompt de teste",
@@ -182,9 +209,6 @@ class TestPromptUpdateView(LoginRequiredMixin, FormView):
                 "submit_label": "Salvar alteracoes",
                 "is_editing": True,
                 "object": self.test_prompt,
-                "test_runtime": test_runtime,
-                "integration_source": integration_source,
-                "integration_warnings": integration_warnings,
             }
         )
         return context
@@ -193,12 +217,29 @@ class TestPromptUpdateView(LoginRequiredMixin, FormView):
 class TestPromptDetailView(LoginRequiredMixin, TemplateView):
     template_name = "test_prompts/detail.html"
     test_prompt: TestPrompt
-    test_runtime: TestPromptRuntimeReadItem | None = None
+    selected_automation: AutomationRuntimeReadItem | None = None
     integration_warnings: list[str]
+    integration_source: str
 
     def dispatch(self, request, *args, **kwargs):
         self.test_prompt = get_object_or_404(TestPrompt, pk=kwargs["pk"])
-        self.test_runtime, self.integration_source, self.integration_warnings = _load_test_prompt_runtime_payload()
+        self.selected_automation = None
+        self.integration_warnings = []
+        self.integration_source = "api"
+
+        if self.test_prompt.automation_id is not None:
+            service = AutomationPromptsExecutionService()
+            try:
+                runtime = service.get_automation_runtime(automation_id=self.test_prompt.automation_id)
+                if runtime.is_test_automation:
+                    self.selected_automation = runtime
+                else:
+                    self.integration_warnings.append(
+                        "A automacao associada ao prompt nao esta marcada como automacao de teste."
+                    )
+            except AutomationPromptsExecutionServiceError as exc:
+                self.integration_source = "unavailable"
+                self.integration_warnings.append(str(exc))
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -208,8 +249,8 @@ class TestPromptDetailView(LoginRequiredMixin, TemplateView):
                 "page_title": self.test_prompt.name,
                 "active_menu": "prompts_teste",
                 "test_prompt": self.test_prompt,
-                "test_runtime": self.test_runtime,
-                "integration_source": getattr(self, "integration_source", "unavailable"),
+                "selected_automation": self.selected_automation,
+                "integration_source": self.integration_source,
                 "integration_warnings": self.integration_warnings,
             }
         )
@@ -220,18 +261,63 @@ class TestPromptExecutionCreateView(LoginRequiredMixin, FormView):
     template_name = "test_prompts/execute.html"
     form_class = TestPromptExecutionForm
     test_prompt: TestPrompt
-    test_runtime: TestPromptRuntimeReadItem | None = None
+    test_automations: list[AutomationRuntimeReadItem]
+    provider_options: list[ProviderReadItem]
+    provider_models: list[ProviderModelReadItem]
     integration_warnings: list[str]
+    integration_source: str
 
     def dispatch(self, request, *args, **kwargs):
         self.test_prompt = get_object_or_404(TestPrompt, pk=kwargs["pk"])
-        self.test_runtime, self.integration_source, self.integration_warnings = _load_test_prompt_runtime_payload()
+        self.test_automations, self.integration_source, self.integration_warnings = _load_test_automations_payload()
+        self.provider_options, provider_source, provider_warnings = _load_provider_options()
+        if provider_source != "api":
+            self.integration_source = provider_source
+        self.integration_warnings.extend(provider_warnings)
+
+        self.provider_models = []
+        provider_id_raw = str(request.GET.get("provider_id") or "").strip()
+        if provider_id_raw:
+            try:
+                provider_id = UUID(provider_id_raw)
+                self.provider_models, model_warnings = _load_provider_models(provider_id=provider_id)
+                self.integration_warnings.extend(model_warnings)
+            except ValueError:
+                self.integration_warnings.append("Provider invalido para carregar modelos.")
+
         return super().dispatch(request, *args, **kwargs)
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        choices = _build_automation_choices(self.test_automations)
+        selected_automation = str(self.request.GET.get("automation") or "").strip()
+        if self.request.method.upper() == "POST":
+            selected_automation = str(self.request.POST.get("automation") or selected_automation).strip()
+        if not selected_automation and self.test_prompt.automation_id is not None:
+            selected_automation = str(self.test_prompt.automation_id)
+
+        valid_ids = {str(automation_id) for automation_id, _ in choices}
+        if selected_automation and selected_automation not in valid_ids:
+            selected_automation = ""
+        if not selected_automation and choices:
+            selected_automation = str(choices[0][0])
+
+        kwargs["automation_choices"] = choices
+        kwargs["selected_automation"] = selected_automation or None
+        return kwargs
+
     def form_valid(self, form):
+        automation_value = str(form.cleaned_data["automation"] or "").strip()
+        try:
+            automation_id = UUID(automation_value)
+        except ValueError:
+            form.add_error("automation", "Automacao invalida.")
+            return self.form_invalid(form)
+
         service = AutomationPromptsExecutionService()
         try:
-            result = service.start_test_prompt_execution(
+            result = service.start_execution(
+                automation_id=automation_id,
                 uploaded_file=form.cleaned_data["request_file"],
                 prompt_override=self.test_prompt.prompt_text,
             )
@@ -239,9 +325,14 @@ class TestPromptExecutionCreateView(LoginRequiredMixin, FormView):
             form.add_error(None, str(exc))
             return self.form_invalid(form)
 
+        if self.test_prompt.automation_id != automation_id:
+            self.test_prompt.automation_id = automation_id
+            self.test_prompt.updated_by = self.request.user if self.request.user.is_authenticated else None
+            self.test_prompt.save(update_fields=["automation_id", "updated_by", "updated_at"])
+
         messages.success(
             self.request,
-            "Execucao de teste iniciada em modo override local (prompt oficial nao foi alterado).",
+            "Execucao de teste iniciada com prompt_override e automacao de teste selecionada.",
         )
         return redirect(
             "test_prompts:execution_detail",
@@ -251,14 +342,29 @@ class TestPromptExecutionCreateView(LoginRequiredMixin, FormView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        selected_automation = str(getattr(context.get("form"), "cleaned_data", {}).get("automation") or "").strip()
+        if not selected_automation and context.get("form") is not None:
+            selected_automation = str(context["form"].fields["automation"].initial or "").strip()
+
+        selected_automation_item = None
+        for item in self.test_automations:
+            if str(item.automation_id) == selected_automation:
+                selected_automation_item = item
+                break
+
         context.update(
             {
                 "page_title": "Executar prompt de teste",
                 "active_menu": "prompts_teste",
                 "test_prompt": self.test_prompt,
-                "test_runtime": self.test_runtime,
-                "integration_source": getattr(self, "integration_source", "unavailable"),
+                "test_automations": self.test_automations,
+                "selected_automation": selected_automation_item,
+                "provider_options": self.provider_options,
+                "provider_models": self.provider_models,
+                "integration_source": self.integration_source,
                 "integration_warnings": self.integration_warnings,
+                "automation_create_url": reverse("test_prompts:automation_create"),
+                "automation_models_url": reverse("test_prompts:automation_provider_models"),
             }
         )
         return context
@@ -385,6 +491,75 @@ class TestPromptExecutionFileDownloadView(LoginRequiredMixin, View):
         if checksum:
             response["X-File-Checksum"] = str(checksum)
         return response
+
+
+class TestAutomationProviderModelsView(LoginRequiredMixin, View):
+    def get(self, request):
+        provider_id_raw = str(request.GET.get("provider_id") or "").strip()
+        try:
+            provider_id = UUID(provider_id_raw)
+        except ValueError:
+            return JsonResponse(
+                {"ok": False, "error": "Provider invalido.", "items": []},
+                status=400,
+            )
+
+        models, warnings = _load_provider_models(provider_id=provider_id)
+        return JsonResponse(
+            {
+                "ok": True,
+                "items": [
+                    {
+                        "id": str(item.id),
+                        "provider_id": str(item.provider_id),
+                        "model_name": item.model_name,
+                        "model_slug": item.model_slug,
+                    }
+                    for item in models
+                ],
+                "warnings": warnings,
+            }
+        )
+
+
+class TestAutomationCreateView(LoginRequiredMixin, View):
+    def post(self, request):
+        name = str(request.POST.get("name") or "").strip()
+        provider_id_raw = str(request.POST.get("provider_id") or "").strip()
+        model_id_raw = str(request.POST.get("model_id") or "").strip()
+
+        if not name:
+            return JsonResponse({"ok": False, "error": "Nome da automacao e obrigatorio."}, status=400)
+        try:
+            provider_id = UUID(provider_id_raw)
+            model_id = UUID(model_id_raw)
+        except ValueError:
+            return JsonResponse({"ok": False, "error": "Provider/model invalido."}, status=400)
+
+        service = AutomationPromptsExecutionService()
+        try:
+            created = service.create_test_automation(
+                name=name,
+                provider_id=provider_id,
+                model_id=model_id,
+            )
+        except AutomationPromptsExecutionServiceError as exc:
+            return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "automation": {
+                    "automation_id": str(created.automation_id),
+                    "automation_name": created.automation_name,
+                    "automation_slug": created.automation_slug,
+                    "analysis_request_id": str(created.analysis_request_id),
+                    "provider_slug": created.provider_slug,
+                    "model_slug": created.model_slug,
+                    "is_test_automation": created.is_test_automation,
+                },
+            }
+        )
 
 
 @login_required

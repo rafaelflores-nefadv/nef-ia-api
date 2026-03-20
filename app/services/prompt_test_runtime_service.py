@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,6 +23,16 @@ class PromptTestRuntimeContext:
     analysis_request_id: uuid.UUID
     created_automation: bool
     created_analysis_request: bool
+
+
+@dataclass(slots=True, frozen=True)
+class PromptTestManualAutomationContext:
+    automation_id: uuid.UUID
+    automation_name: str
+    automation_slug: str | None
+    provider_slug: str
+    model_slug: str
+    analysis_request_id: uuid.UUID
 
 
 class PromptTestRuntimeService:
@@ -109,6 +120,84 @@ class PromptTestRuntimeService:
             analysis_request_id=analysis_request_id,
             created_automation=created_automation,
             created_analysis_request=created_analysis_request,
+        )
+
+    def create_manual_test_automation(
+        self,
+        *,
+        automation_name: str,
+        provider_slug: str,
+        model_slug: str,
+    ) -> PromptTestManualAutomationContext:
+        normalized_name = str(automation_name or "").strip()
+        if not normalized_name:
+            raise AppException(
+                "Automation name is required.",
+                status_code=422,
+                code="invalid_test_automation_name",
+            )
+        normalized_provider = str(provider_slug or "").strip().lower()
+        normalized_model = str(model_slug or "").strip().lower()
+        if not normalized_provider or not normalized_model:
+            raise AppException(
+                "Provider/model runtime is required to create test automation.",
+                status_code=422,
+                code="invalid_test_automation_runtime",
+            )
+
+        automation_columns = self._get_table_columns_metadata("automations")
+        if not automation_columns:
+            raise AppException(
+                "Shared table 'automations' is unavailable for test automation creation.",
+                status_code=500,
+                code="test_prompt_runtime_unavailable",
+            )
+        analysis_columns = self._get_table_columns_metadata("analysis_requests")
+        if not analysis_columns:
+            raise AppException(
+                "Shared table 'analysis_requests' is unavailable for test automation creation.",
+                status_code=500,
+                code="test_prompt_runtime_unavailable",
+            )
+
+        created_row = self._create_manual_test_automation_row(
+            name=normalized_name,
+            provider_slug=normalized_provider,
+            model_slug=normalized_model,
+            automations_columns=automation_columns,
+        )
+        automation_id = self._coerce_uuid(created_row.get("id"))
+        if automation_id is None:
+            raise AppException(
+                "Created test automation has invalid identifier.",
+                status_code=500,
+                code="test_prompt_runtime_invalid",
+            )
+        self._ensure_automation_active(
+            automation_id=automation_id,
+            automations_columns=automation_columns,
+        )
+
+        analysis_row = self._create_analysis_request_for_automation(
+            automation_id=automation_id,
+            analysis_columns=analysis_columns,
+            apply_file_defaults=True,
+        )
+        analysis_request_id = self._coerce_uuid(analysis_row.get("id"))
+        if analysis_request_id is None:
+            raise AppException(
+                "Created analysis_request has invalid identifier.",
+                status_code=500,
+                code="test_prompt_runtime_invalid",
+            )
+
+        return PromptTestManualAutomationContext(
+            automation_id=automation_id,
+            automation_name=str(created_row.get("name") or normalized_name).strip() or normalized_name,
+            automation_slug=self._clean_text_value(created_row.get("slug")),
+            provider_slug=normalized_provider,
+            model_slug=normalized_model,
+            analysis_request_id=analysis_request_id,
         )
 
     def _find_technical_automation(
@@ -226,6 +315,90 @@ class PromptTestRuntimeService:
             )
         return inserted_row
 
+    def _create_manual_test_automation_row(
+        self,
+        *,
+        name: str,
+        provider_slug: str,
+        model_slug: str,
+        automations_columns: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        automation_id = uuid.uuid4()
+        resolved_slug = self._build_test_automation_slug(
+            automation_name=name,
+            automations_columns=automations_columns,
+        )
+        values: dict[str, Any] = {}
+
+        if "id" in automations_columns:
+            values["id"] = automation_id
+        if "name" in automations_columns:
+            values["name"] = name
+        if "slug" in automations_columns and resolved_slug is not None:
+            values["slug"] = resolved_slug
+        if "is_active" in automations_columns:
+            values["is_active"] = True
+        if "is_test" in automations_columns:
+            values["is_test"] = True
+        if "created_at" in automations_columns:
+            values["created_at"] = now
+        if "updated_at" in automations_columns:
+            values["updated_at"] = now
+        if "description" in automations_columns:
+            values["description"] = "Automacao criada manualmente para execucao de prompt de teste."
+
+        provider_column = self._first_existing_column(
+            automations_columns,
+            ["provider_slug", "provider", "ai_provider_slug", "ai_provider", "llm_provider"],
+        )
+        model_column = self._first_existing_column(
+            automations_columns,
+            ["model_slug", "model", "ai_model_slug", "ai_model", "llm_model"],
+        )
+        if provider_column:
+            values[provider_column] = provider_slug
+        if model_column:
+            values[model_column] = model_slug
+
+        required_columns = self._required_columns_without_default(automations_columns)
+        for column_name in sorted(required_columns):
+            if column_name in values:
+                continue
+            guessed = self._guess_value_for_required_column(
+                table_name="automations",
+                column_name=column_name,
+                column_meta=automations_columns[column_name],
+                now=now,
+                automation_id=automation_id,
+                automation_name=name,
+                automation_slug=resolved_slug or "",
+            )
+            if guessed is None:
+                raise AppException(
+                    "Unable to create test automation due to unsupported shared schema requirements.",
+                    status_code=500,
+                    code="test_prompt_runtime_schema_incompatible",
+                    details={"missing_column": column_name},
+                )
+            values[column_name] = guessed
+
+        inserted_row = self._insert_row(
+            table_name="automations",
+            values=values,
+            select_columns=self._automation_select_columns(automations_columns),
+            row_id_hint=automation_id,
+            error_code="test_prompt_runtime_autocreate_failed",
+            error_message="Failed to create test automation in shared database.",
+        )
+        if inserted_row is None:
+            raise AppException(
+                "Failed to read test automation after creation.",
+                status_code=500,
+                code="test_prompt_runtime_invalid",
+            )
+        return inserted_row
+
     def _ensure_automation_active(
         self,
         *,
@@ -284,6 +457,7 @@ class PromptTestRuntimeService:
         *,
         automation_id: uuid.UUID,
         analysis_columns: dict[str, dict[str, Any]],
+        apply_file_defaults: bool = False,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         request_id = uuid.uuid4()
@@ -297,6 +471,11 @@ class PromptTestRuntimeService:
             values["created_at"] = now
         if "updated_at" in analysis_columns:
             values["updated_at"] = now
+        if apply_file_defaults:
+            self._apply_analysis_request_file_defaults(
+                values=values,
+                analysis_columns=analysis_columns,
+            )
 
         required_columns = self._required_columns_without_default(analysis_columns)
         for column_name in sorted(required_columns):
@@ -483,6 +662,117 @@ class PromptTestRuntimeService:
             return None
         return {"provider_slug": provider_slug, "model_slug": model_slug}
 
+    def _build_test_automation_slug(
+        self,
+        *,
+        automation_name: str,
+        automations_columns: dict[str, dict[str, Any]],
+    ) -> str | None:
+        if "slug" not in automations_columns:
+            return None
+        base_slug = self._slugify_text(automation_name)
+        if not base_slug:
+            base_slug = "prompt-teste"
+        prefix = "test-prompt-"
+        candidate = f"{prefix}{base_slug}".strip("-")
+        candidate = candidate[:100].strip("-")
+        if not candidate:
+            candidate = "test-prompt-automation"
+        if not self._automation_slug_exists(candidate):
+            return candidate
+        for idx in range(2, 500):
+            suffix = f"-{idx}"
+            shortened = candidate[: max(1, 100 - len(suffix))].rstrip("-")
+            current = f"{shortened}{suffix}"
+            if not self._automation_slug_exists(current):
+                return current
+        return f"test-prompt-{uuid.uuid4().hex[:12]}"
+
+    def _automation_slug_exists(self, slug: str) -> bool:
+        stmt = text(
+            """
+            SELECT 1
+            FROM automations
+            WHERE lower(slug) = :slug
+            LIMIT 1
+            """
+        )
+        row = self.shared_session.execute(stmt, {"slug": str(slug or "").strip().lower()}).first()
+        return row is not None
+
+    def _apply_analysis_request_file_defaults(
+        self,
+        *,
+        values: dict[str, Any],
+        analysis_columns: dict[str, dict[str, Any]],
+    ) -> None:
+        allowed_extensions = ["xlsx", "csv", "txt", "pdf"]
+        extension_csv = ",".join(allowed_extensions)
+        allowed_mime_types = [
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "text/csv",
+            "text/plain",
+            "application/pdf",
+        ]
+
+        for key in ["input_type", "request_input_type", "source_input_type"]:
+            if key in analysis_columns:
+                values[key] = "file"
+                break
+
+        for key in [
+            "allowed_extensions",
+            "accepted_extensions",
+            "file_extensions",
+            "allowed_file_extensions",
+            "supported_extensions",
+            "extensions",
+        ]:
+            if key not in analysis_columns:
+                continue
+            values[key] = self._adapt_list_value_for_column(
+                values=allowed_extensions,
+                fallback_csv=extension_csv,
+                column_meta=analysis_columns[key],
+            )
+            break
+
+        for key in [
+            "allowed_mime_types",
+            "accepted_mime_types",
+            "mime_types",
+            "supported_mime_types",
+        ]:
+            if key not in analysis_columns:
+                continue
+            values[key] = self._adapt_list_value_for_column(
+                values=allowed_mime_types,
+                fallback_csv=",".join(allowed_mime_types),
+                column_meta=analysis_columns[key],
+            )
+            break
+
+        for key in ["file_required", "requires_file", "is_file_required"]:
+            if key in analysis_columns:
+                values[key] = True
+                break
+
+    @staticmethod
+    def _adapt_list_value_for_column(
+        *,
+        values: list[str],
+        fallback_csv: str,
+        column_meta: dict[str, Any],
+    ) -> Any:
+        data_type = str(column_meta.get("data_type") or "").strip().lower()
+        udt_name = str(column_meta.get("udt_name") or "").strip().lower()
+        merged = f"{data_type} {udt_name}".strip()
+        if "array" in merged or udt_name.startswith("_"):
+            return values
+        if "json" in merged:
+            return values
+        return fallback_csv
+
     def _get_table_columns_metadata(self, table_name: str) -> dict[str, dict[str, Any]]:
         stmt = text(
             """
@@ -508,6 +798,11 @@ class PromptTestRuntimeService:
             }
             for row in rows
         }
+
+    @staticmethod
+    def _clean_text_value(value: Any) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
 
     @staticmethod
     def _configured_automation_id() -> uuid.UUID | None:
@@ -543,3 +838,9 @@ class PromptTestRuntimeService:
             if candidate in columns:
                 return candidate
         return None
+
+    @staticmethod
+    def _slugify_text(value: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower())
+        normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
+        return normalized

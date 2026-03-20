@@ -13,6 +13,7 @@ class SharedAutomationRuntimeRecord:
     prompt_text: str
     prompt_version: int
     automation_slug: str | None
+    is_test_automation: bool | None
     provider_slug: str | None
     model_slug: str | None
 
@@ -20,6 +21,8 @@ class SharedAutomationRuntimeRecord:
 @dataclass(slots=True)
 class SharedAutomationTargetRecord:
     automation_id: uuid.UUID
+    automation_slug: str | None
+    is_test_automation: bool | None
     provider_slug: str | None
     model_slug: str | None
 
@@ -76,6 +79,12 @@ class SharedAutomationRepository:
             available_columns=automation_columns,
             candidates=["slug", "automation_slug", "key", "code"],
         )
+        is_test_expr, _ = self._build_runtime_expr(
+            table_alias="a",
+            available_columns=automation_columns,
+            candidates=["is_test", "test_mode", "is_testing", "is_sandbox"],
+            default_sql="NULL::boolean",
+        )
 
         runtime_stmt = text(
             f"""
@@ -84,6 +93,7 @@ class SharedAutomationRepository:
                 ap.prompt_text,
                 ap.version AS prompt_version,
                 {automation_slug_expr} AS automation_slug,
+                {is_test_expr} AS is_test_automation,
                 COALESCE({prompt_provider_expr}, {automation_provider_expr}) AS provider_slug,
                 COALESCE({prompt_model_expr}, {automation_model_expr}) AS model_slug
             FROM automation_prompts ap
@@ -102,12 +112,24 @@ class SharedAutomationRepository:
             prompt_text=str(row["prompt_text"]),
             prompt_version=int(row["prompt_version"]),
             automation_slug=self._clean_runtime_value(row.get("automation_slug")),
+            is_test_automation=self._coerce_runtime_bool(row.get("is_test_automation")),
             provider_slug=self._clean_runtime_value(row.get("provider_slug")),
             model_slug=self._clean_runtime_value(row.get("model_slug")),
         )
 
     def get_runtime_target_for_automation(self, automation_id: uuid.UUID) -> SharedAutomationTargetRecord | None:
         automation_columns = self._get_table_columns("automations")
+        slug_expr, _ = self._build_runtime_expr(
+            table_alias="a",
+            available_columns=automation_columns,
+            candidates=["slug", "automation_slug", "key", "code"],
+        )
+        is_test_expr, _ = self._build_runtime_expr(
+            table_alias="a",
+            available_columns=automation_columns,
+            candidates=["is_test", "test_mode", "is_testing", "is_sandbox"],
+            default_sql="NULL::boolean",
+        )
         provider_expr, _ = self._build_runtime_expr(
             table_alias="a",
             available_columns=automation_columns,
@@ -122,6 +144,8 @@ class SharedAutomationRepository:
             f"""
             SELECT
                 a.id AS automation_id,
+                {slug_expr} AS automation_slug,
+                {is_test_expr} AS is_test_automation,
                 {provider_expr} AS provider_slug,
                 {model_expr} AS model_slug
             FROM automations a
@@ -134,6 +158,8 @@ class SharedAutomationRepository:
             return None
         return SharedAutomationTargetRecord(
             automation_id=uuid.UUID(str(row["automation_id"])),
+            automation_slug=self._clean_runtime_value(row.get("automation_slug")),
+            is_test_automation=self._coerce_runtime_bool(row.get("is_test_automation")),
             provider_slug=self._clean_runtime_value(row.get("provider_slug")),
             model_slug=self._clean_runtime_value(row.get("model_slug")),
         )
@@ -151,11 +177,17 @@ class SharedAutomationRepository:
         return {str(column_name) for column_name in rows}
 
     @staticmethod
-    def _build_runtime_expr(*, table_alias: str, available_columns: set[str], candidates: list[str]) -> tuple[str, str | None]:
+    def _build_runtime_expr(
+        *,
+        table_alias: str,
+        available_columns: set[str],
+        candidates: list[str],
+        default_sql: str = "NULL::text",
+    ) -> tuple[str, str | None]:
         for candidate in candidates:
             if candidate in available_columns:
                 return f"{table_alias}.{candidate}", candidate
-        return "NULL::text", None
+        return default_sql, None
 
     @staticmethod
     def _clean_runtime_value(value: object | None) -> str | None:
@@ -163,3 +195,16 @@ class SharedAutomationRepository:
             return None
         normalized = str(value).strip()
         return normalized or None
+
+    @staticmethod
+    def _coerce_runtime_bool(value: object | None) -> bool | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        normalized = str(value).strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y"}:
+            return True
+        if normalized in {"0", "false", "f", "no", "n"}:
+            return False
+        return None
