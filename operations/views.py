@@ -1,12 +1,22 @@
+from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Count, Q
+from django.shortcuts import redirect
+from django.urls import reverse_lazy
 from django.utils import timezone
-from django.views.generic import TemplateView
+from django.views.generic import FormView, ListView, TemplateView
 
+from core.services.automation_execution_settings_api_service import (
+    AutomationExecutionSettingReadItem,
+    AutomationExecutionSettingsAPIService,
+    AutomationExecutionSettingsAPIServiceError,
+)
 from core.services.health_service import get_operational_health
 from credentials.models import ProviderCredential
 from models_catalog.models import ProviderModel
 from providers.models import Provider
+
+from .forms import AutomationExecutionProfileForm
 
 
 class OperationsStatusView(LoginRequiredMixin, TemplateView):
@@ -54,8 +64,8 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
 
         context.update(
             {
-                "page_title": "Opera\u00e7\u00f5es",
-                "page_subtitle": "Vis\u00e3o consolidada do status operacional da plataforma.",
+                "page_title": "Operacoes",
+                "page_subtitle": "Visao consolidada do status operacional da plataforma.",
                 "active_menu": "operacoes",
                 "summary_cards": [
                     {"label": "Total de providers", "value": providers_total},
@@ -116,7 +126,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
             alerts.append(
                 {
                     "level": "danger",
-                    "message": "FastAPI indispon\u00edvel. Exibindo dados de sa\u00fade com fallback.",
+                    "message": "FastAPI indisponivel. Exibindo dados de saude com fallback.",
                 }
             )
         elif health["overall"]["status"] == "degraded":
@@ -131,7 +141,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
             alerts.append(
                 {
                     "level": "warning",
-                    "message": f"Provider {provider.name} est\u00e1 ativo, mas sem modelos ativos.",
+                    "message": f"Provider {provider.name} esta ativo, mas sem modelos ativos.",
                 }
             )
 
@@ -151,7 +161,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
                 {
                     "level": "warning",
                     "message": (
-                        f"Provider {provider.name} est\u00e1 ativo, mas sem credenciais ativas."
+                        f"Provider {provider.name} esta ativo, mas sem credenciais ativas."
                     ),
                 }
             )
@@ -194,7 +204,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
                 {
                     "level": "warning",
                     "message": (
-                        "Existem providers sem configura\u00e7\u00e3o m\u00ednima para opera\u00e7\u00e3o."
+                        "Existem providers sem configuracao minima para operacao."
                     ),
                 }
             )
@@ -203,8 +213,111 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
             alerts.append(
                 {
                     "level": "success",
-                    "message": "Nenhum alerta operacional cr\u00edtico no momento.",
+                    "message": "Nenhum alerta operacional critico no momento.",
                 }
             )
 
         return alerts
+
+
+class AutomationExecutionSettingsListView(LoginRequiredMixin, ListView):
+    template_name = "operations/execution_profiles_list.html"
+    context_object_name = "items"
+
+    def get_queryset(self):
+        payload = AutomationExecutionSettingsAPIService().list_settings()
+        self.integration_source = payload["source"]
+        self.integration_warnings = payload["warnings"]
+        return payload["items"]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            {
+                "page_title": "Perfis por automacao",
+                "page_subtitle": "Configuracao administrativa persistida de perfil operacional por automacao.",
+                "active_menu": "operacoes_perfis",
+                "integration_source": getattr(self, "integration_source", "unavailable"),
+                "integration_warnings": getattr(self, "integration_warnings", []),
+            }
+        )
+        return context
+
+
+class AutomationExecutionSettingsUpdateView(LoginRequiredMixin, FormView):
+    form_class = AutomationExecutionProfileForm
+    template_name = "operations/execution_profile_form.html"
+    success_url = reverse_lazy("operations:execution_profiles")
+    setting_item: AutomationExecutionSettingReadItem
+
+    def dispatch(self, request, *args, **kwargs):
+        self.automation_id = kwargs["automation_id"]
+        service = AutomationExecutionSettingsAPIService()
+        try:
+            self.setting_item = service.get_setting(automation_id=self.automation_id)
+        except AutomationExecutionSettingsAPIServiceError as exc:
+            messages.error(request, str(exc))
+            return redirect("operations:execution_profiles")
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_initial(self):
+        initial = super().get_initial()
+        overrides = dict(self.setting_item.persisted_limits_overrides or {})
+        initial.update(
+            {
+                "execution_profile": (
+                    self.setting_item.persisted_execution_profile
+                    or self.setting_item.resolved_execution_profile
+                ),
+                "is_active": (
+                    True
+                    if self.setting_item.persisted_is_active is None
+                    else bool(self.setting_item.persisted_is_active)
+                ),
+                "max_execution_rows": overrides.get("max_execution_rows"),
+                "max_provider_calls": overrides.get("max_provider_calls"),
+                "max_text_chunks": overrides.get("max_text_chunks"),
+                "max_tabular_row_characters": overrides.get("max_tabular_row_characters"),
+                "max_execution_seconds": overrides.get("max_execution_seconds"),
+                "max_context_characters": overrides.get("max_context_characters"),
+                "max_context_file_characters": overrides.get("max_context_file_characters"),
+                "max_prompt_characters": overrides.get("max_prompt_characters"),
+            }
+        )
+        return initial
+
+    def form_valid(self, form):
+        cleaned = form.cleaned_data
+        service = AutomationExecutionSettingsAPIService()
+        try:
+            self.setting_item = service.update_setting(
+                automation_id=self.automation_id,
+                execution_profile=cleaned["execution_profile"],
+                is_active=bool(cleaned.get("is_active", False)),
+                max_execution_rows=cleaned.get("max_execution_rows"),
+                max_provider_calls=cleaned.get("max_provider_calls"),
+                max_text_chunks=cleaned.get("max_text_chunks"),
+                max_tabular_row_characters=cleaned.get("max_tabular_row_characters"),
+                max_execution_seconds=cleaned.get("max_execution_seconds"),
+                max_context_characters=cleaned.get("max_context_characters"),
+                max_context_file_characters=cleaned.get("max_context_file_characters"),
+                max_prompt_characters=cleaned.get("max_prompt_characters"),
+            )
+        except AutomationExecutionSettingsAPIServiceError as exc:
+            form.add_error(None, str(exc))
+            return self.form_invalid(form)
+
+        messages.success(self.request, "Configuracao operacional atualizada com sucesso.")
+        return redirect(self.get_success_url())
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            {
+                "page_title": "Editar perfil operacional",
+                "page_subtitle": "Persistencia por automacao com fallback ativo por env/config.",
+                "active_menu": "operacoes_perfis",
+                "setting": self.setting_item,
+            }
+        )
+        return context

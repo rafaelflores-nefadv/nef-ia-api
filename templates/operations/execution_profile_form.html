@@ -1,0 +1,122 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "operations:execution_profiles" as profiles_list_url %}
+{% include "includes/page_header.html" with header_title="Editar perfil operacional" header_subtitle=page_subtitle breadcrumb_parent_label="Perfis por automacao" breadcrumb_parent_url=profiles_list_url breadcrumb_current="Editar perfil" %}
+
+<section class="panel-card">
+    <div class="border rounded-3 p-3 bg-light-subtle mb-3">
+        <div class="row g-2">
+            <div class="col-12 col-lg-8">
+                <small class="text-secondary d-block">Automacao</small>
+                <strong>{{ setting.automation_name }}</strong>
+                <div class="admin-note"><code>{{ setting.automation_id }}</code></div>
+            </div>
+            <div class="col-12 col-lg-4">
+                <small class="text-secondary d-block">Origem resolvida atual</small>
+                <span class="status-pill {{ setting.source_css_class }}">{{ setting.source_label }}</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="alert alert-info" role="alert">
+        Fallback por env/config permanece ativo quando nao houver configuracao persistida ativa para a automacao.
+    </div>
+
+    {% if form.non_field_errors %}
+        <div class="alert alert-danger" role="alert">
+            {% for error in form.non_field_errors %}
+                {{ error }}
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <form method="post" novalidate>
+        {% csrf_token %}
+
+        <div class="row g-3">
+            <div class="col-12 col-lg-4">
+                <label for="{{ form.execution_profile.id_for_label }}" class="form-label fw-semibold">{{ form.execution_profile.label }}</label>
+                {{ form.execution_profile }}
+                {% for error in form.execution_profile.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+            <div class="col-12 col-lg-4 align-self-end">
+                <div class="form-check form-switch mb-2">
+                    {{ form.is_active }}
+                    <label for="{{ form.is_active.id_for_label }}" class="form-check-label">{{ form.is_active.label }}</label>
+                </div>
+                {% for error in form.is_active.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <hr class="my-4">
+        <h5 class="mb-3">Overrides operacionais (opcional)</h5>
+        <p class="admin-note mb-3">
+            Campos vazios usam os limites base do perfil. Valores acima do hard limit global sao rejeitados.
+        </p>
+
+        <div class="row g-3">
+            <div class="col-12 col-lg-4">
+                <label for="{{ form.max_execution_rows.id_for_label }}" class="form-label">{{ form.max_execution_rows.label }}</label>
+                {{ form.max_execution_rows }}
+            </div>
+            <div class="col-12 col-lg-4">
+                <label for="{{ form.max_provider_calls.id_for_label }}" class="form-label">{{ form.max_provider_calls.label }}</label>
+                {{ form.max_provider_calls }}
+            </div>
+            <div class="col-12 col-lg-4">
+                <label for="{{ form.max_text_chunks.id_for_label }}" class="form-label">{{ form.max_text_chunks.label }}</label>
+                {{ form.max_text_chunks }}
+            </div>
+            <div class="col-12 col-lg-4">
+                <label for="{{ form.max_tabular_row_characters.id_for_label }}" class="form-label">{{ form.max_tabular_row_characters.label }}</label>
+                {{ form.max_tabular_row_characters }}
+            </div>
+            <div class="col-12 col-lg-4">
+                <label for="{{ form.max_execution_seconds.id_for_label }}" class="form-label">{{ form.max_execution_seconds.label }}</label>
+                {{ form.max_execution_seconds }}
+            </div>
+            <div class="col-12 col-lg-4">
+                <label for="{{ form.max_context_characters.id_for_label }}" class="form-label">{{ form.max_context_characters.label }}</label>
+                {{ form.max_context_characters }}
+            </div>
+            <div class="col-12 col-lg-4">
+                <label for="{{ form.max_context_file_characters.id_for_label }}" class="form-label">{{ form.max_context_file_characters.label }}</label>
+                {{ form.max_context_file_characters }}
+            </div>
+            <div class="col-12 col-lg-4">
+                <label for="{{ form.max_prompt_characters.id_for_label }}" class="form-label">{{ form.max_prompt_characters.label }}</label>
+                {{ form.max_prompt_characters }}
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 mt-4">
+            <button type="submit" class="btn btn-dark">Salvar configuracao</button>
+            <a href="{{ profiles_list_url }}" class="btn btn-outline-secondary">Voltar</a>
+        </div>
+    </form>
+
+    <hr class="my-4">
+    <h6 class="mb-2">Limites resolvidos atuais</h6>
+    <div class="row g-2">
+        {% for key, value in setting.resolved_limits.items %}
+            <div class="col-12 col-lg-4">
+                <div class="border rounded-3 p-2">
+                    <small class="text-secondary d-block">{{ key }}</small>
+                    <strong>{{ value }}</strong>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+
+    {% if setting.hard_clamped_fields %}
+        <div class="alert alert-warning mt-3 mb-0" role="alert">
+            Este perfil possui ajustes por hard limit global: {{ setting.hard_clamped_fields|join:", " }}.
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

@@ -26,6 +26,10 @@ class SharedAutomationRepository:
         stmt = select(Automation).where(Automation.id == automation_id)
         return self.session.execute(stmt).scalar_one_or_none()
 
+    def list_automations(self) -> list[Automation]:
+        stmt = select(Automation).order_by(Automation.name.asc(), Automation.id.asc())
+        return list(self.session.execute(stmt).scalars().all())
+
     def get_latest_prompt_for_automation(self, automation_id: uuid.UUID) -> AutomationPrompt | None:
         stmt = (
             select(AutomationPrompt)

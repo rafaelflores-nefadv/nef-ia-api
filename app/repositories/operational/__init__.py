@@ -1,5 +1,6 @@
 """Operational repositories (tables owned by IA API)."""
 
+from app.repositories.operational.automation_execution_settings_repository import AutomationExecutionSettingsRepository
 from app.repositories.operational.audit_repository import AuditLogRepository
 from app.repositories.operational.execution_file_repository import ExecutionFileRepository
 from app.repositories.operational.execution_input_file_repository import ExecutionInputFileRepository
@@ -16,6 +17,7 @@ from app.repositories.operational.usage_repository import ProviderUsageRepositor
 __all__ = [
     "ApiTokenRepository",
     "IntegrationTokenRepository",
+    "AutomationExecutionSettingsRepository",
     "ProviderRepository",
     "ProviderCredentialRepository",
     "ProviderModelRepository",

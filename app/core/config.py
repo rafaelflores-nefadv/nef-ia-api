@@ -1,3 +1,4 @@
+import json
 from functools import lru_cache
 from typing import Literal
 from urllib.parse import quote_plus
@@ -75,13 +76,48 @@ class Settings(BaseSettings):
     provider_timeout_seconds: int = 120
     anthropic_api_version: str = "2023-06-01"
     max_input_characters: int = 20000
+    max_context_characters: int = 12000
+    max_context_file_characters: int = 3500
+    max_prompt_characters: int = 20000
     max_tokens_per_execution: int = 10000
     max_cost_per_execution: float = 10.0
     max_retries: int = 3
+    max_execution_rows_hard_limit: int = 100000
+    max_provider_calls_hard_limit: int = 10000
+    max_text_chunks_hard_limit: int = 5000
+    max_tabular_row_characters_hard_limit: int = 50000
+    max_execution_seconds_hard_limit: int = 7200
+    max_job_retries_hard_limit: int = 20
     retry_backoff: int = 2
     retry_backoff_seconds: int = 2
     max_concurrent_executions: int = 4
     chunk_size_characters: int = 8000
+    execution_profile_default: str = "standard"
+    execution_profile_automation_overrides: dict[str, str] = Field(default_factory=dict)
+    execution_profile_standard_max_execution_rows: int = 25000
+    execution_profile_standard_max_provider_calls: int = 2500
+    execution_profile_standard_max_text_chunks: int = 1200
+    execution_profile_standard_max_tabular_row_characters: int = 12000
+    execution_profile_standard_max_execution_seconds: int = 1800
+    execution_profile_standard_max_context_characters: int = 8000
+    execution_profile_standard_max_context_file_characters: int = 2500
+    execution_profile_standard_max_prompt_characters: int = 12000
+    execution_profile_heavy_max_execution_rows: int = 60000
+    execution_profile_heavy_max_provider_calls: int = 6000
+    execution_profile_heavy_max_text_chunks: int = 3000
+    execution_profile_heavy_max_tabular_row_characters: int = 30000
+    execution_profile_heavy_max_execution_seconds: int = 5400
+    execution_profile_heavy_max_context_characters: int = 11000
+    execution_profile_heavy_max_context_file_characters: int = 3200
+    execution_profile_heavy_max_prompt_characters: int = 18000
+    execution_profile_extended_max_execution_rows: int = 90000
+    execution_profile_extended_max_provider_calls: int = 9000
+    execution_profile_extended_max_text_chunks: int = 4500
+    execution_profile_extended_max_tabular_row_characters: int = 45000
+    execution_profile_extended_max_execution_seconds: int = 6600
+    execution_profile_extended_max_context_characters: int = 12000
+    execution_profile_extended_max_context_file_characters: int = 3500
+    execution_profile_extended_max_prompt_characters: int = 20000
     alert_failure_streak_threshold: int = 5
     alert_cost_threshold: float = 100.0
     alert_queue_stuck_minutes: int = 15
@@ -146,6 +182,57 @@ class Settings(BaseSettings):
         if not value:
             return []
         return [item.strip() for item in value.split(",") if item.strip()]
+
+    @field_validator("execution_profile_automation_overrides", mode="before")
+    @classmethod
+    def parse_execution_profile_overrides(cls, value: str | dict[str, str] | None) -> dict[str, str]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return {
+                str(key).strip().lower(): str(profile).strip().lower()
+                for key, profile in value.items()
+                if str(key).strip() and str(profile).strip()
+            }
+        raw = str(value).strip()
+        if not raw:
+            return {}
+
+        parsed: dict[str, str] = {}
+        if raw.startswith("{") and raw.endswith("}"):
+            try:
+                loaded = json.loads(raw)
+            except Exception:
+                loaded = {}
+            if isinstance(loaded, dict):
+                for key, profile in loaded.items():
+                    key_str = str(key).strip().lower()
+                    profile_str = str(profile).strip().lower()
+                    if key_str and profile_str:
+                        parsed[key_str] = profile_str
+                return parsed
+
+        for item in raw.split(","):
+            token = item.strip()
+            if not token:
+                continue
+            if "=" in token:
+                key, profile = token.split("=", 1)
+            elif ":" in token:
+                key, profile = token.split(":", 1)
+            else:
+                continue
+            key_str = str(key).strip().lower()
+            profile_str = str(profile).strip().lower()
+            if key_str and profile_str:
+                parsed[key_str] = profile_str
+        return parsed
+
+    @field_validator("execution_profile_default", mode="before")
+    @classmethod
+    def normalize_execution_profile_default(cls, value: str | None) -> str:
+        normalized = str(value or "").strip().lower()
+        return normalized or "standard"
 
     @model_validator(mode="after")
     def validate_security_configuration(self) -> "Settings":

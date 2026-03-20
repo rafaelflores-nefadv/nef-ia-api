@@ -103,3 +103,27 @@ def test_classify_execution_error_assigns_category_and_phase() -> None:
     assert diagnostic.error_code == "tabular_file_parse_error"
     assert diagnostic.error_category == "input_read_parse"
     assert diagnostic.failure_phase == "execution.pipeline.file_parse"
+
+
+def test_classify_execution_error_maps_hard_limits_to_system_limit() -> None:
+    exc = AppException(
+        "Execution exceeded hard limit of provider calls.",
+        status_code=422,
+        code="provider_calls_hard_limit_exceeded",
+    )
+    diagnostic = classify_execution_error(exc, failure_phase="execution.pipeline.provider_call")
+    assert diagnostic.error_code == "provider_calls_hard_limit_exceeded"
+    assert diagnostic.error_category == "system_limit"
+    assert diagnostic.failure_phase == "execution.pipeline.provider_call"
+
+
+def test_classify_execution_error_maps_profile_limits_to_system_limit() -> None:
+    exc = AppException(
+        "Execution exceeded profile limit of provider calls.",
+        status_code=422,
+        code="provider_calls_profile_limit_exceeded",
+    )
+    diagnostic = classify_execution_error(exc, failure_phase="execution.pipeline.provider_call")
+    assert diagnostic.error_code == "provider_calls_profile_limit_exceeded"
+    assert diagnostic.error_category == "system_limit"
+    assert diagnostic.failure_phase == "execution.pipeline.provider_call"

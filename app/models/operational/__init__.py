@@ -1,4 +1,5 @@
 from app.models.operational.audit import DjangoAiAuditLog
+from app.models.operational.execution_profile import DjangoAiAutomationExecutionSetting
 from app.models.operational.auth import DjangoAiRole, DjangoAiUser
 from app.models.operational.files import DjangoAiExecutionFile, DjangoAiExecutionInputFile, DjangoAiRequestFile
 from app.models.operational.provider import (
@@ -32,6 +33,7 @@ __all__ = [
     "DjangoAiRequestFile",
     "DjangoAiExecutionFile",
     "DjangoAiExecutionInputFile",
+    "DjangoAiAutomationExecutionSetting",
     "DjangoAiQueueJob",
     "DjangoAiAuditLog",
 ]

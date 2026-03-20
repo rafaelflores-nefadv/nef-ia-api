@@ -32,6 +32,10 @@
             <i class="bi bi-gear-wide-connected"></i>
             <span>Operações</span>
         </a>
+        <a class="sidebar-link {% if active_menu == 'operacoes_perfis' %}active{% endif %}" href="{% url 'operations:execution_profiles' %}">
+            <i class="bi bi-sliders2"></i>
+            <span>Perfis Execução</span>
+        </a>
         <a class="sidebar-link {% if active_menu == 'execucoes' %}active{% endif %}" href="{% url 'executions:list' %}">
             <i class="bi bi-play-circle"></i>
             <span>Execuções</span>

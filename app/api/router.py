@@ -4,6 +4,7 @@ from app.api.routes import (
     admin_auth,
     admin_catalog,
     admin_execution_files,
+    admin_execution_profiles,
     admin_metrics,
     admin_prompt_tests,
     admin_tokens,
@@ -23,6 +24,7 @@ api_router.include_router(admin_auth.router, prefix=f"{settings.api_prefix}/admi
 api_router.include_router(admin_tokens.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(admin_catalog.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(admin_execution_files.router, prefix=f"{settings.api_prefix}/admin")
+api_router.include_router(admin_execution_profiles.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(admin_metrics.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(admin_prompt_tests.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(files.router)

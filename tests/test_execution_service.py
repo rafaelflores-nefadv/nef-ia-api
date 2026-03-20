@@ -12,12 +12,14 @@ from app.integrations.providers.base import ProviderExecutionResult
 from app.models.operational import (
     DjangoAiApiToken,
     DjangoAiApiTokenPermission,
+    DjangoAiAutomationExecutionSetting,
     DjangoAiExecutionInputFile,
     DjangoAiQueueJob,
     DjangoAiRequestFile,
 )
 from app.models.shared import AnalysisExecution
 from app.services import execution_service as execution_module
+from app.services.execution_engine import EngineExecutionInput, ExecutionFileKind
 from app.services.execution_service import ExecutionService
 
 
@@ -120,6 +122,14 @@ class FakeExecutionInputRepository:
             return None
         matches.sort(key=lambda item: (int(getattr(item, "order_index", 0)), str(getattr(item, "created_at", ""))))
         return matches[0]
+
+
+class FakeAutomationExecutionSettingsRepository:
+    def __init__(self) -> None:
+        self.active_settings: dict[UUID, object] = {}
+
+    def get_active_by_automation_id(self, automation_id: UUID):  # type: ignore[no-untyped-def]
+        return self.active_settings.get(automation_id)
 
 
 class FakeSharedAnalysisRepository:
@@ -338,6 +348,7 @@ def _build_service(
     shared_exec_repo = FakeSharedExecutionRepository()
     service.request_files = FakeRequestFileRepository({request_file.id: request_file})  # type: ignore[assignment]
     service.execution_inputs = FakeExecutionInputRepository()  # type: ignore[assignment]
+    service.execution_profile_settings = FakeAutomationExecutionSettingsRepository()  # type: ignore[assignment]
     service.queue_jobs = queue_repo  # type: ignore[assignment]
     service.audit_logs = FakeAuditRepository()  # type: ignore[assignment]
     service.shared_analysis = FakeSharedAnalysisRepository(
@@ -1070,7 +1081,11 @@ def test_tabular_primary_with_text_context_applies_context_to_each_row(monkeypat
     assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
     assert len(provider_service.client.execute_calls) == 2
     assert all(
-        "Contexto global complementar" in call["prompt"] and "Contexto global de apoio" in call["prompt"]
+        "Contexto global complementar" in call["prompt"]
+        and "Contexto global de apoio" in call["prompt"]
+        and "[INSTRUCAO]" in call["prompt"]
+        and "[DADOS DA LINHA]" in call["prompt"]
+        and "[CONTEXTO]" in call["prompt"]
         for call in provider_service.client.execute_calls
     )
 
@@ -1260,3 +1275,471 @@ def test_processing_rejects_inconsistent_roles_without_primary() -> None:
     assert queue_repo.jobs[queue_job.id].job_status == ExecutionStatus.FAILED.value
     assert "exactly one primary file is required" in (queue_repo.jobs[queue_job.id].error_message or "").lower()
     assert len(provider_service.client.execute_calls) == 0
+
+
+def test_text_prompt_builder_uses_structured_sections() -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.txt", mime_type="text/plain")
+    service, _, _ = _build_service(analysis_request_id, automation_id, request_file)
+    execution_profile = service._resolve_execution_profile(automation_id=automation_id)
+
+    prompt = service._build_provider_prompt(
+        official_prompt="Resuma o documento de forma objetiva.",
+        file_content="Linha 1\n\nLinha 1\nLinha 2",
+        execution_profile=execution_profile,
+    )
+
+    assert prompt.startswith("[INSTRUCAO]")
+    assert "[CONTEXTO]" in prompt
+    assert "Arquivo de entrada para analise" in prompt
+    assert "Linha 1" in prompt
+
+
+def test_global_context_prioritizes_type_and_deduplicates_content(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.csv", mime_type="text/csv")
+    service, _, _ = _build_service(analysis_request_id, automation_id, request_file)
+    execution_profile = service._resolve_execution_profile(automation_id=automation_id)
+
+    context_inputs = [
+        EngineExecutionInput(
+            request_file_id=uuid4(),
+            role="context",
+            order_index=1,
+            file_name="ctx_raw.txt",
+            file_path="ctx/raw.txt",
+            mime_type="text/plain",
+            file_kind=ExecutionFileKind.TEXTUAL,
+            source="test",
+        ),
+        EngineExecutionInput(
+            request_file_id=uuid4(),
+            role="context",
+            order_index=1,
+            file_name="ctx_structured.json",
+            file_path="ctx/structured.json",
+            mime_type="application/json",
+            file_kind=ExecutionFileKind.TEXTUAL,
+            source="test",
+        ),
+        EngineExecutionInput(
+            request_file_id=uuid4(),
+            role="context",
+            order_index=2,
+            file_name="ctx_duplicate.log",
+            file_path="ctx/duplicate.log",
+            mime_type="text/plain",
+            file_kind=ExecutionFileKind.TEXTUAL,
+            source="test",
+        ),
+    ]
+
+    content_map = {
+        "ctx/raw.txt": "linha util\n\nlinha util\nlinha final",
+        "ctx/structured.json": '{"campo":"valor"}\n{"campo":"valor"}',
+        "ctx/duplicate.log": "linha util\nlinha final",
+    }
+    monkeypatch.setattr(
+        service,
+        "_read_input_file_content",
+        lambda **kwargs: content_map[str(kwargs.get("file_path") or "")],
+    )
+    monkeypatch.setattr(execution_module.settings, "max_context_file_characters", 5000)
+    monkeypatch.setattr(execution_module.settings, "max_context_characters", 5000)
+
+    context_text = service._build_global_context_text(
+        context_inputs=context_inputs,
+        execution_profile=execution_profile,
+    )
+    assert context_text is not None
+    assert context_text.find("ctx_structured.json") < context_text.find("ctx_raw.txt")
+    assert context_text.count("[Contexto ") == 2
+    assert "linha util\nlinha util" not in context_text
+
+
+def test_global_context_applies_per_file_and_total_limits(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.csv", mime_type="text/csv")
+    service, _, _ = _build_service(analysis_request_id, automation_id, request_file)
+    execution_profile = service._resolve_execution_profile(automation_id=automation_id)
+
+    context_inputs = [
+        EngineExecutionInput(
+            request_file_id=uuid4(),
+            role="context",
+            order_index=0,
+            file_name="ctx_a.txt",
+            file_path="ctx/a.txt",
+            mime_type="text/plain",
+            file_kind=ExecutionFileKind.TEXTUAL,
+            source="test",
+        ),
+        EngineExecutionInput(
+            request_file_id=uuid4(),
+            role="context",
+            order_index=1,
+            file_name="ctx_b.txt",
+            file_path="ctx/b.txt",
+            mime_type="text/plain",
+            file_kind=ExecutionFileKind.TEXTUAL,
+            source="test",
+        ),
+    ]
+
+    long_text_a = "palavra " * 120
+    long_text_b = "diferente " * 120
+    monkeypatch.setattr(
+        service,
+        "_read_input_file_content",
+        lambda **kwargs: (
+            long_text_a
+            if str(kwargs.get("file_path")) == "ctx/a.txt"
+            else long_text_b
+            if str(kwargs.get("file_path")) == "ctx/b.txt"
+            else ""
+        ),
+    )
+    monkeypatch.setattr(execution_module.settings, "max_context_file_characters", 140)
+    monkeypatch.setattr(execution_module.settings, "max_context_characters", 260)
+
+    context_text = service._build_global_context_text(
+        context_inputs=context_inputs,
+        execution_profile=execution_profile,
+    )
+    assert context_text is not None
+    assert len(context_text) <= 260
+    assert "contexto truncado para 140 caracteres" in context_text
+    assert "contexto truncado para 260 caracteres" in context_text
+
+
+def test_text_chunks_hard_limit_aborts_execution(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.txt", mime_type="text/plain")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(FakeProviderClient(modes=["success", "success", "success"]))
+    service.provider_service = provider_service  # type: ignore[assignment]
+
+    monkeypatch.setattr(service, "_read_input_file_content", lambda **_: "A" * 400)
+    monkeypatch.setattr(execution_module.settings, "chunk_size_characters", 100)
+    monkeypatch.setattr(execution_module.settings, "max_input_characters", 400)
+    monkeypatch.setattr(execution_module.settings, "max_text_chunks_hard_limit", 2)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.FAILED.value
+    assert queue_repo.jobs[queue_job.id].job_status == ExecutionStatus.FAILED.value
+    assert "hard limit of text chunks" in (queue_repo.jobs[queue_job.id].error_message or "").lower()
+    assert len(provider_service.client.execute_calls) == 0
+
+
+def test_execution_rows_hard_limit_aborts_tabular_execution(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(FakeProviderClient(modes=["success", "success", "success"]))
+    service.provider_service = provider_service  # type: ignore[assignment]
+
+    csv_payload = "conteudo\nlinha 1\nlinha 2\nlinha 3\n".encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+    monkeypatch.setattr(execution_module.settings, "max_execution_rows_hard_limit", 2)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.FAILED.value
+    assert queue_repo.jobs[queue_job.id].job_status == ExecutionStatus.FAILED.value
+    assert "hard limit of tabular rows" in (queue_repo.jobs[queue_job.id].error_message or "").lower()
+    assert len(provider_service.client.execute_calls) == 0
+
+
+def test_provider_calls_hard_limit_aborts_tabular_execution(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(FakeProviderClient(modes=["success", "success", "success"]))
+    service.provider_service = provider_service  # type: ignore[assignment]
+
+    csv_payload = "conteudo\nlinha 1\nlinha 2\nlinha 3\n".encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+    monkeypatch.setattr(execution_module.settings, "max_provider_calls_hard_limit", 1)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.FAILED.value
+    assert queue_repo.jobs[queue_job.id].job_status == ExecutionStatus.FAILED.value
+    assert "hard limit of provider calls" in (queue_repo.jobs[queue_job.id].error_message or "").lower()
+    assert len(provider_service.client.execute_calls) == 1
+
+
+def test_tabular_row_size_hard_limit_aborts_execution(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(FakeProviderClient(modes=["success"]))
+    service.provider_service = provider_service  # type: ignore[assignment]
+
+    csv_payload = "conteudo,campo\nlinha muito grande para o limite hard,valor adicional\n".encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+    monkeypatch.setattr(execution_module.settings, "max_tabular_row_characters_hard_limit", 10)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.FAILED.value
+    assert queue_repo.jobs[queue_job.id].job_status == ExecutionStatus.FAILED.value
+    assert "row exceeded hard character limit" in (queue_repo.jobs[queue_job.id].error_message or "").lower()
+    assert len(provider_service.client.execute_calls) == 0
+
+
+def test_execution_time_hard_limit_aborts_execution(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.txt", mime_type="text/plain")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(FakeProviderClient(modes=["success"]))
+    service.provider_service = provider_service  # type: ignore[assignment]
+    monkeypatch.setattr(service, "_read_input_file_content", lambda **_: "conteudo basico")
+    monkeypatch.setattr(execution_module.settings, "max_execution_seconds_hard_limit", 10)
+
+    timeline = [0.0, 20.0, 20.1, 20.2]
+
+    def _fake_perf_counter() -> float:
+        return timeline.pop(0) if timeline else 20.3
+
+    monkeypatch.setattr(execution_module, "perf_counter", _fake_perf_counter)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.FAILED.value
+    assert queue_repo.jobs[queue_job.id].job_status == ExecutionStatus.FAILED.value
+    assert "hard processing time limit" in (queue_repo.jobs[queue_job.id].error_message or "").lower()
+    assert len(provider_service.client.execute_calls) == 0
+
+
+def test_job_retries_hard_limit_marks_execution_failed(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.txt", mime_type="text/plain")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(FakeProviderClient(modes=["timeout"]))
+    service.provider_service = provider_service  # type: ignore[assignment]
+    monkeypatch.setattr(service, "_read_input_file_content", lambda **_: "conteudo basico")
+    monkeypatch.setattr(execution_module.settings, "max_retries", 10)
+    monkeypatch.setattr(execution_module.settings, "max_job_retries_hard_limit", 1)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+        retry_count=1,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.FAILED.value
+    assert queue_repo.jobs[queue_job.id].job_status == ExecutionStatus.FAILED.value
+    assert "hard retry limit" in (queue_repo.jobs[queue_job.id].error_message or "").lower()
+
+
+def test_execution_profile_uses_default_when_no_override(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.txt", mime_type="text/plain")
+    service, _, _ = _build_service(analysis_request_id, automation_id, request_file)
+
+    monkeypatch.setattr(execution_module.settings, "execution_profile_default", "standard")
+    monkeypatch.setattr(execution_module.settings, "execution_profile_automation_overrides", {})
+    monkeypatch.setattr(execution_module.settings, "execution_profile_standard_max_execution_rows", 25000)
+    monkeypatch.setattr(execution_module.settings, "max_execution_rows_hard_limit", 100000)
+
+    resolved = service._resolve_execution_profile(automation_id=automation_id)
+    assert resolved.name == "standard"
+    assert resolved.source == "env_default"
+    assert resolved.max_execution_rows == 25000
+
+
+def test_execution_profile_can_be_overridden_by_automation(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.txt", mime_type="text/plain")
+    service, _, _ = _build_service(analysis_request_id, automation_id, request_file)
+
+    monkeypatch.setattr(execution_module.settings, "execution_profile_default", "standard")
+    monkeypatch.setattr(
+        execution_module.settings,
+        "execution_profile_automation_overrides",
+        {str(automation_id).lower(): "heavy"},
+    )
+
+    resolved = service._resolve_execution_profile(automation_id=automation_id)
+    assert resolved.name == "heavy"
+    assert resolved.source == "env_automation_override"
+
+
+def test_execution_profile_limits_are_clamped_by_hard_limits(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.txt", mime_type="text/plain")
+    service, _, _ = _build_service(analysis_request_id, automation_id, request_file)
+
+    monkeypatch.setattr(execution_module.settings, "execution_profile_default", "extended")
+    monkeypatch.setattr(execution_module.settings, "execution_profile_extended_max_execution_rows", 250000)
+    monkeypatch.setattr(execution_module.settings, "max_execution_rows_hard_limit", 100000)
+
+    resolved = service._resolve_execution_profile(automation_id=automation_id)
+    assert resolved.max_execution_rows == 100000
+    assert "max_execution_rows" in resolved.hard_clamped_fields
+
+
+def test_profile_rows_limit_can_abort_before_hard_limit(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(FakeProviderClient(modes=["success", "success", "success"]))
+    service.provider_service = provider_service  # type: ignore[assignment]
+
+    csv_payload = "conteudo\nlinha 1\nlinha 2\nlinha 3\n".encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+    monkeypatch.setattr(execution_module.settings, "execution_profile_default", "standard")
+    monkeypatch.setattr(execution_module.settings, "execution_profile_automation_overrides", {})
+    monkeypatch.setattr(execution_module.settings, "execution_profile_standard_max_execution_rows", 2)
+    monkeypatch.setattr(execution_module.settings, "max_execution_rows_hard_limit", 100000)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.FAILED.value
+    assert queue_repo.jobs[queue_job.id].job_status == ExecutionStatus.FAILED.value
+    assert "profile limit of tabular rows" in (queue_repo.jobs[queue_job.id].error_message or "").lower()
+    assert len(provider_service.client.execute_calls) == 0
+
+
+def test_automation_override_profile_allows_heavier_tabular_workload(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(FakeProviderClient(modes=["success", "success", "success"]))
+    service.provider_service = provider_service  # type: ignore[assignment]
+
+    csv_payload = "conteudo\nlinha 1\nlinha 2\nlinha 3\n".encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+    monkeypatch.setattr(execution_module.settings, "execution_profile_default", "standard")
+    monkeypatch.setattr(
+        execution_module.settings,
+        "execution_profile_automation_overrides",
+        {str(automation_id).lower(): "heavy"},
+    )
+    monkeypatch.setattr(execution_module.settings, "execution_profile_standard_max_execution_rows", 2)
+    monkeypatch.setattr(execution_module.settings, "execution_profile_heavy_max_execution_rows", 10)
+    monkeypatch.setattr(execution_module.settings, "max_execution_rows_hard_limit", 100000)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    assert queue_repo.jobs[queue_job.id].job_status == ExecutionStatus.COMPLETED.value
+    assert len(provider_service.client.execute_calls) == 3
+
+
+def test_persisted_profile_has_precedence_over_env_override(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.txt", mime_type="text/plain")
+    service, _, _ = _build_service(analysis_request_id, automation_id, request_file)
+
+    monkeypatch.setattr(execution_module.settings, "execution_profile_default", "standard")
+    monkeypatch.setattr(
+        execution_module.settings,
+        "execution_profile_automation_overrides",
+        {str(automation_id).lower(): "extended"},
+    )
+    monkeypatch.setattr(execution_module.settings, "execution_profile_heavy_max_execution_rows", 33333)
+
+    persisted = DjangoAiAutomationExecutionSetting(
+        id=uuid4(),
+        automation_id=automation_id,
+        execution_profile="heavy",
+        is_active=True,
+    )
+    service.execution_profile_settings.active_settings[automation_id] = persisted  # type: ignore[attr-defined]
+
+    resolved = service._resolve_execution_profile(automation_id=automation_id)
+
+    assert resolved.name == "heavy"
+    assert resolved.source == "persisted_automation"
+    assert resolved.max_execution_rows == 33333
+    assert resolved.source_details["origin"] == "persisted_automation"
+
+
+def test_persisted_profile_override_is_applied_and_hard_clamped(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="entrada.txt", mime_type="text/plain")
+    service, _, _ = _build_service(analysis_request_id, automation_id, request_file)
+
+    monkeypatch.setattr(execution_module.settings, "execution_profile_default", "standard")
+    monkeypatch.setattr(execution_module.settings, "execution_profile_standard_max_execution_rows", 25000)
+    monkeypatch.setattr(execution_module.settings, "max_execution_rows_hard_limit", 100000)
+
+    persisted = DjangoAiAutomationExecutionSetting(
+        id=uuid4(),
+        automation_id=automation_id,
+        execution_profile="standard",
+        is_active=True,
+        max_execution_rows=120000,
+    )
+    service.execution_profile_settings.active_settings[automation_id] = persisted  # type: ignore[attr-defined]
+
+    resolved = service._resolve_execution_profile(automation_id=automation_id)
+
+    assert resolved.source == "persisted_automation"
+    assert resolved.persisted_overrides["max_execution_rows"] == 120000
+    assert resolved.max_execution_rows == 100000
+    assert "max_execution_rows" in resolved.hard_clamped_fields

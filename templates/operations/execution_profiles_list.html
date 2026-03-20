@@ -1,0 +1,103 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "operations:status" as operations_status_url %}
+{% include "includes/page_header.html" with header_title="Perfis por automacao" header_subtitle=page_subtitle breadcrumb_parent_label="Operacoes" breadcrumb_parent_url=operations_status_url breadcrumb_current="Perfis por automacao" %}
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    {% include "includes/data_origin_badge.html" with source=integration_source %}
+    {% if integration_source == "api" %}
+        <span class="admin-note">Leitura administrativa via FastAPI.</span>
+    {% else %}
+        <span class="admin-note">Integracao FastAPI indisponivel para esta tela.</span>
+    {% endif %}
+</div>
+
+{% if integration_warnings %}
+    <div class="alert alert-warning" role="alert">
+        <ul class="mb-0 ps-3">
+            {% for warning in integration_warnings %}
+                <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
+{% if items %}
+    <section class="panel-card p-0 overflow-hidden">
+        <div class="table-responsive">
+            <table class="table admin-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Automacao</th>
+                        <th>Status automacao</th>
+                        <th>Perfil persistido</th>
+                        <th>Perfil resolvido</th>
+                        <th>Origem resolvida</th>
+                        <th>Hard clamp</th>
+                        <th class="text-end">Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in items %}
+                        <tr>
+                            <td>
+                                <div class="fw-semibold">{{ item.automation_name }}</div>
+                                <small class="text-secondary"><code>{{ item.automation_id }}</code></small>
+                            </td>
+                            <td>
+                                {% if item.automation_is_active %}
+                                    <span class="status-pill status-success">Ativa</span>
+                                {% else %}
+                                    <span class="status-pill status-neutral">Inativa</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if item.persisted_setting_id %}
+                                    <div>
+                                        <span class="status-pill {% if item.persisted_is_active %}status-success{% else %}status-neutral{% endif %}">
+                                            {% if item.persisted_is_active %}Ativa{% else %}Inativa{% endif %}
+                                        </span>
+                                    </div>
+                                    <div class="mt-1"><code>{{ item.persisted_execution_profile }}</code></div>
+                                {% else %}
+                                    <span class="status-pill status-neutral">Nao configurado</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <code>{{ item.resolved_execution_profile }}</code>
+                                <div class="admin-note mt-1">
+                                    rows={{ item.resolved_limits.max_execution_rows|default:"-" }},
+                                    calls={{ item.resolved_limits.max_provider_calls|default:"-" }}
+                                </div>
+                            </td>
+                            <td>
+                                <span class="status-pill {{ item.source_css_class }}">{{ item.source_label }}</span>
+                                {% if item.resolved_profile_source_details.origin %}
+                                    <div class="admin-note mt-1">
+                                        origem tecnica: <code>{{ item.resolved_profile_source_details.origin }}</code>
+                                    </div>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if item.hard_clamped_fields %}
+                                    <span class="status-pill status-warning">{{ item.hard_clamped_fields|length }} ajuste(s)</span>
+                                {% else %}
+                                    <span class="status-pill status-success">Sem ajuste</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end">
+                                <a class="btn btn-sm btn-outline-secondary" href="{% url 'operations:execution_profile_edit' item.automation_id %}">
+                                    Editar
+                                </a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+{% else %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-sliders" empty_title="Nenhuma automacao retornada" empty_message="Nao foi possivel carregar automacoes/configuracoes via FastAPI para este ambiente." %}
+{% endif %}
+{% endblock %}

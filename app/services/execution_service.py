@@ -22,11 +22,18 @@ from app.integrations.queue.dispatcher import enqueue_execution_job
 from app.models.operational import (
     DjangoAiApiToken,
     DjangoAiApiTokenPermission,
+    DjangoAiAutomationExecutionSetting,
     DjangoAiAuditLog,
     DjangoAiExecutionInputFile,
     DjangoAiQueueJob,
 )
-from app.repositories.operational import AuditLogRepository, ExecutionInputFileRepository, QueueJobRepository, RequestFileRepository
+from app.repositories.operational import (
+    AuditLogRepository,
+    AutomationExecutionSettingsRepository,
+    ExecutionInputFileRepository,
+    QueueJobRepository,
+    RequestFileRepository,
+)
 from app.repositories.shared import SharedAnalysisRepository, SharedExecutionRepository
 from app.services.execution_engine import (
     ALLOWED_INPUT_ROLES,
@@ -72,7 +79,27 @@ TEXTUAL_MIME_HINTS = {
     "application/xml",
 }
 LEGACY_XLS_EXTENSION = ".xls"
-FATAL_TABULAR_ERROR_CODES = {"cost_limit_exceeded", "prompt_token_limit_exceeded"}
+HARD_LIMIT_ERROR_CODES = {
+    "execution_rows_hard_limit_exceeded",
+    "provider_calls_hard_limit_exceeded",
+    "text_chunks_hard_limit_exceeded",
+    "tabular_row_size_hard_limit_exceeded",
+    "execution_time_hard_limit_exceeded",
+    "job_retries_hard_limit_exceeded",
+}
+PROFILE_LIMIT_ERROR_CODES = {
+    "execution_rows_profile_limit_exceeded",
+    "provider_calls_profile_limit_exceeded",
+    "text_chunks_profile_limit_exceeded",
+    "tabular_row_size_profile_limit_exceeded",
+    "execution_time_profile_limit_exceeded",
+}
+FATAL_TABULAR_ERROR_CODES = {
+    "cost_limit_exceeded",
+    "prompt_token_limit_exceeded",
+    *HARD_LIMIT_ERROR_CODES,
+    *PROFILE_LIMIT_ERROR_CODES,
+}
 
 TABULAR_FIELD_ALIASES = {
     "conteudo": {
@@ -138,6 +165,26 @@ TABULAR_OUTPUT_COLUMNS = (
     "erro",
 )
 
+CONTEXT_STRUCTURED_EXTENSIONS = {".json", ".xml", ".yaml", ".yml", ".csv", ".tsv"}
+CONTEXT_RAW_EXTENSIONS = {".txt", ".md", ".log", ".pdf", ".html", ".htm", ".rtf"}
+PROMPT_SECTION_INSTRUCTION = "[INSTRUCAO]"
+PROMPT_SECTION_ROW_DATA = "[DADOS DA LINHA]"
+PROMPT_SECTION_CONTEXT = "[CONTEXTO]"
+
+PROFILE_STANDARD = "standard"
+PROFILE_HEAVY = "heavy"
+PROFILE_EXTENDED = "extended"
+KNOWN_EXECUTION_PROFILES = {PROFILE_STANDARD, PROFILE_HEAVY, PROFILE_EXTENDED}
+
+LIMIT_KEY_MAX_EXECUTION_ROWS = "max_execution_rows"
+LIMIT_KEY_MAX_PROVIDER_CALLS = "max_provider_calls"
+LIMIT_KEY_MAX_TEXT_CHUNKS = "max_text_chunks"
+LIMIT_KEY_MAX_TABULAR_ROW_CHARACTERS = "max_tabular_row_characters"
+LIMIT_KEY_MAX_EXECUTION_SECONDS = "max_execution_seconds"
+LIMIT_KEY_MAX_CONTEXT_CHARACTERS = "max_context_characters"
+LIMIT_KEY_MAX_CONTEXT_FILE_CHARACTERS = "max_context_file_characters"
+LIMIT_KEY_MAX_PROMPT_CHARACTERS = "max_prompt_characters"
+
 
 @dataclass(slots=True)
 class ExecutionCreateResult:
@@ -188,6 +235,39 @@ class ProcessedOutput:
     processing_summary: dict[str, Any]
 
 
+@dataclass(slots=True, frozen=True)
+class ExecutionOperationalProfile:
+    name: str
+    source: str
+    source_details: dict[str, Any]
+    persisted_overrides: dict[str, int]
+    max_execution_rows: int
+    max_provider_calls: int
+    max_text_chunks: int
+    max_tabular_row_characters: int
+    max_execution_seconds: int
+    max_context_characters: int
+    max_context_file_characters: int
+    max_prompt_characters: int
+    hard_clamped_fields: tuple[str, ...]
+    hard_clamp_details: dict[str, dict[str, int]]
+
+    def to_limits_dict(self) -> dict[str, int]:
+        return {
+            LIMIT_KEY_MAX_EXECUTION_ROWS: int(self.max_execution_rows),
+            LIMIT_KEY_MAX_PROVIDER_CALLS: int(self.max_provider_calls),
+            LIMIT_KEY_MAX_TEXT_CHUNKS: int(self.max_text_chunks),
+            LIMIT_KEY_MAX_TABULAR_ROW_CHARACTERS: int(self.max_tabular_row_characters),
+            LIMIT_KEY_MAX_EXECUTION_SECONDS: int(self.max_execution_seconds),
+            LIMIT_KEY_MAX_CONTEXT_CHARACTERS: int(self.max_context_characters),
+            LIMIT_KEY_MAX_CONTEXT_FILE_CHARACTERS: int(self.max_context_file_characters),
+            LIMIT_KEY_MAX_PROMPT_CHARACTERS: int(self.max_prompt_characters),
+        }
+
+    def is_hard_clamped(self, limit_key: str) -> bool:
+        return limit_key in self.hard_clamped_fields
+
+
 class ExecutionService:
     def __init__(
         self,
@@ -199,6 +279,7 @@ class ExecutionService:
         self.shared_session = shared_session
         self.request_files = RequestFileRepository(operational_session)
         self.execution_inputs = ExecutionInputFileRepository(operational_session)
+        self.execution_profile_settings = AutomationExecutionSettingsRepository(operational_session)
         self.queue_jobs = QueueJobRepository(operational_session)
         self.audit_logs = AuditLogRepository(operational_session)
         self.shared_analysis = SharedAnalysisRepository(shared_session)
@@ -236,6 +317,463 @@ class ExecutionService:
         }
         log_method = getattr(logger, level, logger.info)
         log_method(message, extra=payload)
+
+    @staticmethod
+    def _safe_hard_limit(value: int, *, fallback: int = 1) -> int:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            normalized = fallback
+        return max(normalized, fallback)
+
+    @staticmethod
+    def _normalize_profile_name(value: str | None) -> str:
+        return str(value or "").strip().lower()
+
+    def _hard_limit_ceilings(self) -> dict[str, int]:
+        return {
+            LIMIT_KEY_MAX_EXECUTION_ROWS: self._safe_hard_limit(settings.max_execution_rows_hard_limit, fallback=1),
+            LIMIT_KEY_MAX_PROVIDER_CALLS: self._safe_hard_limit(settings.max_provider_calls_hard_limit, fallback=1),
+            LIMIT_KEY_MAX_TEXT_CHUNKS: self._safe_hard_limit(settings.max_text_chunks_hard_limit, fallback=1),
+            LIMIT_KEY_MAX_TABULAR_ROW_CHARACTERS: self._safe_hard_limit(
+                settings.max_tabular_row_characters_hard_limit,
+                fallback=1,
+            ),
+            LIMIT_KEY_MAX_EXECUTION_SECONDS: self._safe_hard_limit(settings.max_execution_seconds_hard_limit, fallback=1),
+            LIMIT_KEY_MAX_CONTEXT_CHARACTERS: self._safe_hard_limit(settings.max_context_characters, fallback=1),
+            LIMIT_KEY_MAX_CONTEXT_FILE_CHARACTERS: self._safe_hard_limit(settings.max_context_file_characters, fallback=1),
+            LIMIT_KEY_MAX_PROMPT_CHARACTERS: self._safe_hard_limit(settings.max_prompt_characters, fallback=1),
+        }
+
+    def _profile_limits_from_settings(self, *, profile_name: str) -> dict[str, int]:
+        profile_prefix = f"execution_profile_{profile_name}_"
+        setting_suffix_by_limit = {
+            LIMIT_KEY_MAX_EXECUTION_ROWS: "max_execution_rows",
+            LIMIT_KEY_MAX_PROVIDER_CALLS: "max_provider_calls",
+            LIMIT_KEY_MAX_TEXT_CHUNKS: "max_text_chunks",
+            LIMIT_KEY_MAX_TABULAR_ROW_CHARACTERS: "max_tabular_row_characters",
+            LIMIT_KEY_MAX_EXECUTION_SECONDS: "max_execution_seconds",
+            LIMIT_KEY_MAX_CONTEXT_CHARACTERS: "max_context_characters",
+            LIMIT_KEY_MAX_CONTEXT_FILE_CHARACTERS: "max_context_file_characters",
+            LIMIT_KEY_MAX_PROMPT_CHARACTERS: "max_prompt_characters",
+        }
+        hard_ceilings = self._hard_limit_ceilings()
+        resolved: dict[str, int] = {}
+        for limit_key, setting_suffix in setting_suffix_by_limit.items():
+            setting_name = f"{profile_prefix}{setting_suffix}"
+            raw_value = getattr(settings, setting_name, None)
+            fallback_value = hard_ceilings[limit_key]
+            resolved[limit_key] = self._safe_hard_limit(raw_value if raw_value is not None else fallback_value, fallback=1)
+        return resolved
+
+    @staticmethod
+    def _persisted_limit_field_by_key() -> dict[str, str]:
+        return {
+            LIMIT_KEY_MAX_EXECUTION_ROWS: "max_execution_rows",
+            LIMIT_KEY_MAX_PROVIDER_CALLS: "max_provider_calls",
+            LIMIT_KEY_MAX_TEXT_CHUNKS: "max_text_chunks",
+            LIMIT_KEY_MAX_TABULAR_ROW_CHARACTERS: "max_tabular_row_characters",
+            LIMIT_KEY_MAX_EXECUTION_SECONDS: "max_execution_seconds",
+            LIMIT_KEY_MAX_CONTEXT_CHARACTERS: "max_context_characters",
+            LIMIT_KEY_MAX_CONTEXT_FILE_CHARACTERS: "max_context_file_characters",
+            LIMIT_KEY_MAX_PROMPT_CHARACTERS: "max_prompt_characters",
+        }
+
+    def _extract_persisted_overrides(
+        self,
+        *,
+        persisted_setting: DjangoAiAutomationExecutionSetting,
+    ) -> dict[str, int]:
+        overrides: dict[str, int] = {}
+        for limit_key, field_name in self._persisted_limit_field_by_key().items():
+            raw_value = getattr(persisted_setting, field_name, None)
+            if raw_value is None:
+                continue
+            overrides[limit_key] = self._safe_hard_limit(raw_value, fallback=1)
+        return overrides
+
+    @staticmethod
+    def _merge_profile_limits(
+        *,
+        base_limits: dict[str, int],
+        override_limits: dict[str, int],
+    ) -> dict[str, int]:
+        merged = dict(base_limits)
+        for limit_key, limit_value in override_limits.items():
+            if limit_key in merged:
+                merged[limit_key] = int(limit_value)
+        return merged
+
+    @staticmethod
+    def _apply_hard_limit_ceilings(
+        *,
+        configured_limits: dict[str, int],
+        hard_ceilings: dict[str, int],
+    ) -> tuple[dict[str, int], tuple[str, ...], dict[str, dict[str, int]]]:
+        effective_limits: dict[str, int] = {}
+        hard_clamped_fields: list[str] = []
+        hard_clamp_details: dict[str, dict[str, int]] = {}
+        for limit_key, configured_value in configured_limits.items():
+            ceiling = hard_ceilings[limit_key]
+            effective_value = min(int(configured_value), int(ceiling))
+            effective_limits[limit_key] = effective_value
+            if configured_value > ceiling:
+                hard_clamped_fields.append(limit_key)
+                hard_clamp_details[limit_key] = {
+                    "profile_value": int(configured_value),
+                    "hard_limit": int(ceiling),
+                }
+        return effective_limits, tuple(sorted(hard_clamped_fields)), hard_clamp_details
+
+    def _resolve_execution_profile(self, *, automation_id: UUID) -> ExecutionOperationalProfile:
+        default_profile = self._normalize_profile_name(getattr(settings, "execution_profile_default", PROFILE_STANDARD))
+        candidate_profile = default_profile
+        source = "env_default"
+        source_details: dict[str, Any] = {"origin": "env_default"}
+        persisted_overrides: dict[str, int] = {}
+
+        persisted_setting = self.execution_profile_settings.get_active_by_automation_id(automation_id)
+        if persisted_setting is not None:
+            candidate_profile = self._normalize_profile_name(persisted_setting.execution_profile)
+            persisted_overrides = self._extract_persisted_overrides(persisted_setting=persisted_setting)
+            source = "persisted_automation"
+            source_details = {
+                "origin": "persisted_automation",
+                "setting_id": str(persisted_setting.id),
+                "setting_is_active": bool(persisted_setting.is_active),
+                "override_limit_keys": sorted(persisted_overrides.keys()),
+            }
+        else:
+            overrides = getattr(settings, "execution_profile_automation_overrides", {}) or {}
+            automation_key = str(automation_id).strip().lower()
+            override_profile = self._normalize_profile_name(str(overrides.get(automation_key, "") or ""))
+            if override_profile:
+                candidate_profile = override_profile
+                source = "env_automation_override"
+                source_details = {
+                    "origin": "env_automation_override",
+                    "automation_id": automation_key,
+                }
+
+        if candidate_profile not in KNOWN_EXECUTION_PROFILES:
+            logger.warning(
+                "Invalid execution profile configured; falling back to standard profile.",
+                extra={
+                    "event": "execution_profile_fallback",
+                    "automation_id": str(automation_id),
+                    "requested_profile": candidate_profile or "(empty)",
+                    "source": source,
+                    "fallback_profile": PROFILE_STANDARD,
+                },
+            )
+            candidate_profile = PROFILE_STANDARD
+            source = f"{source}_fallback_standard"
+            source_details = {
+                **source_details,
+                "fallback_profile": PROFILE_STANDARD,
+            }
+            persisted_overrides = {}
+
+        configured_limits = self._profile_limits_from_settings(profile_name=candidate_profile)
+        if persisted_overrides:
+            configured_limits = self._merge_profile_limits(
+                base_limits=configured_limits,
+                override_limits=persisted_overrides,
+            )
+        hard_ceilings = self._hard_limit_ceilings()
+        effective_limits, hard_clamped_fields, hard_clamp_details = self._apply_hard_limit_ceilings(
+            configured_limits=configured_limits,
+            hard_ceilings=hard_ceilings,
+        )
+
+        return ExecutionOperationalProfile(
+            name=candidate_profile,
+            source=source,
+            source_details=source_details,
+            persisted_overrides=persisted_overrides,
+            max_execution_rows=effective_limits[LIMIT_KEY_MAX_EXECUTION_ROWS],
+            max_provider_calls=effective_limits[LIMIT_KEY_MAX_PROVIDER_CALLS],
+            max_text_chunks=effective_limits[LIMIT_KEY_MAX_TEXT_CHUNKS],
+            max_tabular_row_characters=effective_limits[LIMIT_KEY_MAX_TABULAR_ROW_CHARACTERS],
+            max_execution_seconds=effective_limits[LIMIT_KEY_MAX_EXECUTION_SECONDS],
+            max_context_characters=effective_limits[LIMIT_KEY_MAX_CONTEXT_CHARACTERS],
+            max_context_file_characters=effective_limits[LIMIT_KEY_MAX_CONTEXT_FILE_CHARACTERS],
+            max_prompt_characters=effective_limits[LIMIT_KEY_MAX_PROMPT_CHARACTERS],
+            hard_clamped_fields=hard_clamped_fields,
+            hard_clamp_details=hard_clamp_details,
+        )
+
+    def _enforce_execution_rows_profile_limit(
+        self,
+        *,
+        execution_id: UUID,
+        total_rows: int,
+        execution_profile: ExecutionOperationalProfile,
+    ) -> None:
+        if execution_profile.is_hard_clamped(LIMIT_KEY_MAX_EXECUTION_ROWS):
+            return
+        profile_limit = int(execution_profile.max_execution_rows)
+        if total_rows <= profile_limit:
+            return
+        raise AppException(
+            "Execution exceeded profile limit of tabular rows.",
+            status_code=422,
+            code="execution_rows_profile_limit_exceeded",
+            details={
+                "execution_id": str(execution_id),
+                "execution_profile": execution_profile.name,
+                "total_rows": int(total_rows),
+                "profile_max_execution_rows": profile_limit,
+            },
+        )
+
+    def _enforce_text_chunks_profile_limit(
+        self,
+        *,
+        execution_id: UUID,
+        chunk_count: int,
+        execution_profile: ExecutionOperationalProfile,
+    ) -> None:
+        if execution_profile.is_hard_clamped(LIMIT_KEY_MAX_TEXT_CHUNKS):
+            return
+        profile_limit = int(execution_profile.max_text_chunks)
+        if chunk_count <= profile_limit:
+            return
+        raise AppException(
+            "Execution exceeded profile limit of text chunks.",
+            status_code=422,
+            code="text_chunks_profile_limit_exceeded",
+            details={
+                "execution_id": str(execution_id),
+                "execution_profile": execution_profile.name,
+                "chunk_count": int(chunk_count),
+                "profile_max_text_chunks": profile_limit,
+            },
+        )
+
+    def _enforce_provider_calls_profile_limit(
+        self,
+        *,
+        execution_id: UUID,
+        provider_calls: int,
+        phase: str,
+        execution_profile: ExecutionOperationalProfile,
+        row_index: int | None = None,
+        chunk_index: int | None = None,
+    ) -> None:
+        if execution_profile.is_hard_clamped(LIMIT_KEY_MAX_PROVIDER_CALLS):
+            return
+        profile_limit = int(execution_profile.max_provider_calls)
+        next_call_number = provider_calls + 1
+        if next_call_number <= profile_limit:
+            return
+        details: dict[str, Any] = {
+            "execution_id": str(execution_id),
+            "execution_profile": execution_profile.name,
+            "phase": phase,
+            "provider_calls": int(provider_calls),
+            "next_call_number": int(next_call_number),
+            "profile_max_provider_calls": profile_limit,
+        }
+        if row_index is not None:
+            details["row_index"] = int(row_index)
+        if chunk_index is not None:
+            details["chunk_index"] = int(chunk_index)
+        raise AppException(
+            "Execution exceeded profile limit of provider calls.",
+            status_code=422,
+            code="provider_calls_profile_limit_exceeded",
+            details=details,
+        )
+
+    def _enforce_tabular_row_size_profile_limit(
+        self,
+        *,
+        execution_id: UUID,
+        row_index: int,
+        row_values: dict[str, Any],
+        execution_profile: ExecutionOperationalProfile,
+    ) -> None:
+        if execution_profile.is_hard_clamped(LIMIT_KEY_MAX_TABULAR_ROW_CHARACTERS):
+            return
+        profile_limit = int(execution_profile.max_tabular_row_characters)
+        row_characters = self._tabular_row_characters(row_values)
+        if row_characters <= profile_limit:
+            return
+        raise AppException(
+            "Tabular row exceeded profile character limit.",
+            status_code=422,
+            code="tabular_row_size_profile_limit_exceeded",
+            details={
+                "execution_id": str(execution_id),
+                "execution_profile": execution_profile.name,
+                "row_index": int(row_index),
+                "row_characters": int(row_characters),
+                "profile_max_tabular_row_characters": profile_limit,
+            },
+        )
+
+    def _enforce_execution_time_profile_limit(
+        self,
+        *,
+        execution_id: UUID,
+        execution_started_at: float,
+        phase: str,
+        execution_profile: ExecutionOperationalProfile,
+        row_index: int | None = None,
+        chunk_index: int | None = None,
+    ) -> None:
+        if execution_profile.is_hard_clamped(LIMIT_KEY_MAX_EXECUTION_SECONDS):
+            return
+        profile_limit_seconds = int(execution_profile.max_execution_seconds)
+        elapsed_seconds = perf_counter() - execution_started_at
+        if elapsed_seconds <= profile_limit_seconds:
+            return
+        details: dict[str, Any] = {
+            "execution_id": str(execution_id),
+            "execution_profile": execution_profile.name,
+            "phase": phase,
+            "elapsed_seconds": round(float(elapsed_seconds), 4),
+            "profile_max_execution_seconds": profile_limit_seconds,
+        }
+        if row_index is not None:
+            details["row_index"] = int(row_index)
+        if chunk_index is not None:
+            details["chunk_index"] = int(chunk_index)
+        raise AppException(
+            "Execution exceeded profile processing time limit.",
+            status_code=422,
+            code="execution_time_profile_limit_exceeded",
+            details=details,
+        )
+
+    def _enforce_execution_rows_hard_limit(
+        self,
+        *,
+        execution_id: UUID,
+        total_rows: int,
+    ) -> None:
+        hard_limit = self._safe_hard_limit(settings.max_execution_rows_hard_limit, fallback=1)
+        if total_rows <= hard_limit:
+            return
+        raise AppException(
+            "Execution exceeded hard limit of tabular rows.",
+            status_code=422,
+            code="execution_rows_hard_limit_exceeded",
+            details={
+                "execution_id": str(execution_id),
+                "total_rows": int(total_rows),
+                "max_execution_rows_hard_limit": hard_limit,
+            },
+        )
+
+    def _enforce_text_chunks_hard_limit(
+        self,
+        *,
+        execution_id: UUID,
+        chunk_count: int,
+    ) -> None:
+        hard_limit = self._safe_hard_limit(settings.max_text_chunks_hard_limit, fallback=1)
+        if chunk_count <= hard_limit:
+            return
+        raise AppException(
+            "Execution exceeded hard limit of text chunks.",
+            status_code=422,
+            code="text_chunks_hard_limit_exceeded",
+            details={
+                "execution_id": str(execution_id),
+                "chunk_count": int(chunk_count),
+                "max_text_chunks_hard_limit": hard_limit,
+            },
+        )
+
+    def _enforce_provider_calls_hard_limit(
+        self,
+        *,
+        execution_id: UUID,
+        provider_calls: int,
+        phase: str,
+        row_index: int | None = None,
+        chunk_index: int | None = None,
+    ) -> None:
+        hard_limit = self._safe_hard_limit(settings.max_provider_calls_hard_limit, fallback=1)
+        next_call_number = provider_calls + 1
+        if next_call_number <= hard_limit:
+            return
+        details: dict[str, Any] = {
+            "execution_id": str(execution_id),
+            "phase": phase,
+            "provider_calls": int(provider_calls),
+            "next_call_number": int(next_call_number),
+            "max_provider_calls_hard_limit": hard_limit,
+        }
+        if row_index is not None:
+            details["row_index"] = int(row_index)
+        if chunk_index is not None:
+            details["chunk_index"] = int(chunk_index)
+        raise AppException(
+            "Execution exceeded hard limit of provider calls.",
+            status_code=422,
+            code="provider_calls_hard_limit_exceeded",
+            details=details,
+        )
+
+    @staticmethod
+    def _tabular_row_characters(row_values: dict[str, Any]) -> int:
+        return sum(len(str(value or "")) for value in row_values.values())
+
+    def _enforce_tabular_row_size_hard_limit(
+        self,
+        *,
+        execution_id: UUID,
+        row_index: int,
+        row_values: dict[str, Any],
+    ) -> None:
+        hard_limit = self._safe_hard_limit(settings.max_tabular_row_characters_hard_limit, fallback=1)
+        row_characters = self._tabular_row_characters(row_values)
+        if row_characters <= hard_limit:
+            return
+        raise AppException(
+            "Tabular row exceeded hard character limit.",
+            status_code=422,
+            code="tabular_row_size_hard_limit_exceeded",
+            details={
+                "execution_id": str(execution_id),
+                "row_index": int(row_index),
+                "row_characters": int(row_characters),
+                "max_tabular_row_characters_hard_limit": hard_limit,
+            },
+        )
+
+    def _enforce_execution_time_hard_limit(
+        self,
+        *,
+        execution_id: UUID,
+        execution_started_at: float,
+        phase: str,
+        row_index: int | None = None,
+        chunk_index: int | None = None,
+    ) -> None:
+        hard_limit_seconds = self._safe_hard_limit(settings.max_execution_seconds_hard_limit, fallback=1)
+        elapsed_seconds = perf_counter() - execution_started_at
+        if elapsed_seconds <= hard_limit_seconds:
+            return
+        details: dict[str, Any] = {
+            "execution_id": str(execution_id),
+            "phase": phase,
+            "elapsed_seconds": round(float(elapsed_seconds), 4),
+            "max_execution_seconds_hard_limit": hard_limit_seconds,
+        }
+        if row_index is not None:
+            details["row_index"] = int(row_index)
+        if chunk_index is not None:
+            details["chunk_index"] = int(chunk_index)
+        raise AppException(
+            "Execution exceeded hard processing time limit.",
+            status_code=422,
+            code="execution_time_hard_limit_exceeded",
+            details=details,
+        )
 
     def create_execution(
         self,
@@ -735,6 +1273,7 @@ class ExecutionService:
         failure_phase = "execution.process.initial_validation"
         plan_summary: dict[str, Any] | None = None
         input_summary: dict[str, Any] | None = None
+        execution_profile: ExecutionOperationalProfile | None = None
 
         queue_job = self.queue_jobs.get_by_id(queue_job_id)
         if queue_job is None:
@@ -788,6 +1327,7 @@ class ExecutionService:
         if queue_job is None:
             return
 
+        execution_started_at = perf_counter()
         try:
             self._log_execution_phase(
                 phase="execution.process.start",
@@ -850,6 +1390,24 @@ class ExecutionService:
             if shared_request is None:
                 raise AppException("Related analysis request not found.", status_code=404, code="analysis_request_not_found")
 
+            failure_phase = "execution.process.profile_resolution"
+            execution_profile = self._resolve_execution_profile(automation_id=shared_request.automation_id)
+            self._log_execution_phase(
+                phase=f"{failure_phase}.completed",
+                message="Execution profile resolved.",
+                execution_id=str(execution_id),
+                queue_job_id=str(queue_job_id),
+                automation_id=str(shared_request.automation_id),
+                execution_profile=execution_profile.name,
+                execution_profile_source=execution_profile.source,
+                execution_profile_source_details=execution_profile.source_details,
+                execution_profile_limits=execution_profile.to_limits_dict(),
+                execution_profile_persisted_overrides=execution_profile.persisted_overrides,
+                hard_clamped_fields=list(execution_profile.hard_clamped_fields),
+                hard_clamp_details=execution_profile.hard_clamp_details,
+            )
+
+            failure_phase = "execution.process.runtime_resolution"
             resolved_runtime = self.runtime_resolver.resolve(shared_request.automation_id)
             logger.info(
                 "Execution runtime resolved from shared system.",
@@ -885,14 +1443,33 @@ class ExecutionService:
                 message="Execution pipeline started.",
                 execution_id=str(execution_id),
                 queue_job_id=str(queue_job_id),
+                execution_profile=execution_profile.name if execution_profile else None,
                 **(plan_summary or {}),
             )
-            started = perf_counter()
+            if execution_profile is None:
+                raise AppException(
+                    "Execution profile could not be resolved.",
+                    status_code=500,
+                    code="execution_profile_resolution_failed",
+                )
+            self._enforce_execution_time_profile_limit(
+                execution_id=execution_id,
+                execution_started_at=execution_started_at,
+                phase="execution.process.pipeline_gate",
+                execution_profile=execution_profile,
+            )
+            self._enforce_execution_time_hard_limit(
+                execution_id=execution_id,
+                execution_started_at=execution_started_at,
+                phase="execution.process.pipeline_gate",
+            )
             processed_output = self._process_execution_by_strategy(
                 execution_id=execution_id,
                 processing_plan=processing_plan,
                 official_prompt=resolved_runtime.prompt_text,
                 runtime=runtime,
+                execution_started_at=execution_started_at,
+                execution_profile=execution_profile,
             )
             self._log_execution_phase(
                 phase=f"{failure_phase}.completed",
@@ -910,6 +1487,17 @@ class ExecutionService:
                 file_name=processed_output.file_name,
                 content=processed_output.content,
                 mime_type=processed_output.mime_type,
+            )
+            self._enforce_execution_time_profile_limit(
+                execution_id=execution_id,
+                execution_started_at=execution_started_at,
+                phase="execution.process.output_persist",
+                execution_profile=execution_profile,
+            )
+            self._enforce_execution_time_hard_limit(
+                execution_id=execution_id,
+                execution_started_at=execution_started_at,
+                phase="execution.process.output_persist",
             )
             self._log_execution_phase(
                 phase=f"{failure_phase}.completed",
@@ -939,12 +1527,22 @@ class ExecutionService:
                         "input_tokens": processed_output.total_input_tokens,
                         "output_tokens": processed_output.total_output_tokens,
                         "estimated_cost": str(processed_output.total_cost),
-                        "provider_calls": processed_output.provider_calls,
-                        "processing_summary": processed_output.processing_summary,
-                    },
-                    ip_address=None,
-                )
+                    "provider_calls": processed_output.provider_calls,
+                    "processing_summary": processed_output.processing_summary,
+                    "execution_profile": execution_profile.name if execution_profile else None,
+                    "execution_profile_source": execution_profile.source if execution_profile else None,
+                    "execution_profile_source_details": execution_profile.source_details if execution_profile else None,
+                    "execution_profile_limits": execution_profile.to_limits_dict() if execution_profile else None,
+                    "execution_profile_persisted_overrides": execution_profile.persisted_overrides
+                    if execution_profile
+                    else None,
+                    "execution_profile_hard_clamped_fields": list(execution_profile.hard_clamped_fields)
+                    if execution_profile
+                    else None,
+                },
+                ip_address=None,
             )
+        )
             self.operational_session.commit()
             self.shared_session.commit()
             logger.info(
@@ -961,8 +1559,9 @@ class ExecutionService:
                     "output_tokens": processed_output.total_output_tokens,
                     "estimated_cost": str(processed_output.total_cost),
                     "provider_calls": processed_output.provider_calls,
+                    "execution_profile": execution_profile.name if execution_profile else None,
                     "phase": "execution.process.completed",
-                    "duration_seconds": round(perf_counter() - started, 4),
+                    "duration_seconds": round(perf_counter() - execution_started_at, 4),
                 },
             )
         except Exception as exc:
@@ -980,6 +1579,7 @@ class ExecutionService:
                     "processing_mode": plan_summary.get("processing_mode") if plan_summary else None,
                     "output_type": plan_summary.get("output_type") if plan_summary else None,
                     "parser_strategy": plan_summary.get("parser_strategy") if plan_summary else None,
+                    "execution_profile": execution_profile.name if execution_profile else None,
                 },
                 exc_info=exc,
             )
@@ -1089,9 +1689,25 @@ class ExecutionService:
         processing_plan: EngineExecutionPlan,
         official_prompt: str,
         runtime: ProviderRuntimeSelection,
+        execution_started_at: float,
+        execution_profile: ExecutionOperationalProfile,
     ) -> ProcessedOutput:
+        self._enforce_execution_time_hard_limit(
+            execution_id=execution_id,
+            execution_started_at=execution_started_at,
+            phase="execution.pipeline.dispatch",
+        )
+        self._enforce_execution_time_profile_limit(
+            execution_id=execution_id,
+            execution_started_at=execution_started_at,
+            phase="execution.pipeline.dispatch",
+            execution_profile=execution_profile,
+        )
         if processing_plan.input_type == ExecutionInputType.TABULAR_WITH_CONTEXT:
-            global_context = self._build_global_context_text(context_inputs=processing_plan.context_inputs)
+            global_context = self._build_global_context_text(
+                context_inputs=processing_plan.context_inputs,
+                execution_profile=execution_profile,
+            )
             return self._process_tabular_file(
                 execution_id=execution_id,
                 file_path=processing_plan.primary_input.file_path,
@@ -1101,6 +1717,8 @@ class ExecutionService:
                 global_context=global_context,
                 parser_strategy=processing_plan.parser_strategy,
                 output_type=processing_plan.output_type,
+                execution_started_at=execution_started_at,
+                execution_profile=execution_profile,
             )
 
         if processing_plan.input_type == ExecutionInputType.TABULAR:
@@ -1113,6 +1731,8 @@ class ExecutionService:
                 global_context=None,
                 parser_strategy=processing_plan.parser_strategy,
                 output_type=processing_plan.output_type,
+                execution_started_at=execution_started_at,
+                execution_profile=execution_profile,
             )
 
         if processing_plan.input_type == ExecutionInputType.TEXT:
@@ -1124,11 +1744,14 @@ class ExecutionService:
                 runtime=runtime,
                 parser_strategy=processing_plan.parser_strategy,
                 output_type=processing_plan.output_type,
+                execution_started_at=execution_started_at,
+                execution_profile=execution_profile,
             )
 
         if processing_plan.input_type == ExecutionInputType.MULTI_TEXT:
             merged_content = self._combine_textual_inputs(
                 execution_inputs=processing_plan.ordered_inputs,
+                execution_profile=execution_profile,
             )
             return self._process_text_content(
                 execution_id=execution_id,
@@ -1137,6 +1760,8 @@ class ExecutionService:
                 runtime=runtime,
                 parser_strategy=processing_plan.parser_strategy,
                 output_type=processing_plan.output_type,
+                execution_started_at=execution_started_at,
+                execution_profile=execution_profile,
             )
 
         raise AppException(
@@ -1156,6 +1781,8 @@ class ExecutionService:
         runtime: ProviderRuntimeSelection,
         parser_strategy: ExecutionParserStrategy,
         output_type: ExecutionOutputType,
+        execution_started_at: float,
+        execution_profile: ExecutionOperationalProfile,
     ) -> ProcessedOutput:
         self._log_execution_phase(
             phase="execution.pipeline.file_read",
@@ -1182,6 +1809,8 @@ class ExecutionService:
             runtime=runtime,
             parser_strategy=parser_strategy,
             output_type=output_type,
+            execution_started_at=execution_started_at,
+            execution_profile=execution_profile,
         )
 
     def _process_text_content(
@@ -1193,8 +1822,19 @@ class ExecutionService:
         runtime: ProviderRuntimeSelection,
         parser_strategy: ExecutionParserStrategy,
         output_type: ExecutionOutputType,
+        execution_started_at: float,
+        execution_profile: ExecutionOperationalProfile,
     ) -> ProcessedOutput:
         content_chunks = self._chunk_content(file_content)
+        self._enforce_text_chunks_profile_limit(
+            execution_id=execution_id,
+            chunk_count=len(content_chunks),
+            execution_profile=execution_profile,
+        )
+        self._enforce_text_chunks_hard_limit(
+            execution_id=execution_id,
+            chunk_count=len(content_chunks),
+        )
         provider_calls = 0
         self._log_execution_phase(
             phase="execution.pipeline.prompt_build",
@@ -1213,9 +1853,36 @@ class ExecutionService:
         models_used: set[str] = set()
 
         for chunk_index, content_chunk in enumerate(content_chunks, start=1):
+            self._enforce_execution_time_profile_limit(
+                execution_id=execution_id,
+                execution_started_at=execution_started_at,
+                phase="execution.pipeline.text_chunk_loop",
+                execution_profile=execution_profile,
+                chunk_index=chunk_index,
+            )
+            self._enforce_execution_time_hard_limit(
+                execution_id=execution_id,
+                execution_started_at=execution_started_at,
+                phase="execution.pipeline.text_chunk_loop",
+                chunk_index=chunk_index,
+            )
             prompt_input = self._build_provider_prompt(
                 official_prompt=official_prompt,
                 file_content=content_chunk,
+                execution_profile=execution_profile,
+            )
+            self._enforce_provider_calls_profile_limit(
+                execution_id=execution_id,
+                provider_calls=provider_calls,
+                phase="execution.pipeline.provider_call",
+                execution_profile=execution_profile,
+                chunk_index=chunk_index,
+            )
+            self._enforce_provider_calls_hard_limit(
+                execution_id=execution_id,
+                provider_calls=provider_calls,
+                phase="execution.pipeline.provider_call",
+                chunk_index=chunk_index,
             )
             self._log_execution_phase(
                 phase="execution.pipeline.provider_call",
@@ -1315,6 +1982,7 @@ class ExecutionService:
                 "chunk_count": len(content_chunks),
                 "output_type": output_type.value,
                 "parser_strategy": parser_strategy.value,
+                "execution_profile": execution_profile.name,
             },
         )
 
@@ -1329,6 +1997,8 @@ class ExecutionService:
         global_context: str | None = None,
         parser_strategy: ExecutionParserStrategy,
         output_type: ExecutionOutputType,
+        execution_started_at: float,
+        execution_profile: ExecutionOperationalProfile,
     ) -> ProcessedOutput:
         extension = Path(str(file_name or "")).suffix.lower()
         self._log_execution_phase(
@@ -1353,6 +2023,15 @@ class ExecutionService:
             )
 
         total_rows = len(input_rows)
+        self._enforce_execution_rows_profile_limit(
+            execution_id=execution_id,
+            total_rows=total_rows,
+            execution_profile=execution_profile,
+        )
+        self._enforce_execution_rows_hard_limit(
+            execution_id=execution_id,
+            total_rows=total_rows,
+        )
         provider_calls = 0
         self._log_execution_phase(
             phase="execution.pipeline.file_read.completed",
@@ -1386,11 +2065,36 @@ class ExecutionService:
         for row in input_rows:
             row_index = int(row.get("row_index") or 0)
             row_values = row.get("values") if isinstance(row.get("values"), dict) else {}
+            self._enforce_execution_time_profile_limit(
+                execution_id=execution_id,
+                execution_started_at=execution_started_at,
+                phase="execution.pipeline.tabular_row_loop",
+                execution_profile=execution_profile,
+                row_index=row_index,
+            )
+            self._enforce_execution_time_hard_limit(
+                execution_id=execution_id,
+                execution_started_at=execution_started_at,
+                phase="execution.pipeline.tabular_row_loop",
+                row_index=row_index,
+            )
+            self._enforce_tabular_row_size_profile_limit(
+                execution_id=execution_id,
+                row_index=row_index,
+                row_values=row_values,
+                execution_profile=execution_profile,
+            )
+            self._enforce_tabular_row_size_hard_limit(
+                execution_id=execution_id,
+                row_index=row_index,
+                row_values=row_values,
+            )
             prompt_fields = self._extract_prompt_fields_from_row(row_values=row_values)
             prompt_input = self._render_prompt_for_row(
                 official_prompt=official_prompt,
                 prompt_fields=prompt_fields,
                 global_context=global_context,
+                execution_profile=execution_profile,
             )
 
             output_row: dict[str, Any] = {
@@ -1411,6 +2115,19 @@ class ExecutionService:
                 output_row[output_header] = row_values.get(original_header, "")
 
             try:
+                self._enforce_provider_calls_profile_limit(
+                    execution_id=execution_id,
+                    provider_calls=provider_calls,
+                    phase="execution.pipeline.provider_call",
+                    execution_profile=execution_profile,
+                    row_index=row_index,
+                )
+                self._enforce_provider_calls_hard_limit(
+                    execution_id=execution_id,
+                    provider_calls=provider_calls,
+                    phase="execution.pipeline.provider_call",
+                    row_index=row_index,
+                )
                 sanitized_prompt, _ = self._enforce_token_limit(
                     prompt=prompt_input,
                     provider_runtime=runtime,
@@ -1543,6 +2260,7 @@ class ExecutionService:
                 "failed_rows": failed_rows,
                 "output_type": output_type.value,
                 "parser_strategy": parser_strategy.value,
+                "execution_profile": execution_profile.name,
             },
         )
 
@@ -1587,40 +2305,30 @@ class ExecutionService:
         official_prompt: str,
         prompt_fields: dict[str, str],
         global_context: str | None = None,
+        execution_profile: ExecutionOperationalProfile,
     ) -> str:
         rendered = str(official_prompt or "")
-        replacements = {
-            "CONTEUDO": prompt_fields.get("conteudo") or "",
-            "PRAZO_AGENDADO": prompt_fields.get("prazo_agendado") or "",
-            "VALOR_DA_CAUSA": prompt_fields.get("valor_da_causa") or "",
-            "TIPO_DE_ACAO": prompt_fields.get("tipo_de_acao") or "",
+        replacements: dict[str, str] = {
+            "CONTEUDO": self._normalize_inline_text(prompt_fields.get("conteudo") or ""),
+            "PRAZO_AGENDADO": self._normalize_inline_text(prompt_fields.get("prazo_agendado") or ""),
+            "VALOR_DA_CAUSA": self._normalize_inline_text(prompt_fields.get("valor_da_causa") or ""),
+            "TIPO_DE_ACAO": self._normalize_inline_text(prompt_fields.get("tipo_de_acao") or ""),
         }
-        replaced_any = False
         for key, value in replacements.items():
             pattern = re.compile(r"\{\{\s*" + re.escape(key) + r"\s*\}\}", re.IGNORECASE)
-            rendered, replaced_count = pattern.subn(value, rendered)
-            if replaced_count:
-                replaced_any = True
+            rendered = pattern.sub(value, rendered)
 
-        base_prompt = ""
-        if replaced_any:
-            base_prompt = rendered
-        else:
-            base_prompt = (
-                f"{rendered}\n\n"
-                "Dados da linha:\n"
-                f"CONTEUDO: {replacements['CONTEUDO']}\n"
-                f"PRAZO_AGENDADO: {replacements['PRAZO_AGENDADO']}\n"
-                f"VALOR_DA_CAUSA: {replacements['VALOR_DA_CAUSA']}\n"
-                f"TIPO_DE_ACAO: {replacements['TIPO_DE_ACAO']}\n"
+        contextual_block = ""
+        if global_context:
+            contextual_block = (
+                "Contexto global complementar (aplicado em todas as linhas):\n"
+                f"{global_context}"
             )
-
-        if not global_context:
-            return base_prompt
-        return (
-            f"{base_prompt}\n\n"
-            "Contexto global complementar (aplicado em todas as linhas):\n"
-            f"{global_context}"
+        return self._assemble_prompt(
+            instruction_text=rendered,
+            row_data=replacements,
+            auxiliary_context=contextual_block,
+            execution_profile=execution_profile,
         )
 
     @staticmethod
@@ -1890,10 +2598,163 @@ class ExecutionService:
         except Exception:
             return content[:8000].decode("utf-8", errors="ignore")
 
+    @staticmethod
+    def _normalize_inline_text(value: str) -> str:
+        return re.sub(r"\s+", " ", str(value or "")).strip()
+
+    def _normalize_prompt_block_text(self, value: str, *, dedupe_consecutive_lines: bool) -> str:
+        raw_text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+        normalized_lines: list[str] = []
+        previous_key = ""
+        for raw_line in raw_text.split("\n"):
+            line = self._normalize_inline_text(raw_line)
+            if not line:
+                continue
+            line_key = line.casefold()
+            if dedupe_consecutive_lines and line_key == previous_key:
+                continue
+            normalized_lines.append(line)
+            previous_key = line_key
+        return "\n".join(normalized_lines).strip()
+
+    @staticmethod
+    def _truncate_text_at_boundary(
+        *,
+        text: str,
+        max_characters: int,
+        truncation_notice: str | None = None,
+    ) -> tuple[str, bool]:
+        normalized = str(text or "").strip()
+        if max_characters <= 0:
+            return "", bool(normalized)
+        if len(normalized) <= max_characters:
+            return normalized, False
+
+        suffix = f"\n\n[{truncation_notice}]" if truncation_notice else ""
+        available = max_characters - len(suffix)
+        if available <= 0:
+            fallback = suffix.strip() if suffix else normalized[:max_characters].rstrip()
+            return fallback, True
+
+        candidate = normalized[:available]
+        breakpoints = [
+            candidate.rfind("\n"),
+            candidate.rfind(". "),
+            candidate.rfind("; "),
+            candidate.rfind(", "),
+            candidate.rfind(" "),
+        ]
+        breakpoint = max(breakpoints)
+        if breakpoint >= int(available * 0.6):
+            candidate = candidate[:breakpoint]
+        candidate = candidate.rstrip()
+        if not candidate:
+            candidate = normalized[:available].rstrip()
+        merged = f"{candidate}{suffix}" if suffix else candidate
+        return merged.strip(), True
+
+    @staticmethod
+    def _context_fingerprint(value: str) -> str:
+        normalized = re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+        if len(normalized) > 5000:
+            return normalized[:5000]
+        return normalized
+
+    @staticmethod
+    def _context_type_priority(*, file_name: str) -> int:
+        extension = Path(str(file_name or "")).suffix.lower()
+        if extension in CONTEXT_STRUCTURED_EXTENSIONS:
+            return 0
+        if extension in CONTEXT_RAW_EXTENSIONS:
+            return 1
+        return 2
+
+    @staticmethod
+    def _describe_context_type(*, file_name: str) -> str:
+        extension = Path(str(file_name or "")).suffix.lower()
+        if extension in CONTEXT_STRUCTURED_EXTENSIONS:
+            return "estruturado"
+        if extension in CONTEXT_RAW_EXTENSIONS:
+            return "bruto"
+        return "outro"
+
+    def _prioritize_context_inputs(self, *, context_inputs: list[EngineExecutionInput]) -> list[EngineExecutionInput]:
+        return sorted(
+            context_inputs,
+            key=lambda item: (
+                int(item.order_index),
+                self._context_type_priority(file_name=item.file_name),
+                str(item.file_name or "").lower(),
+            ),
+        )
+
+    def _context_max_characters_per_file(self, *, execution_profile: ExecutionOperationalProfile) -> int:
+        profile_limit = self._safe_hard_limit(execution_profile.max_context_file_characters, fallback=1)
+        global_limit = self._safe_hard_limit(getattr(settings, "max_context_file_characters", 0), fallback=1)
+        return min(profile_limit, global_limit)
+
+    def _context_max_characters_total(self, *, execution_profile: ExecutionOperationalProfile) -> int:
+        profile_limit = self._safe_hard_limit(execution_profile.max_context_characters, fallback=1)
+        global_limit = self._safe_hard_limit(getattr(settings, "max_context_characters", 0), fallback=1)
+        return min(profile_limit, global_limit)
+
+    def _prompt_max_characters(self, *, execution_profile: ExecutionOperationalProfile) -> int:
+        profile_limit = self._safe_hard_limit(execution_profile.max_prompt_characters, fallback=1)
+        global_limit = self._safe_hard_limit(getattr(settings, "max_prompt_characters", 0), fallback=1)
+        return min(profile_limit, global_limit)
+
+    def _assemble_prompt(
+        self,
+        *,
+        instruction_text: str,
+        row_data: dict[str, str] | None = None,
+        auxiliary_context: str | None = None,
+        execution_profile: ExecutionOperationalProfile,
+    ) -> str:
+        normalized_instruction = self._normalize_prompt_block_text(
+            instruction_text,
+            dedupe_consecutive_lines=False,
+        )
+        sections = [
+            f"{PROMPT_SECTION_INSTRUCTION}\n{normalized_instruction or '(instrucao principal ausente)'}"
+        ]
+
+        if row_data:
+            row_lines: list[str] = []
+            for field, value in row_data.items():
+                normalized_value = self._normalize_inline_text(value)
+                row_lines.append(f"{field}: {normalized_value}")
+            sections.append(f"{PROMPT_SECTION_ROW_DATA}\n" + "\n".join(row_lines))
+
+        normalized_context = self._normalize_prompt_block_text(
+            auxiliary_context or "",
+            dedupe_consecutive_lines=True,
+        )
+        if normalized_context:
+            sections.append(f"{PROMPT_SECTION_CONTEXT}\n{normalized_context}")
+
+        prompt_text = "\n\n".join(section for section in sections if section).strip()
+        max_prompt_characters = self._prompt_max_characters(execution_profile=execution_profile)
+        truncated_prompt, was_truncated = self._truncate_text_at_boundary(
+            text=prompt_text,
+            max_characters=max_prompt_characters,
+            truncation_notice=f"prompt truncado para {max_prompt_characters} caracteres",
+        )
+        if was_truncated:
+            logger.warning(
+                "Prompt assembly exceeded configured size limit and was truncated.",
+                extra={
+                    "event": "prompt_truncated",
+                    "max_prompt_characters": max_prompt_characters,
+                },
+            )
+        return truncated_prompt
+
     def _build_global_context_text(
         self,
         *,
         context_inputs: list[EngineExecutionInput],
+        execution_profile: ExecutionOperationalProfile,
     ) -> str | None:
         if not context_inputs:
             return None
@@ -1903,37 +2764,74 @@ class ExecutionService:
             message="Building global textual context for tabular execution.",
             context_file_count=len(context_inputs),
         )
+        prioritized_contexts = self._prioritize_context_inputs(context_inputs=context_inputs)
+        max_context_chars_total = self._context_max_characters_total(execution_profile=execution_profile)
+        max_context_chars_per_file = self._context_max_characters_per_file(execution_profile=execution_profile)
+
         blocks: list[str] = []
-        for index, context_input in enumerate(context_inputs, start=1):
+        dedupe_index: set[str] = set()
+        duplicate_contexts = 0
+        truncated_context_files = 0
+
+        for context_input in prioritized_contexts:
+            file_name = str(context_input.file_name or "arquivo_sem_nome")
             content = self._read_input_file_content(
                 file_path=context_input.file_path,
-                file_name=context_input.file_name,
-            ).strip()
-            safe_content = content or "(arquivo sem conteudo textual)"
+                file_name=file_name,
+            )
+            normalized_content = self._normalize_prompt_block_text(
+                content,
+                dedupe_consecutive_lines=True,
+            )
+            safe_content = normalized_content or "(arquivo sem conteudo textual)"
+            safe_content, was_file_truncated = self._truncate_text_at_boundary(
+                text=safe_content,
+                max_characters=max_context_chars_per_file,
+                truncation_notice=f"contexto truncado para {max_context_chars_per_file} caracteres",
+            )
+            if was_file_truncated:
+                truncated_context_files += 1
+
+            fingerprint = self._context_fingerprint(safe_content)
+            if fingerprint in dedupe_index:
+                duplicate_contexts += 1
+                continue
+            dedupe_index.add(fingerprint)
+
+            context_position = len(blocks) + 1
+            context_type = self._describe_context_type(file_name=file_name)
             blocks.append(
-                f"[Contexto {index} - {context_input.file_name}]\n{safe_content}"
+                f"[Contexto {context_position} - {file_name} | ordem={int(context_input.order_index)} | tipo={context_type}]\n"
+                f"{safe_content}"
             )
 
         merged_context = "\n\n".join(blocks).strip()
-        max_context_chars = max(1000, int(settings.max_input_characters * 0.6))
-        if len(merged_context) > max_context_chars:
+        if not merged_context:
+            return None
+
+        merged_context, was_context_truncated = self._truncate_text_at_boundary(
+            text=merged_context,
+            max_characters=max_context_chars_total,
+            truncation_notice=f"contexto truncado para {max_context_chars_total} caracteres",
+        )
+        if was_context_truncated:
             logger.warning(
                 "Global context exceeded configured limit and was truncated.",
                 extra={
                     "event": "context_truncated",
-                    "context_files": len(context_inputs),
-                    "max_context_chars": max_context_chars,
+                    "context_files": len(blocks),
+                    "max_context_chars": max_context_chars_total,
                 },
             )
-            merged_context = (
-                f"{merged_context[:max_context_chars].rstrip()}\n\n"
-                f"[contexto truncado para {max_context_chars} caracteres]"
-            )
+
         self._log_execution_phase(
             phase="execution.pipeline.context_build.completed",
             message="Global textual context prepared.",
-            context_file_count=len(context_inputs),
+            context_file_count=len(blocks),
             context_characters=len(merged_context),
+            duplicated_context_files=duplicate_contexts,
+            truncated_context_files=truncated_context_files,
+            max_context_chars=max_context_chars_total,
         )
         return merged_context
 
@@ -1941,6 +2839,7 @@ class ExecutionService:
         self,
         *,
         execution_inputs: list[EngineExecutionInput],
+        execution_profile: ExecutionOperationalProfile,
     ) -> str:
         self._log_execution_phase(
             phase="execution.pipeline.multi_text_combine",
@@ -1948,35 +2847,59 @@ class ExecutionService:
             input_file_count=len(execution_inputs),
         )
         blocks: list[str] = []
-        for index, execution_input in enumerate(execution_inputs, start=1):
+        dedupe_index: set[str] = set()
+        max_context_chars_per_file = self._context_max_characters_per_file(execution_profile=execution_profile)
+
+        for execution_input in execution_inputs:
+            file_name = str(execution_input.file_name or "arquivo_sem_nome")
             content = self._read_input_file_content(
                 file_path=execution_input.file_path,
-                file_name=execution_input.file_name,
-            ).strip()
-            safe_content = content or "(arquivo sem conteudo textual)"
+                file_name=file_name,
+            )
+            normalized_content = self._normalize_prompt_block_text(
+                content,
+                dedupe_consecutive_lines=True,
+            )
+            safe_content = normalized_content or "(arquivo sem conteudo textual)"
+            if execution_input.role == INPUT_ROLE_CONTEXT:
+                safe_content, _ = self._truncate_text_at_boundary(
+                    text=safe_content,
+                    max_characters=max_context_chars_per_file,
+                    truncation_notice=f"contexto truncado para {max_context_chars_per_file} caracteres",
+                )
+
+            fingerprint = self._context_fingerprint(safe_content)
+            if fingerprint in dedupe_index:
+                continue
+            dedupe_index.add(fingerprint)
+            document_position = len(blocks) + 1
             blocks.append(
-                f"[Documento {index} - {execution_input.file_name}]\n{safe_content}"
+                f"[Documento {document_position} - {file_name}]\n{safe_content}"
             )
         merged_text = "\n\n".join(blocks).strip()
         self._log_execution_phase(
             phase="execution.pipeline.multi_text_combine.completed",
             message="Multiple textual inputs combined.",
-            input_file_count=len(execution_inputs),
+            input_file_count=len(blocks),
             combined_characters=len(merged_text),
         )
         return merged_text
 
     def _chunk_content(self, content: str) -> list[str]:
-        normalized = content.strip()
+        normalized = self._normalize_prompt_block_text(content, dedupe_consecutive_lines=False)
         if not normalized:
             return ["(arquivo sem conteudo textual)"]
 
-        if len(normalized) > settings.max_input_characters:
+        normalized, was_truncated = self._truncate_text_at_boundary(
+            text=normalized,
+            max_characters=settings.max_input_characters,
+            truncation_notice=None,
+        )
+        if was_truncated:
             logger.warning(
                 "Input content exceeded max_input_characters; truncating before chunking.",
                 extra={"event": "content_truncated"},
             )
-            normalized = normalized[: settings.max_input_characters]
 
         if len(normalized) <= settings.chunk_size_characters:
             return [normalized]
@@ -1984,14 +2907,43 @@ class ExecutionService:
         chunks: list[str] = []
         start = 0
         while start < len(normalized):
-            end = min(start + settings.chunk_size_characters, len(normalized))
-            chunks.append(normalized[start:end])
+            raw_end = min(start + settings.chunk_size_characters, len(normalized))
+            end = raw_end
+            if raw_end < len(normalized):
+                preferred_break = max(
+                    normalized.rfind("\n", start, raw_end),
+                    normalized.rfind(" ", start, raw_end),
+                )
+                if preferred_break > start + int(settings.chunk_size_characters * 0.6):
+                    end = preferred_break
+            if end <= start:
+                end = raw_end
+            chunk = normalized[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
             start = end
+            while start < len(normalized) and normalized[start].isspace():
+                start += 1
         return chunks
 
-    @staticmethod
-    def _build_provider_prompt(*, official_prompt: str, file_content: str) -> str:
-        return f"Analise o seguinte arquivo:\n{file_content}\n\nPrompt oficial da automacao:\n{official_prompt}"
+    def _build_provider_prompt(
+        self,
+        *,
+        official_prompt: str,
+        file_content: str,
+        execution_profile: ExecutionOperationalProfile,
+    ) -> str:
+        normalized_content = self._normalize_prompt_block_text(
+            file_content,
+            dedupe_consecutive_lines=True,
+        )
+        context_block = f"Arquivo de entrada para analise:\n{normalized_content or '(arquivo sem conteudo textual)'}"
+        return self._assemble_prompt(
+            instruction_text=str(official_prompt or ""),
+            row_data=None,
+            auxiliary_context=context_block,
+            execution_profile=execution_profile,
+        )
 
     def _enforce_token_limit(
         self,
@@ -2013,7 +2965,16 @@ class ExecutionService:
                 new_length = len(current_prompt) - 1
             if new_length <= 0:
                 break
-            current_prompt = current_prompt[:new_length]
+            truncated_prompt, _ = self._truncate_text_at_boundary(
+                text=current_prompt,
+                max_characters=new_length,
+                truncation_notice=None,
+            )
+            if len(truncated_prompt) >= len(current_prompt):
+                truncated_prompt = current_prompt[:new_length].rstrip()
+            current_prompt = truncated_prompt
+            if not current_prompt:
+                break
             current_tokens = provider_runtime.client.count_tokens(current_prompt)
             was_truncated = True
             if current_tokens <= max_tokens_allowed:
@@ -2061,6 +3022,33 @@ class ExecutionService:
         error_diagnostic: ExecutionErrorDiagnostic | None = None,
     ) -> None:
         current_retry = queue_job.retry_count or 0
+        hard_retry_limit = self._safe_hard_limit(settings.max_job_retries_hard_limit, fallback=1)
+        if current_retry >= hard_retry_limit:
+            hard_retry_exception = AppException(
+                "Execution exceeded hard retry limit.",
+                status_code=422,
+                code="job_retries_hard_limit_exceeded",
+                details={
+                    "execution_id": str(execution_id),
+                    "current_retry": int(current_retry),
+                    "max_job_retries_hard_limit": hard_retry_limit,
+                },
+            )
+            hard_retry_diagnostic = classify_execution_error(
+                hard_retry_exception,
+                failure_phase="execution.process.retry_gate",
+            )
+            self._mark_execution_failed(
+                execution_id=execution_id,
+                queue_job_id=queue_job.id,
+                error_message=hard_retry_exception.payload.message,
+                worker_name=worker_name,
+                ip_address=None,
+                register_error_file=True,
+                error_diagnostic=hard_retry_diagnostic,
+            )
+            return
+
         if current_retry >= settings.max_retries:
             self._mark_execution_failed(
                 execution_id=execution_id,
