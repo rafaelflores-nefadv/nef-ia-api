@@ -2,6 +2,7 @@
 
 from app.repositories.operational.audit_repository import AuditLogRepository
 from app.repositories.operational.execution_file_repository import ExecutionFileRepository
+from app.repositories.operational.execution_input_file_repository import ExecutionInputFileRepository
 from app.repositories.operational.metrics_repository import MetricsRepository
 from app.repositories.operational.provider_credentials_repository import ProviderCredentialRepository
 from app.repositories.operational.provider_model_repository import ProviderModelRepository
@@ -20,6 +21,7 @@ __all__ = [
     "ProviderModelRepository",
     "RequestFileRepository",
     "ExecutionFileRepository",
+    "ExecutionInputFileRepository",
     "QueueJobRepository",
     "AuditLogRepository",
     "MetricsRepository",

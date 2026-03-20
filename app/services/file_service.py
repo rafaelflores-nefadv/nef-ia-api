@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 ALLOWED_EXECUTION_FILE_TYPES = {"output", "error", "debug", "intermediate"}
+LEGACY_XLS_EXTENSION = ".xls"
 
 
 @dataclass(slots=True)
@@ -63,6 +64,12 @@ class FileService:
             raise AppException("File name is required.", status_code=400, code="missing_file_name")
 
         extension = ("." + upload_file.filename.rsplit(".", 1)[-1].lower()) if "." in upload_file.filename else ""
+        if extension == LEGACY_XLS_EXTENSION:
+            raise AppException(
+                "Legacy .xls files are not supported. Convert the file to .xlsx before upload.",
+                status_code=422,
+                code="xls_legacy_not_supported",
+            )
         if extension not in self.allowed_extensions:
             raise AppException(
                 "Unsupported file extension.",
@@ -335,4 +342,32 @@ class FileService:
         )
 
     def list_execution_files(self, execution_id: UUID) -> list[DjangoAiExecutionFile]:
+        return self.execution_files.list_by_execution_id(execution_id)
+
+    def list_execution_files_for_token(
+        self,
+        *,
+        execution_id: UUID,
+        token_permissions: list[DjangoAiApiTokenPermission],
+    ) -> list[DjangoAiExecutionFile]:
+        shared_execution = self.shared_analysis.get_execution_by_id(execution_id)
+        if shared_execution is None:
+            raise AppException("Execution not found.", status_code=404, code="execution_not_found")
+
+        shared_request = self.shared_analysis.get_request_by_id(shared_execution.analysis_request_id)
+        if shared_request is None:
+            raise AppException("Related analysis request not found.", status_code=404, code="analysis_request_not_found")
+
+        allowed = check_token_permission(
+            permissions=token_permissions,
+            operation="file_download",
+            automation_id=shared_request.automation_id,
+        )
+        if not allowed:
+            raise AppException(
+                "Token cannot list execution files for this execution.",
+                status_code=403,
+                code="file_download_permission_denied",
+            )
+
         return self.execution_files.list_by_execution_id(execution_id)

@@ -16,3 +16,4 @@ openpyxl==3.1.5
 pypdf==5.9.0
 cryptography==44.0.1
 Django>=5.0,<6.0
+whitenoise==6.7.0

@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     storage_path: str = "./storage"
     max_upload_size_mb: int = 1024
     upload_chunk_size_bytes: int = 1048576
-    allowed_file_extensions: list[str] = Field(default_factory=lambda: [".xlsx", ".xls", ".csv", ".pdf"])
+    allowed_file_extensions: list[str] = Field(default_factory=lambda: [".xlsx", ".csv", ".pdf"])
     allowed_file_mime_types: list[str] = Field(
         default_factory=lambda: [
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -23,10 +23,30 @@ from app.models.operational import (
     DjangoAiApiToken,
     DjangoAiApiTokenPermission,
     DjangoAiAuditLog,
+    DjangoAiExecutionInputFile,
     DjangoAiQueueJob,
 )
-from app.repositories.operational import AuditLogRepository, QueueJobRepository, RequestFileRepository
+from app.repositories.operational import AuditLogRepository, ExecutionInputFileRepository, QueueJobRepository, RequestFileRepository
 from app.repositories.shared import SharedAnalysisRepository, SharedExecutionRepository
+from app.services.execution_engine import (
+    ALLOWED_INPUT_ROLES,
+    INPUT_ROLE_CONTEXT,
+    INPUT_ROLE_PRIMARY,
+    EngineExecutionInput,
+    EngineExecutionPlan,
+    ExecutionInputType,
+    ExecutionOutputPolicy,
+    ExecutionOutputType,
+    ExecutionParserStrategy,
+    ExecutionResponseParser,
+    ExecutionStrategyEngine,
+)
+from app.services.execution_observability import (
+    ExecutionErrorDiagnostic,
+    classify_execution_error,
+    summarize_processing_inputs,
+    summarize_processing_plan,
+)
 from app.services.file_service import FileService
 from app.services.provider_service import ProviderRuntimeSelection, ProviderService
 from app.services.shared.automation_runtime_resolver import AutomationRuntimeResolverService
@@ -39,6 +59,20 @@ logger = logging.getLogger(__name__)
 RETRYABLE_PROVIDER_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 RETRYABLE_ERROR_CODES = {"provider_timeout", "provider_network_error"}
 TABULAR_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+TEXTUAL_EXTENSIONS = {".pdf", ".txt", ".md", ".json", ".xml", ".html", ".htm", ".rtf", ".log", ".yaml", ".yml"}
+TABULAR_MIME_HINTS = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "text/csv",
+    "application/csv",
+}
+TEXTUAL_MIME_HINTS = {
+    "application/pdf",
+    "application/json",
+    "application/xml",
+}
+LEGACY_XLS_EXTENSION = ".xls"
+FATAL_TABULAR_ERROR_CODES = {"cost_limit_exceeded", "prompt_token_limit_exceeded"}
 
 TABULAR_FIELD_ALIASES = {
     "conteudo": {
@@ -124,6 +158,23 @@ class ExecutionStatusResult:
 
 
 @dataclass(slots=True)
+class ExecutionInputSelection:
+    request_file_id: UUID
+    role: str
+    order_index: int
+    file_name: str | None = None
+
+
+@dataclass(slots=True)
+class ExecutionInputResult:
+    request_file_id: UUID
+    file_name: str | None
+    role: str
+    order_index: int
+    source: str
+
+
+@dataclass(slots=True)
 class ProcessedOutput:
     content: bytes
     file_name: str
@@ -133,6 +184,8 @@ class ProcessedOutput:
     total_cost: Decimal
     providers_used: set[str]
     models_used: set[str]
+    provider_calls: int
+    processing_summary: dict[str, Any]
 
 
 class ExecutionService:
@@ -145,6 +198,7 @@ class ExecutionService:
         self.operational_session = operational_session
         self.shared_session = shared_session
         self.request_files = RequestFileRepository(operational_session)
+        self.execution_inputs = ExecutionInputFileRepository(operational_session)
         self.queue_jobs = QueueJobRepository(operational_session)
         self.audit_logs = AuditLogRepository(operational_session)
         self.shared_analysis = SharedAnalysisRepository(shared_session)
@@ -156,12 +210,40 @@ class ExecutionService:
             operational_session=operational_session,
             shared_session=shared_session,
         )
+        self.strategy_engine = ExecutionStrategyEngine(
+            tabular_extensions=TABULAR_EXTENSIONS,
+            textual_extensions=TEXTUAL_EXTENSIONS,
+            tabular_mime_hints=TABULAR_MIME_HINTS,
+            textual_mime_hints=TEXTUAL_MIME_HINTS,
+        )
+        self.response_parser = ExecutionResponseParser(
+            structured_output_aliases=STRUCTURED_OUTPUT_ALIASES,
+        )
+        self.output_policy = ExecutionOutputPolicy()
+
+    def _log_execution_phase(
+        self,
+        *,
+        phase: str,
+        message: str,
+        level: str = "info",
+        **extra_fields: Any,
+    ) -> None:
+        payload = {
+            "event": "execution_phase",
+            "phase": phase,
+            **extra_fields,
+        }
+        log_method = getattr(logger, level, logger.info)
+        log_method(message, extra=payload)
 
     def create_execution(
         self,
         *,
         analysis_request_id: UUID,
-        request_file_id: UUID,
+        request_file_id: UUID | None = None,
+        request_file_ids: list[UUID] | None = None,
+        input_files: list[Any] | None = None,
         api_token: DjangoAiApiToken,
         token_permissions: list[DjangoAiApiTokenPermission],
         ip_address: str | None = None,
@@ -187,20 +269,45 @@ class ExecutionService:
                 status_code=403,
                 code="execution_permission_denied",
             )
-
-        request_file = self.request_files.get_by_id(request_file_id)
-        if request_file is None:
+        if request_file_ids and input_files:
             raise AppException(
-                "Request file not found.",
-                status_code=404,
-                code="request_file_not_found",
-                details={"request_file_id": str(request_file_id)},
+                "Use either request_file_ids or input_files, not both at the same time.",
+                status_code=422,
+                code="execution_input_payload_conflict",
             )
-        if request_file.analysis_request_id != analysis_request_id:
+
+        resolved_inputs = self._resolve_execution_inputs(
+            analysis_request_id=analysis_request_id,
+            request_file_id=request_file_id,
+            request_file_ids=request_file_ids,
+            input_files=input_files,
+        )
+        self._log_execution_phase(
+            phase="execution_create.input_resolution",
+            message="Execution create payload resolved to concrete inputs.",
+            analysis_request_id=str(analysis_request_id),
+            input_summary={
+                "input_file_count": len(resolved_inputs),
+                "roles": {
+                    INPUT_ROLE_PRIMARY: sum(1 for item in resolved_inputs if item.role == INPUT_ROLE_PRIMARY),
+                    INPUT_ROLE_CONTEXT: sum(1 for item in resolved_inputs if item.role == INPUT_ROLE_CONTEXT),
+                },
+                "inputs": [
+                    {
+                        "request_file_id": str(item.request_file_id),
+                        "role": item.role,
+                        "order_index": item.order_index,
+                    }
+                    for item in resolved_inputs
+                ],
+            },
+        )
+        primary_input = next((item for item in resolved_inputs if item.role == INPUT_ROLE_PRIMARY), None)
+        if primary_input is None:
             raise AppException(
-                "request_file_id does not belong to analysis_request_id.",
-                status_code=409,
-                code="request_file_analysis_mismatch",
+                "Execution input payload does not define a primary file.",
+                status_code=422,
+                code="execution_primary_input_missing",
             )
 
         execution = self.shared_executions.create(
@@ -211,11 +318,29 @@ class ExecutionService:
 
         queue_job = DjangoAiQueueJob(
             execution_id=execution.id,
-            request_file_id=request_file.id,
+            request_file_id=primary_input.request_file_id,
             job_status=ExecutionStatus.QUEUED.value,
             retry_count=0,
         )
         self.queue_jobs.add(queue_job)
+        for selection in resolved_inputs:
+            self.execution_inputs.add(
+                DjangoAiExecutionInputFile(
+                    execution_id=execution.id,
+                    request_file_id=selection.request_file_id,
+                    role=selection.role,
+                    order_index=selection.order_index,
+                )
+            )
+
+        serialized_inputs = [
+            {
+                "request_file_id": str(selection.request_file_id),
+                "role": selection.role,
+                "order_index": selection.order_index,
+            }
+            for selection in resolved_inputs
+        ]
         self.audit_logs.add(
             DjangoAiAuditLog(
                 action_type="execution_created",
@@ -224,7 +349,9 @@ class ExecutionService:
                 performed_by_user_id=None,
                 changes_json={
                     "analysis_request_id": str(analysis_request_id),
-                    "request_file_id": str(request_file_id),
+                    "request_file_id": str(primary_input.request_file_id),
+                    "request_file_ids": [entry["request_file_id"] for entry in serialized_inputs],
+                    "input_files": serialized_inputs,
                     "token_id": str(api_token.id),
                     "queue_job_id": str(queue_job.id),
                 },
@@ -244,6 +371,14 @@ class ExecutionService:
             )
         except Exception as exc:
             logger.exception("Failed to enqueue execution job.", extra={"execution_id": str(execution.id)}, exc_info=exc)
+            enqueue_diagnostic = classify_execution_error(
+                AppException(
+                    "Failed to enqueue execution job.",
+                    status_code=500,
+                    code="queue_enqueue_failed",
+                ),
+                failure_phase="execution_create.queue_enqueue",
+            )
             self._mark_execution_failed(
                 execution_id=execution.id,
                 queue_job_id=queue_job.id,
@@ -251,6 +386,7 @@ class ExecutionService:
                 worker_name="api",
                 ip_address=ip_address,
                 register_error_file=False,
+                error_diagnostic=enqueue_diagnostic,
             )
             raise AppException(
                 "Failed to enqueue execution job.",
@@ -263,8 +399,11 @@ class ExecutionService:
             extra={
                 "execution_id": str(execution.id),
                 "analysis_request_id": str(analysis_request_id),
-                "request_file_id": str(request_file_id),
+                "request_file_id": str(primary_input.request_file_id),
+                "request_file_ids": [str(item.request_file_id) for item in resolved_inputs],
                 "queue_job_id": str(queue_job.id),
+                "phase": "execution_create.enqueued",
+                "event": "execution_create_completed",
             },
         )
         return ExecutionCreateResult(
@@ -341,6 +480,250 @@ class ExecutionService:
             )
         return items
 
+    def list_execution_inputs(
+        self,
+        *,
+        execution_id: UUID,
+        token_permissions: list[DjangoAiApiTokenPermission],
+    ) -> list[ExecutionInputResult]:
+        execution = self.shared_executions.get_by_id(execution_id)
+        if execution is None:
+            raise AppException("Execution not found.", status_code=404, code="execution_not_found")
+
+        analysis_request = self.shared_analysis.get_request_by_id(execution.analysis_request_id)
+        if analysis_request is None:
+            raise AppException("Related analysis request not found.", status_code=404, code="analysis_request_not_found")
+
+        allowed = check_token_permission(
+            permissions=token_permissions,
+            operation="execution",
+            automation_id=analysis_request.automation_id,
+        )
+        if not allowed:
+            raise AppException("Token cannot access this execution.", status_code=403, code="execution_permission_denied")
+
+        linked_inputs = self.execution_inputs.list_by_execution_id(execution_id)
+        if linked_inputs:
+            items: list[ExecutionInputResult] = []
+            for linked in linked_inputs:
+                request_file = self.request_files.get_by_id(linked.request_file_id)
+                items.append(
+                    ExecutionInputResult(
+                        request_file_id=linked.request_file_id,
+                        file_name=request_file.file_name if request_file is not None else None,
+                        role=linked.role,
+                        order_index=int(linked.order_index or 0),
+                        source="linked",
+                    )
+                )
+            return items
+
+        latest_job = self.queue_jobs.get_latest_by_execution_id(execution_id)
+        if latest_job is None or latest_job.request_file_id is None:
+            return []
+
+        request_file = self.request_files.get_by_id(latest_job.request_file_id)
+        return [
+            ExecutionInputResult(
+                request_file_id=latest_job.request_file_id,
+                file_name=request_file.file_name if request_file is not None else None,
+                role=INPUT_ROLE_PRIMARY,
+                order_index=0,
+                source="legacy_queue_job",
+            )
+        ]
+
+    def _resolve_execution_inputs(
+        self,
+        *,
+        analysis_request_id: UUID,
+        request_file_id: UUID | None,
+        request_file_ids: list[UUID] | None,
+        input_files: list[Any] | None,
+    ) -> list[ExecutionInputSelection]:
+        raw_entries: list[dict[str, Any]] = []
+
+        if input_files:
+            for position, raw in enumerate(input_files):
+                if isinstance(raw, dict):
+                    file_id = raw.get("request_file_id")
+                    role = raw.get("role")
+                    order_index = raw.get("order_index")
+                else:
+                    file_id = getattr(raw, "request_file_id", None)
+                    role = getattr(raw, "role", None)
+                    order_index = getattr(raw, "order_index", None)
+                raw_entries.append(
+                    {
+                        "request_file_id": file_id,
+                        "role": role,
+                        "order_index": order_index if order_index is not None else position,
+                        "position": position,
+                    }
+                )
+        elif request_file_ids:
+            for position, file_id in enumerate(request_file_ids):
+                raw_entries.append(
+                    {
+                        "request_file_id": file_id,
+                        "role": None,
+                        "order_index": position,
+                        "position": position,
+                    }
+                )
+        elif request_file_id is not None:
+            raw_entries.append(
+                {
+                    "request_file_id": request_file_id,
+                    "role": INPUT_ROLE_PRIMARY,
+                    "order_index": 0,
+                    "position": 0,
+                }
+            )
+
+        if request_file_id is not None and not any(entry["request_file_id"] == request_file_id for entry in raw_entries):
+            shifted_entries = []
+            for position, entry in enumerate(raw_entries, start=1):
+                shifted = dict(entry)
+                shifted["order_index"] = position
+                shifted["position"] = position
+                shifted_entries.append(shifted)
+            raw_entries = [
+                {
+                    "request_file_id": request_file_id,
+                    "role": INPUT_ROLE_PRIMARY,
+                    "order_index": 0,
+                    "position": 0,
+                },
+                *shifted_entries,
+            ]
+
+        if not raw_entries:
+            raise AppException(
+                "At least one input file is required to create an execution.",
+                status_code=422,
+                code="execution_input_missing",
+            )
+
+        normalized_entries: list[dict[str, Any]] = []
+        seen_file_ids: set[UUID] = set()
+        for entry in raw_entries:
+            raw_file_id = entry.get("request_file_id")
+            if raw_file_id is None:
+                raise AppException(
+                    "Input file entry is missing request_file_id.",
+                    status_code=422,
+                    code="execution_input_item_invalid",
+                )
+            try:
+                file_id = UUID(str(raw_file_id))
+            except ValueError as exc:
+                raise AppException(
+                    "request_file_id must be a valid UUID.",
+                    status_code=422,
+                    code="execution_input_item_invalid",
+                ) from exc
+            if file_id in seen_file_ids:
+                raise AppException(
+                    "Duplicate request_file_id found in execution input payload.",
+                    status_code=422,
+                    code="execution_input_duplicate_file",
+                    details={"request_file_id": str(file_id)},
+                )
+            seen_file_ids.add(file_id)
+
+            raw_order_index = entry.get("order_index")
+            try:
+                order_index = int(raw_order_index)
+            except (TypeError, ValueError) as exc:
+                raise AppException(
+                    "order_index must be an integer value.",
+                    status_code=422,
+                    code="execution_input_order_invalid",
+                ) from exc
+            if order_index < 0:
+                raise AppException(
+                    "order_index must be a non-negative integer.",
+                    status_code=422,
+                    code="execution_input_order_invalid",
+                )
+
+            raw_role = entry.get("role")
+            role: str | None = None
+            if raw_role is not None:
+                role = str(raw_role).strip().lower()
+                if role not in ALLOWED_INPUT_ROLES:
+                    raise AppException(
+                        "Invalid input file role.",
+                        status_code=422,
+                        code="execution_input_role_invalid",
+                        details={"allowed_roles": sorted(ALLOWED_INPUT_ROLES)},
+                    )
+
+            normalized_entries.append(
+                {
+                    "request_file_id": file_id,
+                    "role": role,
+                    "order_index": order_index,
+                    "position": int(entry.get("position", 0)),
+                }
+            )
+
+        sorted_entries = sorted(
+            normalized_entries,
+            key=lambda item: (int(item["order_index"]), int(item["position"])),
+        )
+
+        explicit_primary_ids = [item["request_file_id"] for item in sorted_entries if item.get("role") == INPUT_ROLE_PRIMARY]
+        if len(explicit_primary_ids) > 1:
+            raise AppException(
+                "Only one input file can be marked as primary.",
+                status_code=422,
+                code="execution_input_multiple_primary",
+            )
+        if request_file_id is not None and explicit_primary_ids and explicit_primary_ids[0] != request_file_id:
+            raise AppException(
+                "request_file_id must match the primary input file when explicit roles are informed.",
+                status_code=422,
+                code="execution_input_primary_conflict",
+            )
+
+        if request_file_id is not None:
+            primary_file_id = request_file_id
+        elif explicit_primary_ids:
+            primary_file_id = explicit_primary_ids[0]
+        else:
+            primary_file_id = sorted_entries[0]["request_file_id"]
+
+        resolved: list[ExecutionInputSelection] = []
+        for index, item in enumerate(sorted_entries):
+            current_file_id = item["request_file_id"]
+            current_role = INPUT_ROLE_PRIMARY if current_file_id == primary_file_id else INPUT_ROLE_CONTEXT
+            request_file = self.request_files.get_by_id(current_file_id)
+            if request_file is None:
+                raise AppException(
+                    "Request file not found.",
+                    status_code=404,
+                    code="request_file_not_found",
+                    details={"request_file_id": str(current_file_id)},
+                )
+            if request_file.analysis_request_id != analysis_request_id:
+                raise AppException(
+                    "request_file_id does not belong to analysis_request_id.",
+                    status_code=409,
+                    code="request_file_analysis_mismatch",
+                    details={"request_file_id": str(current_file_id)},
+                )
+            resolved.append(
+                ExecutionInputSelection(
+                    request_file_id=current_file_id,
+                    role=current_role,
+                    order_index=index,
+                    file_name=request_file.file_name,
+                )
+            )
+        return resolved
+
     def process_execution_job(
         self,
         *,
@@ -349,6 +732,10 @@ class ExecutionService:
         worker_name: str,
         correlation_id: str | None = None,
     ) -> None:
+        failure_phase = "execution.process.initial_validation"
+        plan_summary: dict[str, Any] | None = None
+        input_summary: dict[str, Any] | None = None
+
         queue_job = self.queue_jobs.get_by_id(queue_job_id)
         if queue_job is None:
             raise AppException("Queue job not found.", status_code=404, code="queue_job_not_found")
@@ -358,8 +745,6 @@ class ExecutionService:
                 status_code=409,
                 code="queue_job_execution_mismatch",
             )
-        if queue_job.request_file_id is None:
-            raise AppException("Queue job is missing request_file_id.", status_code=409, code="queue_job_request_file_missing")
 
         shared_execution = self.shared_executions.get_by_id(execution_id)
         if shared_execution is None:
@@ -370,12 +755,19 @@ class ExecutionService:
             return
 
         if self._is_concurrency_limited(queue_job_id=queue_job_id):
+            concurrency_diagnostic = ExecutionErrorDiagnostic(
+                message="Global concurrency limit reached.",
+                error_code="concurrency_limit_reached",
+                error_category="orchestration",
+                failure_phase="execution.process.concurrency_gate",
+            )
             self._schedule_retry(
                 execution_id=execution_id,
                 queue_job=queue_job,
                 reason="Global concurrency limit reached.",
                 worker_name=worker_name,
                 correlation_id=correlation_id,
+                error_diagnostic=concurrency_diagnostic,
             )
             return
 
@@ -397,6 +789,13 @@ class ExecutionService:
             return
 
         try:
+            self._log_execution_phase(
+                phase="execution.process.start",
+                message="Execution worker run started.",
+                execution_id=str(execution_id),
+                queue_job_id=str(queue_job_id),
+                worker_name=worker_name,
+            )
             self.shared_executions.update_status(execution_id=execution_id, status=ExecutionStatus.PROCESSING.value)
             self.shared_session.commit()
             self.audit_logs.add(
@@ -412,10 +811,41 @@ class ExecutionService:
             self.operational_session.commit()
             logger.info("Execution processing started.", extra={"execution_id": str(execution_id), "worker_name": worker_name})
 
-            request_file = self.request_files.get_by_id(queue_job.request_file_id)
-            if request_file is None:
-                raise AppException("Request file not found for execution.", status_code=404, code="request_file_not_found")
+            failure_phase = "execution.process.input_resolution"
+            self._log_execution_phase(
+                phase=failure_phase,
+                message="Resolving execution inputs for worker run.",
+                execution_id=str(execution_id),
+                queue_job_id=str(queue_job_id),
+            )
+            processing_inputs = self._load_execution_processing_inputs(
+                execution_id=execution_id,
+                queue_job=queue_job,
+            )
+            input_summary = summarize_processing_inputs(processing_inputs)
+            self._log_execution_phase(
+                phase=f"{failure_phase}.completed",
+                message="Execution inputs resolved.",
+                execution_id=str(execution_id),
+                queue_job_id=str(queue_job_id),
+                **input_summary,
+            )
 
+            failure_phase = "execution.process.strategy_resolution"
+            processing_plan = self._resolve_processing_strategy(processing_inputs=processing_inputs)
+            plan_summary = summarize_processing_plan(processing_plan)
+            if queue_job.request_file_id != processing_plan.primary_input.request_file_id:
+                queue_job.request_file_id = processing_plan.primary_input.request_file_id
+                self.operational_session.commit()
+            self._log_execution_phase(
+                phase=f"{failure_phase}.completed",
+                message="Execution strategy resolved.",
+                execution_id=str(execution_id),
+                queue_job_id=str(queue_job_id),
+                **plan_summary,
+            )
+
+            failure_phase = "execution.process.runtime_resolution"
             shared_request = self.shared_analysis.get_request_by_id(shared_execution.analysis_request_id)
             if shared_request is None:
                 raise AppException("Related analysis request not found.", status_code=404, code="analysis_request_not_found")
@@ -431,6 +861,7 @@ class ExecutionService:
                     "prompt_version": resolved_runtime.prompt_version,
                 },
             )
+
             runtime = self.provider_service.resolve_runtime(
                 provider_slug=resolved_runtime.provider_slug,
                 model_slug=resolved_runtime.model_slug,
@@ -448,14 +879,31 @@ class ExecutionService:
             self.shared_executions.update_status(execution_id=execution_id, status=ExecutionStatus.GENERATING_OUTPUT.value)
             self.shared_session.commit()
 
+            failure_phase = "execution.process.pipeline_run"
+            self._log_execution_phase(
+                phase=failure_phase,
+                message="Execution pipeline started.",
+                execution_id=str(execution_id),
+                queue_job_id=str(queue_job_id),
+                **(plan_summary or {}),
+            )
             started = perf_counter()
-            processed_output = self._process_request_file(
+            processed_output = self._process_execution_by_strategy(
                 execution_id=execution_id,
-                request_file=request_file,
+                processing_plan=processing_plan,
                 official_prompt=resolved_runtime.prompt_text,
                 runtime=runtime,
             )
+            self._log_execution_phase(
+                phase=f"{failure_phase}.completed",
+                message="Execution pipeline finished.",
+                execution_id=str(execution_id),
+                queue_job_id=str(queue_job_id),
+                provider_calls=processed_output.provider_calls,
+                **processed_output.processing_summary,
+            )
 
+            failure_phase = "execution.process.output_persist"
             self.file_service.register_generated_execution_file(
                 execution_id=execution_id,
                 file_type="output",
@@ -463,7 +911,17 @@ class ExecutionService:
                 content=processed_output.content,
                 mime_type=processed_output.mime_type,
             )
+            self._log_execution_phase(
+                phase=f"{failure_phase}.completed",
+                message="Execution output file persisted.",
+                execution_id=str(execution_id),
+                queue_job_id=str(queue_job_id),
+                output_file_name=processed_output.file_name,
+                output_file_mime=processed_output.mime_type,
+                output_file_size=len(processed_output.content),
+            )
 
+            failure_phase = "execution.process.final_persist"
             queue_job.job_status = ExecutionStatus.COMPLETED.value
             queue_job.error_message = None
             queue_job.finished_at = datetime.now(timezone.utc)
@@ -481,6 +939,8 @@ class ExecutionService:
                         "input_tokens": processed_output.total_input_tokens,
                         "output_tokens": processed_output.total_output_tokens,
                         "estimated_cost": str(processed_output.total_cost),
+                        "provider_calls": processed_output.provider_calls,
+                        "processing_summary": processed_output.processing_summary,
                     },
                     ip_address=None,
                 )
@@ -500,53 +960,190 @@ class ExecutionService:
                     "input_tokens": processed_output.total_input_tokens,
                     "output_tokens": processed_output.total_output_tokens,
                     "estimated_cost": str(processed_output.total_cost),
+                    "provider_calls": processed_output.provider_calls,
+                    "phase": "execution.process.completed",
                     "duration_seconds": round(perf_counter() - started, 4),
                 },
             )
         except Exception as exc:
-            logger.exception("Execution processing failed.", extra={"execution_id": str(execution_id)}, exc_info=exc)
+            diagnostic = classify_execution_error(exc, failure_phase=failure_phase)
+            logger.exception(
+                "Execution processing failed.",
+                extra={
+                    "execution_id": str(execution_id),
+                    "queue_job_id": str(queue_job_id),
+                    "phase": diagnostic.failure_phase,
+                    "error_code": diagnostic.error_code,
+                    "error_category": diagnostic.error_category,
+                    "input_file_count": input_summary.get("input_file_count") if input_summary else None,
+                    "input_type": plan_summary.get("input_type") if plan_summary else None,
+                    "processing_mode": plan_summary.get("processing_mode") if plan_summary else None,
+                    "output_type": plan_summary.get("output_type") if plan_summary else None,
+                    "parser_strategy": plan_summary.get("parser_strategy") if plan_summary else None,
+                },
+                exc_info=exc,
+            )
             if self._should_retry(exc=exc, retry_count=queue_job.retry_count or 0):
                 self._schedule_retry(
                     execution_id=execution_id,
                     queue_job=queue_job,
-                    reason=self._error_message(exc),
+                    reason=diagnostic.message,
                     worker_name=worker_name,
                     correlation_id=correlation_id,
+                    error_diagnostic=diagnostic,
                 )
                 return
 
             self._mark_execution_failed(
                 execution_id=execution_id,
                 queue_job_id=queue_job_id,
-                error_message=self._error_message(exc),
+                error_message=diagnostic.message,
                 worker_name=worker_name,
                 ip_address=None,
                 register_error_file=True,
+                error_diagnostic=diagnostic,
             )
 
-    def _process_request_file(
+    def _load_execution_processing_inputs(
         self,
         *,
         execution_id: UUID,
-        request_file,
+        queue_job: DjangoAiQueueJob,
+    ) -> list[EngineExecutionInput]:
+        linked_inputs = self.execution_inputs.list_by_execution_id(execution_id)
+        if linked_inputs:
+            resolved: list[EngineExecutionInput] = []
+            for linked in linked_inputs:
+                request_file = self.request_files.get_by_id(linked.request_file_id)
+                if request_file is None:
+                    raise AppException(
+                        "Request file not found for execution input.",
+                        status_code=404,
+                        code="request_file_not_found",
+                        details={"request_file_id": str(linked.request_file_id)},
+                    )
+                file_name = str(request_file.file_name or "")
+                role = str(linked.role or "").strip().lower()
+                resolved.append(
+                    EngineExecutionInput(
+                        request_file_id=linked.request_file_id,
+                        role=role,
+                        order_index=int(linked.order_index or 0),
+                        file_name=file_name,
+                        file_path=str(request_file.file_path or ""),
+                        mime_type=request_file.mime_type,
+                        file_kind=self.strategy_engine.detect_file_kind(
+                            file_name=file_name,
+                            mime_type=request_file.mime_type,
+                        ),
+                        source="linked",
+                    )
+                )
+            return resolved
+
+        request_file_id = queue_job.request_file_id
+        if request_file_id is None:
+            raise AppException(
+                "Queue job is missing request_file_id and no linked execution inputs were found.",
+                status_code=409,
+                code="queue_job_request_file_missing",
+            )
+
+        request_file = self.request_files.get_by_id(request_file_id)
+        if request_file is None:
+            raise AppException(
+                "Request file not found for execution.",
+                status_code=404,
+                code="request_file_not_found",
+                details={"request_file_id": str(request_file_id)},
+            )
+
+        file_name = str(request_file.file_name or "")
+        return [
+            EngineExecutionInput(
+                request_file_id=request_file_id,
+                role=INPUT_ROLE_PRIMARY,
+                order_index=0,
+                file_name=file_name,
+                file_path=str(request_file.file_path or ""),
+                mime_type=request_file.mime_type,
+                file_kind=self.strategy_engine.detect_file_kind(
+                    file_name=file_name,
+                    mime_type=request_file.mime_type,
+                ),
+                source="legacy_queue_job",
+            )
+        ]
+
+    def _resolve_processing_strategy(
+        self,
+        *,
+        processing_inputs: list[EngineExecutionInput],
+    ) -> EngineExecutionPlan:
+        return self.strategy_engine.resolve_plan(processing_inputs=processing_inputs)
+
+    def _process_execution_by_strategy(
+        self,
+        *,
+        execution_id: UUID,
+        processing_plan: EngineExecutionPlan,
         official_prompt: str,
         runtime: ProviderRuntimeSelection,
     ) -> ProcessedOutput:
-        extension = Path(str(request_file.file_name or "")).suffix.lower()
-        if extension in TABULAR_EXTENSIONS:
+        if processing_plan.input_type == ExecutionInputType.TABULAR_WITH_CONTEXT:
+            global_context = self._build_global_context_text(context_inputs=processing_plan.context_inputs)
             return self._process_tabular_file(
                 execution_id=execution_id,
-                file_path=request_file.file_path,
-                file_name=request_file.file_name,
+                file_path=processing_plan.primary_input.file_path,
+                file_name=processing_plan.primary_input.file_name,
                 official_prompt=official_prompt,
                 runtime=runtime,
+                global_context=global_context,
+                parser_strategy=processing_plan.parser_strategy,
+                output_type=processing_plan.output_type,
             )
-        return self._process_text_file(
-            execution_id=execution_id,
-            file_path=request_file.file_path,
-            file_name=request_file.file_name,
-            official_prompt=official_prompt,
-            runtime=runtime,
+
+        if processing_plan.input_type == ExecutionInputType.TABULAR:
+            return self._process_tabular_file(
+                execution_id=execution_id,
+                file_path=processing_plan.primary_input.file_path,
+                file_name=processing_plan.primary_input.file_name,
+                official_prompt=official_prompt,
+                runtime=runtime,
+                global_context=None,
+                parser_strategy=processing_plan.parser_strategy,
+                output_type=processing_plan.output_type,
+            )
+
+        if processing_plan.input_type == ExecutionInputType.TEXT:
+            return self._process_text_file(
+                execution_id=execution_id,
+                file_path=processing_plan.primary_input.file_path,
+                file_name=processing_plan.primary_input.file_name,
+                official_prompt=official_prompt,
+                runtime=runtime,
+                parser_strategy=processing_plan.parser_strategy,
+                output_type=processing_plan.output_type,
+            )
+
+        if processing_plan.input_type == ExecutionInputType.MULTI_TEXT:
+            merged_content = self._combine_textual_inputs(
+                execution_inputs=processing_plan.ordered_inputs,
+            )
+            return self._process_text_content(
+                execution_id=execution_id,
+                file_content=merged_content,
+                official_prompt=official_prompt,
+                runtime=runtime,
+                parser_strategy=processing_plan.parser_strategy,
+                output_type=processing_plan.output_type,
+            )
+
+        raise AppException(
+            "Execution input strategy is invalid for processing.",
+            status_code=422,
+            code="invalid_execution_input_combination",
+            details={"input_type": processing_plan.input_type.value},
         )
 
     def _process_text_file(
@@ -557,12 +1154,56 @@ class ExecutionService:
         file_name: str,
         official_prompt: str,
         runtime: ProviderRuntimeSelection,
+        parser_strategy: ExecutionParserStrategy,
+        output_type: ExecutionOutputType,
     ) -> ProcessedOutput:
+        self._log_execution_phase(
+            phase="execution.pipeline.file_read",
+            message="Reading textual input file.",
+            execution_id=str(execution_id),
+            file_extension=Path(file_name).suffix.lower(),
+            parser_strategy=parser_strategy.value,
+            output_type=output_type.value,
+        )
         input_file_content = self._read_input_file_content(
             file_path=file_path,
             file_name=file_name,
         )
-        content_chunks = self._chunk_content(input_file_content)
+        self._log_execution_phase(
+            phase="execution.pipeline.file_read.completed",
+            message="Textual input file loaded.",
+            execution_id=str(execution_id),
+            input_characters=len(input_file_content or ""),
+        )
+        return self._process_text_content(
+            execution_id=execution_id,
+            file_content=input_file_content,
+            official_prompt=official_prompt,
+            runtime=runtime,
+            parser_strategy=parser_strategy,
+            output_type=output_type,
+        )
+
+    def _process_text_content(
+        self,
+        *,
+        execution_id: UUID,
+        file_content: str,
+        official_prompt: str,
+        runtime: ProviderRuntimeSelection,
+        parser_strategy: ExecutionParserStrategy,
+        output_type: ExecutionOutputType,
+    ) -> ProcessedOutput:
+        content_chunks = self._chunk_content(file_content)
+        provider_calls = 0
+        self._log_execution_phase(
+            phase="execution.pipeline.prompt_build",
+            message="Text pipeline prepared content chunks.",
+            execution_id=str(execution_id),
+            chunk_count=len(content_chunks),
+            parser_strategy=parser_strategy.value,
+            output_type=output_type.value,
+        )
 
         total_input_tokens = 0
         total_output_tokens = 0
@@ -575,6 +1216,14 @@ class ExecutionService:
             prompt_input = self._build_provider_prompt(
                 official_prompt=official_prompt,
                 file_content=content_chunk,
+            )
+            self._log_execution_phase(
+                phase="execution.pipeline.provider_call",
+                message="Executing provider call for text chunk.",
+                level="debug",
+                execution_id=str(execution_id),
+                chunk_index=chunk_index,
+                chunk_characters=len(content_chunk),
             )
             sanitized_prompt, was_truncated = self._enforce_token_limit(
                 prompt=prompt_input,
@@ -594,6 +1243,7 @@ class ExecutionService:
                 prompt_input=sanitized_prompt,
                 runtime=runtime,
             )
+            provider_calls += 1
             chunk_cost = runtime.client.estimate_cost(
                 input_tokens=provider_result.input_tokens,
                 output_tokens=provider_result.output_tokens,
@@ -622,18 +1272,50 @@ class ExecutionService:
             total_cost += chunk_cost
             providers_used.add(runtime.provider.slug)
             models_used.add(runtime.model.model_slug)
-            output_chunks.append(str(provider_result.output_text or "").strip())
+            parsed_chunk = self.response_parser.parse(
+                parser_strategy=parser_strategy,
+                output_text=str(provider_result.output_text or "").strip(),
+            )
+            output_chunks.append(str(parsed_chunk or "").strip())
+            self._log_execution_phase(
+                phase="execution.pipeline.response_parse",
+                message="Text chunk response parsed.",
+                level="debug",
+                execution_id=str(execution_id),
+                chunk_index=chunk_index,
+                parser_strategy=parser_strategy.value,
+            )
 
         merged_output = "\n\n".join([item for item in output_chunks if item]).strip()
+        output_descriptor = self.output_policy.build_output_file(
+            execution_id=execution_id,
+            output_type=output_type,
+        )
+        self._log_execution_phase(
+            phase="execution.pipeline.output_generation",
+            message="Text output generated.",
+            execution_id=str(execution_id),
+            provider_calls=provider_calls,
+            output_file_name=output_descriptor.file_name,
+            output_file_mime=output_descriptor.mime_type,
+            output_characters=len(merged_output),
+        )
         return ProcessedOutput(
             content=(merged_output or "(sem retorno textual do modelo)").encode("utf-8"),
-            file_name=f"execution_{execution_id}.txt",
-            mime_type="text/plain",
+            file_name=output_descriptor.file_name,
+            mime_type=output_descriptor.mime_type,
             total_input_tokens=total_input_tokens,
             total_output_tokens=total_output_tokens,
             total_cost=total_cost,
             providers_used=providers_used,
             models_used=models_used,
+            provider_calls=provider_calls,
+            processing_summary={
+                "pipeline": "textual_single_pass",
+                "chunk_count": len(content_chunks),
+                "output_type": output_type.value,
+                "parser_strategy": parser_strategy.value,
+            },
         )
 
     def _process_tabular_file(
@@ -644,8 +1326,20 @@ class ExecutionService:
         file_name: str,
         official_prompt: str,
         runtime: ProviderRuntimeSelection,
+        global_context: str | None = None,
+        parser_strategy: ExecutionParserStrategy,
+        output_type: ExecutionOutputType,
     ) -> ProcessedOutput:
         extension = Path(str(file_name or "")).suffix.lower()
+        self._log_execution_phase(
+            phase="execution.pipeline.file_read",
+            message="Reading tabular input file.",
+            execution_id=str(execution_id),
+            file_extension=extension,
+            parser_strategy=parser_strategy.value,
+            output_type=output_type.value,
+            has_global_context=bool(global_context),
+        )
         file_bytes = self._read_input_file_bytes(file_path=file_path)
         input_rows, input_headers = self._load_tabular_rows(
             content=file_bytes,
@@ -657,6 +1351,23 @@ class ExecutionService:
                 status_code=422,
                 code="tabular_file_without_rows",
             )
+
+        total_rows = len(input_rows)
+        provider_calls = 0
+        self._log_execution_phase(
+            phase="execution.pipeline.file_read.completed",
+            message="Tabular input parsed and ready for row processing.",
+            execution_id=str(execution_id),
+            total_rows=total_rows,
+            header_count=len(input_headers),
+        )
+        self._log_execution_phase(
+            phase="execution.pipeline.prompt_build",
+            message="Tabular row-by-row prompt generation started.",
+            execution_id=str(execution_id),
+            total_rows=total_rows,
+            has_global_context=bool(global_context),
+        )
 
         total_input_tokens = 0
         total_output_tokens = 0
@@ -679,6 +1390,7 @@ class ExecutionService:
             prompt_input = self._render_prompt_for_row(
                 official_prompt=official_prompt,
                 prompt_fields=prompt_fields,
+                global_context=global_context,
             )
 
             output_row: dict[str, Any] = {
@@ -703,6 +1415,14 @@ class ExecutionService:
                     prompt=prompt_input,
                     provider_runtime=runtime,
                 )
+                self._log_execution_phase(
+                    phase="execution.pipeline.provider_call",
+                    message="Executing provider call for tabular row.",
+                    level="debug",
+                    execution_id=str(execution_id),
+                    row_index=row_index,
+                )
+                provider_calls += 1
                 provider_result = self._execute_with_runtime(
                     prompt_input=sanitized_prompt,
                     runtime=runtime,
@@ -730,12 +1450,26 @@ class ExecutionService:
                     estimated_cost=line_cost,
                 )
 
-                parsed_output = self._parse_structured_output(
-                    output_text=str(provider_result.output_text or "").strip()
+                parsed_output = self.response_parser.parse(
+                    parser_strategy=parser_strategy,
+                    output_text=str(provider_result.output_text or "").strip(),
                 )
+                if not isinstance(parsed_output, dict):
+                    raise AppException(
+                        "Tabular parser returned invalid output.",
+                        status_code=422,
+                        code="tabular_parser_invalid_output",
+                    )
                 output_row.update(parsed_output)
                 output_row["status"] = "ok"
                 output_row["erro"] = ""
+                self._log_execution_phase(
+                    phase="execution.pipeline.response_parse",
+                    message="Tabular row response parsed.",
+                    level="debug",
+                    execution_id=str(execution_id),
+                    row_index=row_index,
+                )
 
                 total_input_tokens += provider_result.input_tokens
                 total_output_tokens += provider_result.output_tokens
@@ -743,6 +1477,16 @@ class ExecutionService:
                 providers_used.add(runtime.provider.slug)
                 models_used.add(runtime.model.model_slug)
             except Exception as row_exc:
+                if self._is_fatal_tabular_row_exception(row_exc):
+                    self._log_execution_phase(
+                        phase="execution.pipeline.row_by_row.fatal_error",
+                        message="Fatal error while processing tabular row.",
+                        level="error",
+                        execution_id=str(execution_id),
+                        row_index=row_index,
+                        error_code=row_exc.payload.code if isinstance(row_exc, AppException) else "unexpected_error",
+                    )
+                    raise
                 output_row["status"] = "erro"
                 output_row["erro"] = self._error_message(row_exc)
                 logger.warning(
@@ -762,24 +1506,44 @@ class ExecutionService:
             rows=output_rows,
             columns=output_columns,
         )
+        output_descriptor = self.output_policy.build_output_file(
+            execution_id=execution_id,
+            output_type=output_type,
+        )
+        successful_rows = sum(1 for row in output_rows if row.get("status") == "ok")
+        failed_rows = sum(1 for row in output_rows if row.get("status") == "erro")
         logger.info(
             "Tabular execution completed.",
             extra={
                 "execution_id": str(execution_id),
                 "processed_rows": len(output_rows),
-                "successful_rows": sum(1 for row in output_rows if row.get("status") == "ok"),
-                "failed_rows": sum(1 for row in output_rows if row.get("status") == "erro"),
+                "successful_rows": successful_rows,
+                "failed_rows": failed_rows,
+                "provider_calls": provider_calls,
+                "phase": "execution.pipeline.output_generation",
+                "output_file_name": output_descriptor.file_name,
+                "output_file_mime": output_descriptor.mime_type,
             },
         )
         return ProcessedOutput(
             content=output_bytes,
-            file_name=f"execution_{execution_id}_resultado.xlsx",
-            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            file_name=output_descriptor.file_name,
+            mime_type=output_descriptor.mime_type,
             total_input_tokens=total_input_tokens,
             total_output_tokens=total_output_tokens,
             total_cost=total_cost,
             providers_used=providers_used,
             models_used=models_used,
+            provider_calls=provider_calls,
+            processing_summary={
+                "pipeline": "tabular_row_by_row_with_context" if global_context else "tabular_row_by_row",
+                "total_rows": total_rows,
+                "processed_rows": len(output_rows),
+                "successful_rows": successful_rows,
+                "failed_rows": failed_rows,
+                "output_type": output_type.value,
+                "parser_strategy": parser_strategy.value,
+            },
         )
 
     @staticmethod
@@ -822,6 +1586,7 @@ class ExecutionService:
         *,
         official_prompt: str,
         prompt_fields: dict[str, str],
+        global_context: str | None = None,
     ) -> str:
         rendered = str(official_prompt or "")
         replacements = {
@@ -837,49 +1602,26 @@ class ExecutionService:
             if replaced_count:
                 replaced_any = True
 
+        base_prompt = ""
         if replaced_any:
-            return rendered
+            base_prompt = rendered
+        else:
+            base_prompt = (
+                f"{rendered}\n\n"
+                "Dados da linha:\n"
+                f"CONTEUDO: {replacements['CONTEUDO']}\n"
+                f"PRAZO_AGENDADO: {replacements['PRAZO_AGENDADO']}\n"
+                f"VALOR_DA_CAUSA: {replacements['VALOR_DA_CAUSA']}\n"
+                f"TIPO_DE_ACAO: {replacements['TIPO_DE_ACAO']}\n"
+            )
+
+        if not global_context:
+            return base_prompt
         return (
-            f"{rendered}\n\n"
-            "Dados da linha:\n"
-            f"CONTEUDO: {replacements['CONTEUDO']}\n"
-            f"PRAZO_AGENDADO: {replacements['PRAZO_AGENDADO']}\n"
-            f"VALOR_DA_CAUSA: {replacements['VALOR_DA_CAUSA']}\n"
-            f"TIPO_DE_ACAO: {replacements['TIPO_DE_ACAO']}\n"
+            f"{base_prompt}\n\n"
+            "Contexto global complementar (aplicado em todas as linhas):\n"
+            f"{global_context}"
         )
-
-    @classmethod
-    def _parse_structured_output(cls, *, output_text: str) -> dict[str, str]:
-        parsed = {key: "" for key in STRUCTURED_OUTPUT_ALIASES}
-        current_field: str | None = None
-        for raw_line in str(output_text or "").splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-
-            normalized_line = line
-            if normalized_line.startswith(("-", "*")):
-                normalized_line = normalized_line[1:].strip()
-            if ":" in normalized_line:
-                label_raw, value_raw = normalized_line.split(":", 1)
-                label_key = cls._normalize_key(label_raw).replace("_", " ")
-                matched_field = None
-                for field_name, aliases in STRUCTURED_OUTPUT_ALIASES.items():
-                    if label_key in {cls._normalize_key(alias).replace("_", " ") for alias in aliases}:
-                        matched_field = field_name
-                        break
-                if matched_field is not None:
-                    parsed[matched_field] = value_raw.strip()
-                    current_field = matched_field
-                    continue
-
-            if current_field is not None:
-                parsed[current_field] = (
-                    f"{parsed[current_field]}\n{line}".strip()
-                    if parsed[current_field]
-                    else line
-                )
-        return parsed
 
     @staticmethod
     def _normalize_tabular_value(value: Any) -> str:
@@ -895,10 +1637,38 @@ class ExecutionService:
         content: bytes,
         extension: str,
     ) -> tuple[list[dict[str, Any]], list[str]]:
+        self._log_execution_phase(
+            phase="execution.pipeline.file_parse",
+            message="Parsing tabular input content.",
+            file_extension=extension,
+            input_bytes=len(content),
+        )
+        if extension == LEGACY_XLS_EXTENSION:
+            raise AppException(
+                "Legacy .xls files are not supported. Convert the spreadsheet to .xlsx.",
+                status_code=422,
+                code="xls_legacy_not_supported",
+            )
         if extension == ".csv":
-            return self._load_csv_rows(content=content)
-        if extension in {".xlsx", ".xls"}:
-            return self._load_excel_rows(content=content)
+            rows, headers = self._load_csv_rows(content=content)
+            self._log_execution_phase(
+                phase="execution.pipeline.file_parse.completed",
+                message="CSV content parsed.",
+                file_extension=extension,
+                total_rows=len(rows),
+                header_count=len(headers),
+            )
+            return rows, headers
+        if extension == ".xlsx":
+            rows, headers = self._load_excel_rows(content=content)
+            self._log_execution_phase(
+                phase="execution.pipeline.file_parse.completed",
+                message="Spreadsheet content parsed.",
+                file_extension=extension,
+                total_rows=len(rows),
+                header_count=len(headers),
+            )
+            return rows, headers
         raise AppException(
             "Unsupported tabular file extension.",
             status_code=422,
@@ -917,20 +1687,34 @@ class ExecutionService:
             ) from exc
 
         raw_fieldnames = list(reader.fieldnames or [])
-        headers = [
-            str(name or "").strip() or f"coluna_{index + 1}"
-            for index, name in enumerate(raw_fieldnames)
-        ]
+        if not raw_fieldnames:
+            raise AppException(
+                "CSV header row is empty.",
+                status_code=422,
+                code="tabular_file_header_missing",
+            )
+        duplicated_headers = self._collect_duplicate_headers(raw_fieldnames)
+        if duplicated_headers:
+            raise AppException(
+                "CSV contains duplicated header names. Rename duplicated columns before upload.",
+                status_code=422,
+                code="tabular_file_duplicate_headers",
+                details={"duplicate_headers": duplicated_headers},
+            )
+        headers = self._build_unique_headers(raw_fieldnames)
 
         rows: list[dict[str, Any]] = []
         for row_index, row in enumerate(reader, start=2):
             if not isinstance(row, dict):
                 continue
-            row_values = {
-                header: self._normalize_tabular_value(row.get(raw_fieldnames[position], ""))
-                for position, header in enumerate(headers)
-            }
-            if not any(str(value or "").strip() for value in row_values.values()):
+            row_values: dict[str, str] = {}
+            for position, header in enumerate(headers):
+                source_key = raw_fieldnames[position]
+                raw_value = row.get(source_key, "")
+                if isinstance(raw_value, list):
+                    raw_value = ", ".join(str(item) for item in raw_value if item is not None)
+                row_values[header] = self._normalize_tabular_value(raw_value)
+            if self._is_effectively_empty_row(row_values):
                 continue
             rows.append({"row_index": row_index, "values": row_values})
         return rows, headers
@@ -940,7 +1724,6 @@ class ExecutionService:
             from openpyxl import load_workbook
 
             workbook = load_workbook(filename=io.BytesIO(content), read_only=True, data_only=True)
-            sheet = workbook.worksheets[0]
         except Exception as exc:
             raise AppException(
                 "Failed to parse spreadsheet. Convert legacy .xls to .xlsx when necessary.",
@@ -948,19 +1731,15 @@ class ExecutionService:
                 code="tabular_file_parse_error",
             ) from exc
 
-        header_values = []
-        for header_row in sheet.iter_rows(min_row=1, max_row=1, values_only=True):
-            header_values = list(header_row or [])
-        headers: list[str] = []
-        for index, header_value in enumerate(header_values):
-            normalized_header = self._normalize_tabular_value(header_value)
-            headers.append(normalized_header or f"coluna_{index + 1}")
-        if not headers:
+        sheet = self._select_excel_sheet(workbook=workbook)
+        header_values = self._extract_header_values(sheet)
+        if not self._has_meaningful_headers(header_values):
             raise AppException(
                 "Spreadsheet header row is empty.",
                 status_code=422,
                 code="tabular_file_header_missing",
             )
+        headers = self._build_unique_headers(header_values)
 
         rows: list[dict[str, Any]] = []
         for row_index, values in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
@@ -970,10 +1749,79 @@ class ExecutionService:
                 cell_value = current_values[index] if index < len(current_values) else ""
                 row_values[header] = self._normalize_tabular_value(cell_value)
 
-            if not any(str(value or "").strip() for value in row_values.values()):
+            if self._is_effectively_empty_row(row_values):
                 continue
             rows.append({"row_index": row_index, "values": row_values})
         return rows, headers
+
+    def _select_excel_sheet(self, *, workbook: Any):  # type: ignore[no-untyped-def]
+        worksheets = list(getattr(workbook, "worksheets", []) or [])
+        if not worksheets:
+            raise AppException(
+                "Spreadsheet does not contain worksheets.",
+                status_code=422,
+                code="tabular_file_parse_error",
+            )
+
+        selected_sheet = worksheets[0]
+        for sheet in worksheets:
+            if self._has_meaningful_headers(self._extract_header_values(sheet)):
+                selected_sheet = sheet
+                break
+
+        if selected_sheet is not worksheets[0]:
+            logger.info(
+                "Spreadsheet worksheet selected by non-empty header detection.",
+                extra={"sheet_name": selected_sheet.title},
+            )
+        return selected_sheet
+
+    @staticmethod
+    def _extract_header_values(sheet) -> list[Any]:  # type: ignore[no-untyped-def]
+        for header_row in sheet.iter_rows(min_row=1, max_row=1, values_only=True):
+            return list(header_row or [])
+        return []
+
+    @classmethod
+    def _has_meaningful_headers(cls, header_values: list[Any]) -> bool:
+        return any(cls._normalize_tabular_value(value) for value in header_values)
+
+    @classmethod
+    def _build_unique_headers(cls, header_values: list[Any]) -> list[str]:
+        if not header_values:
+            return []
+
+        headers: list[str] = []
+        seen_counts: dict[str, int] = {}
+        for index, header_value in enumerate(header_values):
+            raw_header = cls._normalize_tabular_value(header_value) or f"coluna_{index + 1}"
+            normalized_key = cls._normalize_key(raw_header) or f"coluna_{index + 1}"
+            occurrences = seen_counts.get(normalized_key, 0) + 1
+            seen_counts[normalized_key] = occurrences
+            if occurrences > 1:
+                headers.append(f"{raw_header}_{occurrences}")
+            else:
+                headers.append(raw_header)
+        return headers
+
+    @classmethod
+    def _collect_duplicate_headers(cls, header_values: list[Any]) -> list[str]:
+        occurrences: dict[str, int] = {}
+        display_names: dict[str, str] = {}
+        for raw_header in header_values:
+            normalized = cls._normalize_tabular_value(raw_header)
+            if not normalized:
+                continue
+            key = cls._normalize_key(normalized)
+            if not key:
+                continue
+            occurrences[key] = occurrences.get(key, 0) + 1
+            display_names[key] = normalized
+        return sorted(display_names[key] for key, count in occurrences.items() if count > 1)
+
+    @staticmethod
+    def _is_effectively_empty_row(row_values: dict[str, Any]) -> bool:
+        return not any(str(value or "").strip() for value in row_values.values())
 
     @staticmethod
     def _build_tabular_workbook(*, rows: list[dict[str, Any]], columns: list[str]) -> bytes:
@@ -1041,6 +1889,82 @@ class ExecutionService:
             return "\n".join(rows_text).strip()
         except Exception:
             return content[:8000].decode("utf-8", errors="ignore")
+
+    def _build_global_context_text(
+        self,
+        *,
+        context_inputs: list[EngineExecutionInput],
+    ) -> str | None:
+        if not context_inputs:
+            return None
+
+        self._log_execution_phase(
+            phase="execution.pipeline.context_build",
+            message="Building global textual context for tabular execution.",
+            context_file_count=len(context_inputs),
+        )
+        blocks: list[str] = []
+        for index, context_input in enumerate(context_inputs, start=1):
+            content = self._read_input_file_content(
+                file_path=context_input.file_path,
+                file_name=context_input.file_name,
+            ).strip()
+            safe_content = content or "(arquivo sem conteudo textual)"
+            blocks.append(
+                f"[Contexto {index} - {context_input.file_name}]\n{safe_content}"
+            )
+
+        merged_context = "\n\n".join(blocks).strip()
+        max_context_chars = max(1000, int(settings.max_input_characters * 0.6))
+        if len(merged_context) > max_context_chars:
+            logger.warning(
+                "Global context exceeded configured limit and was truncated.",
+                extra={
+                    "event": "context_truncated",
+                    "context_files": len(context_inputs),
+                    "max_context_chars": max_context_chars,
+                },
+            )
+            merged_context = (
+                f"{merged_context[:max_context_chars].rstrip()}\n\n"
+                f"[contexto truncado para {max_context_chars} caracteres]"
+            )
+        self._log_execution_phase(
+            phase="execution.pipeline.context_build.completed",
+            message="Global textual context prepared.",
+            context_file_count=len(context_inputs),
+            context_characters=len(merged_context),
+        )
+        return merged_context
+
+    def _combine_textual_inputs(
+        self,
+        *,
+        execution_inputs: list[EngineExecutionInput],
+    ) -> str:
+        self._log_execution_phase(
+            phase="execution.pipeline.multi_text_combine",
+            message="Combining multiple textual inputs into a single analysis payload.",
+            input_file_count=len(execution_inputs),
+        )
+        blocks: list[str] = []
+        for index, execution_input in enumerate(execution_inputs, start=1):
+            content = self._read_input_file_content(
+                file_path=execution_input.file_path,
+                file_name=execution_input.file_name,
+            ).strip()
+            safe_content = content or "(arquivo sem conteudo textual)"
+            blocks.append(
+                f"[Documento {index} - {execution_input.file_name}]\n{safe_content}"
+            )
+        merged_text = "\n\n".join(blocks).strip()
+        self._log_execution_phase(
+            phase="execution.pipeline.multi_text_combine.completed",
+            message="Multiple textual inputs combined.",
+            input_file_count=len(execution_inputs),
+            combined_characters=len(merged_text),
+        )
+        return merged_text
 
     def _chunk_content(self, content: str) -> list[str]:
         normalized = content.strip()
@@ -1134,6 +2058,7 @@ class ExecutionService:
         reason: str,
         worker_name: str,
         correlation_id: str | None,
+        error_diagnostic: ExecutionErrorDiagnostic | None = None,
     ) -> None:
         current_retry = queue_job.retry_count or 0
         if current_retry >= settings.max_retries:
@@ -1144,6 +2069,7 @@ class ExecutionService:
                 worker_name=worker_name,
                 ip_address=None,
                 register_error_file=True,
+                error_diagnostic=error_diagnostic,
             )
             return
 
@@ -1172,6 +2098,9 @@ class ExecutionService:
                     "max_retries": settings.max_retries,
                     "delay_seconds": delay_seconds,
                     "reason": reason[:200],
+                    "failure_phase": error_diagnostic.failure_phase if error_diagnostic else None,
+                    "error_code": error_diagnostic.error_code if error_diagnostic else None,
+                    "error_category": error_diagnostic.error_category if error_diagnostic else None,
                 },
                 ip_address=None,
             )
@@ -1187,6 +2116,9 @@ class ExecutionService:
                 "queue_job_id": str(queue_job.id),
                 "retry_attempt": next_retry,
                 "delay_seconds": delay_seconds,
+                "phase": error_diagnostic.failure_phase if error_diagnostic else "execution.process.retry",
+                "error_code": error_diagnostic.error_code if error_diagnostic else None,
+                "error_category": error_diagnostic.error_category if error_diagnostic else None,
             },
         )
         enqueue_execution_job(
@@ -1220,6 +2152,12 @@ class ExecutionService:
         return False
 
     @staticmethod
+    def _is_fatal_tabular_row_exception(exc: Exception) -> bool:
+        if not isinstance(exc, AppException):
+            return False
+        return exc.payload.code in FATAL_TABULAR_ERROR_CODES
+
+    @staticmethod
     def _error_message(exc: Exception) -> str:
         if isinstance(exc, AppException):
             return exc.payload.message
@@ -1234,6 +2172,7 @@ class ExecutionService:
         worker_name: str,
         ip_address: str | None,
         register_error_file: bool,
+        error_diagnostic: ExecutionErrorDiagnostic | None = None,
     ) -> None:
         self.operational_session.rollback()
         self.shared_session.rollback()
@@ -1259,6 +2198,9 @@ class ExecutionService:
                 changes_json={
                     "queue_job_id": str(queue_job_id),
                     "error_message": error_message[:500],
+                    "failure_phase": error_diagnostic.failure_phase if error_diagnostic else None,
+                    "error_code": error_diagnostic.error_code if error_diagnostic else None,
+                    "error_category": error_diagnostic.error_category if error_diagnostic else None,
                 },
                 ip_address=ip_address,
             )
@@ -1272,6 +2214,9 @@ class ExecutionService:
                 "execution_id": str(execution_id),
                 "event": "execution_failed",
                 "queue_job_id": str(queue_job_id),
+                "phase": error_diagnostic.failure_phase if error_diagnostic else "execution.process.failed",
+                "error_code": error_diagnostic.error_code if error_diagnostic else None,
+                "error_category": error_diagnostic.error_category if error_diagnostic else None,
             },
         )
 

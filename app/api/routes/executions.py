@@ -10,9 +10,13 @@ from app.models.operational import DjangoAiApiToken
 from app.schemas.execution import (
     ExecutionCreateRequest,
     ExecutionCreateResponse,
+    ExecutionInputFileResponse,
+    ExecutionInputListResponse,
     ExecutionListResponse,
     ExecutionStatusResponse,
 )
+from app.schemas.file import ExecutionFileListResponse, ExecutionFileMetadataResponse
+from app.services.file_service import FileService
 from app.services.execution_service import ExecutionService
 
 router = APIRouter(prefix="/api/v1", tags=["executions"])
@@ -36,6 +40,8 @@ def create_execution(
     result = service.create_execution(
         analysis_request_id=payload.analysis_request_id,
         request_file_id=payload.request_file_id,
+        request_file_ids=payload.request_file_ids,
+        input_files=payload.input_files,
         api_token=api_token,
         token_permissions=token_permissions,
         ip_address=ip_address,
@@ -107,4 +113,71 @@ def list_executions_by_analysis_request(
             )
             for item in items
         ]
+    )
+
+
+@router.get("/executions/{execution_id}/files", response_model=ExecutionFileListResponse)
+def list_execution_files(
+    execution_id: UUID,
+    request: Request,
+    _: DjangoAiApiToken = Depends(get_current_token),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> ExecutionFileListResponse:
+    token_permissions = getattr(request.state, "token_permissions", [])
+    service = FileService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    files = service.list_execution_files_for_token(
+        execution_id=execution_id,
+        token_permissions=token_permissions,
+    )
+    return ExecutionFileListResponse(
+        items=[
+            ExecutionFileMetadataResponse(
+                id=file.id,
+                execution_id=file.execution_id,
+                file_type=file.file_type,
+                file_name=file.file_name,
+                file_path=file.file_path,
+                file_size=file.file_size,
+                mime_type=file.mime_type,
+                checksum=file.checksum,
+                created_at=file.created_at,
+            )
+            for file in files
+        ]
+    )
+
+
+@router.get("/executions/{execution_id}/inputs", response_model=ExecutionInputListResponse)
+def list_execution_inputs(
+    execution_id: UUID,
+    request: Request,
+    _: DjangoAiApiToken = Depends(get_current_token),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> ExecutionInputListResponse:
+    token_permissions = getattr(request.state, "token_permissions", [])
+    service = ExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    items = service.list_execution_inputs(
+        execution_id=execution_id,
+        token_permissions=token_permissions,
+    )
+    return ExecutionInputListResponse(
+        execution_id=execution_id,
+        items=[
+            ExecutionInputFileResponse(
+                request_file_id=item.request_file_id,
+                file_name=item.file_name,
+                role=item.role,  # type: ignore[arg-type]
+                order_index=item.order_index,
+                source=item.source,
+            )
+            for item in items
+        ],
     )

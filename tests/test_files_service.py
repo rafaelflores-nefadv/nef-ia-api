@@ -72,6 +72,7 @@ class FakeSharedAnalysisRepository:
     def __init__(self, analysis_request_id: UUID, automation_id: UUID) -> None:
         self.analysis_request_id = analysis_request_id
         self.automation_id = automation_id
+        self.executions: dict[UUID, object] = {}
 
     def get_request_by_id(self, analysis_request_id: UUID):  # type: ignore[no-untyped-def]
         if analysis_request_id != self.analysis_request_id:
@@ -79,7 +80,13 @@ class FakeSharedAnalysisRepository:
         return SimpleNamespace(id=analysis_request_id, automation_id=self.automation_id)
 
     def get_execution_by_id(self, execution_id: UUID):  # type: ignore[no-untyped-def]
-        return None
+        return self.executions.get(execution_id)
+
+    def register_execution(self, *, execution_id: UUID, analysis_request_id: UUID | None = None) -> None:
+        self.executions[execution_id] = SimpleNamespace(
+            id=execution_id,
+            analysis_request_id=analysis_request_id or self.analysis_request_id,
+        )
 
 
 def build_upload(filename: str, content: bytes, content_type: str) -> UploadFile:
@@ -159,6 +166,23 @@ def test_reject_invalid_extension(tmp_path) -> None:  # type: ignore[no-untyped-
     assert exc_info.value.payload.code == "invalid_file_extension"
 
 
+def test_reject_legacy_xls_upload(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    service = build_service(tmp_path, analysis_request_id, automation_id)
+    token, permissions = build_token_with_permissions(automation_id)
+    upload = build_upload("legacy.xls", b"legacy", "application/vnd.ms-excel")
+
+    with pytest.raises(AppException) as exc_info:
+        service.upload_request_file(
+            analysis_request_id=analysis_request_id,
+            upload_file=upload,
+            api_token=token,
+            token_permissions=permissions,
+        )
+    assert exc_info.value.payload.code == "xls_legacy_not_supported"
+
+
 def test_reject_empty_file(tmp_path) -> None:  # type: ignore[no-untyped-def]
     analysis_request_id = uuid4()
     automation_id = uuid4()
@@ -233,3 +257,33 @@ def test_checksum_present_and_correct(tmp_path) -> None:  # type: ignore[no-unty
     )
 
     assert saved.checksum == expected_checksum
+
+
+def test_list_execution_files_for_token(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    service = build_service(tmp_path, analysis_request_id, automation_id)
+    execution_id = uuid4()
+    service.shared_analysis.register_execution(execution_id=execution_id)  # type: ignore[attr-defined]
+
+    file_model = SimpleNamespace(
+        id=uuid4(),
+        execution_id=execution_id,
+        file_type="output",
+        file_name="resultado.xlsx",
+        file_path="executions/example/output/resultado.xlsx",
+        file_size=100,
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        checksum="abc",
+        created_at=datetime.now(timezone.utc),
+    )
+    service.execution_files.add(file_model)  # type: ignore[arg-type]
+
+    _, permissions = build_token_with_permissions(automation_id)
+    items = service.list_execution_files_for_token(
+        execution_id=execution_id,
+        token_permissions=permissions,
+    )
+
+    assert len(items) == 1
+    assert items[0].id == file_model.id

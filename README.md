@@ -132,6 +132,8 @@ Servicos:
 - `POST /api/v1/files/request-upload`
 - `POST /api/v1/executions`
 - `GET /api/v1/executions/{execution_id}`
+- `GET /api/v1/executions/{execution_id}/files`
+- `GET /api/v1/executions/{execution_id}/inputs`
 - `GET /api/v1/analysis-requests/{analysis_request_id}/executions`
 - `GET /api/v1/admin/metrics/executions`
 - `GET /api/v1/admin/metrics/usage`
