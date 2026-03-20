@@ -1,21 +1,33 @@
+from __future__ import annotations
+
+from uuid import UUID
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.shortcuts import get_object_or_404, redirect
+from django.http import Http404
+from django.shortcuts import redirect
 from django.urls import reverse_lazy
 from django.views.decorators.http import require_POST
-from django.views.generic import CreateView, ListView, UpdateView
+from django.views.generic import FormView, ListView
 
-from core.services.provider_connectivity_service import ProviderConnectivityClientService
-from core.services.provider_models_service import ProviderModelsService, ProviderModelsServiceError
+from core.services.providers_api_service import (
+    ProviderReadItem,
+    ProvidersAPIService,
+    ProvidersAPIServiceError,
+)
 
 from .forms import ProviderForm
-from .models import Provider
 
 
-def _store_provider_connectivity_result(request, *, provider_id: int, result: dict) -> None:
+def _store_provider_connectivity_result(
+    request,
+    *,
+    remote_provider_id: UUID,
+    result: dict,
+) -> None:
     cache = request.session.get("provider_connectivity_results", {})
-    cache[str(provider_id)] = {
+    cache[str(remote_provider_id)] = {
         "ok": bool(result.get("ok")),
         "status": str(result.get("status") or ""),
         "status_label": str(result.get("status_label") or ""),
@@ -50,10 +62,26 @@ def _publish_provider_connectivity_message(request, *, result: dict) -> None:
     messages.error(request, full_message)
 
 
+def _redirect_legacy_local_route(request, *, local_pk: int) -> object:
+    messages.warning(
+        request,
+        (
+            f"Rota legada por ID local ({local_pk}) descontinuada. "
+            "Use rotas com ID remoto (UUID) para operar diretamente na FastAPI."
+        ),
+    )
+    return redirect("providers:list")
+
+
 class ProviderListView(LoginRequiredMixin, ListView):
-    model = Provider
     template_name = "providers/list.html"
     context_object_name = "providers"
+
+    def get_queryset(self):
+        payload = ProvidersAPIService().get_providers_list()
+        self.providers_source = payload["source"]
+        self.providers_warnings = payload["warnings"]
+        return payload["items"]
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -61,19 +89,25 @@ class ProviderListView(LoginRequiredMixin, ListView):
         providers = context.get("providers")
         if providers is not None:
             for provider in providers:
-                provider.connectivity_result = connectivity_results.get(str(provider.id))
+                provider.connectivity_result = None
+                if provider.fastapi_provider_id is None:
+                    continue
+                provider.connectivity_result = connectivity_results.get(
+                    str(provider.fastapi_provider_id)
+                )
         context.update(
             {
                 "page_title": "Providers",
                 "page_subtitle": "Gestao administrativa de integracoes disponiveis.",
                 "active_menu": "providers",
+                "integration_source": getattr(self, "providers_source", "fallback_local"),
+                "integration_warnings": getattr(self, "providers_warnings", []),
             }
         )
         return context
 
 
-class ProviderCreateView(LoginRequiredMixin, CreateView):
-    model = Provider
+class ProviderCreateView(LoginRequiredMixin, FormView):
     form_class = ProviderForm
     template_name = "providers/form.html"
     success_url = reverse_lazy("providers:list")
@@ -88,34 +122,65 @@ class ProviderCreateView(LoginRequiredMixin, CreateView):
                 "active_menu": "providers",
                 "submit_label": "Salvar provider",
                 "is_editing": False,
+                "remote_provider_id": None,
+                "object": None,
             }
         )
         return context
 
     def form_valid(self, form):
-        candidate = form.save(commit=False)
+        cleaned = form.cleaned_data
+        service = ProvidersAPIService()
         try:
-            remote_provider_id = ProviderModelsService().sync_provider(provider=candidate)
-        except ProviderModelsServiceError as exc:
+            service.create_provider(
+                name=cleaned["name"],
+                slug=cleaned["slug"],
+                description=cleaned.get("description", ""),
+                is_active=bool(cleaned.get("is_active", False)),
+            )
+        except ProvidersAPIServiceError as exc:
             form.add_error(None, str(exc))
             return self.form_invalid(form)
 
-        form.instance.fastapi_provider_id = remote_provider_id
-        response = super().form_valid(form)
         messages.success(self.request, "Provider criado com sucesso.")
-        return response
+        return redirect(self.get_success_url())
 
 
-class ProviderUpdateView(LoginRequiredMixin, UpdateView):
-    model = Provider
+class ProviderUpdateView(LoginRequiredMixin, FormView):
     form_class = ProviderForm
     template_name = "providers/form.html"
     success_url = reverse_lazy("providers:list")
+    remote_provider_id: UUID
+    provider_item: ProviderReadItem
+
+    def dispatch(self, request, *args, **kwargs):
+        self.remote_provider_id = kwargs["remote_id"]
+        service = ProvidersAPIService()
+        try:
+            self.provider_item = service.get_provider(remote_provider_id=self.remote_provider_id)
+        except ProvidersAPIServiceError as exc:
+            if exc.code == "provider_not_found":
+                raise Http404("Provider remoto nao encontrado.") from exc
+            messages.error(request, str(exc))
+            return redirect("providers:list")
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_initial(self):
+        initial = super().get_initial()
+        initial.update(
+            {
+                "name": self.provider_item.name,
+                "slug": self.provider_item.slug,
+                "description": self.provider_item.description,
+                "is_active": self.provider_item.is_active,
+            }
+        )
+        return initial
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         connectivity_results = self.request.session.get("provider_connectivity_results", {})
-        latest_result = connectivity_results.get(str(self.object.id))
+        latest_result = connectivity_results.get(str(self.remote_provider_id))
         context.update(
             {
                 "page_title": "Editar provider",
@@ -125,44 +190,55 @@ class ProviderUpdateView(LoginRequiredMixin, UpdateView):
                 "submit_label": "Salvar alteracoes",
                 "is_editing": True,
                 "latest_connectivity_result": latest_result,
+                "remote_provider_id": self.remote_provider_id,
+                "object": self.provider_item,
             }
         )
         return context
 
     def form_valid(self, form):
-        candidate = form.save(commit=False)
+        cleaned = form.cleaned_data
+        service = ProvidersAPIService()
         try:
-            remote_provider_id = ProviderModelsService().sync_provider(provider=candidate)
-        except ProviderModelsServiceError as exc:
+            updated_item = service.update_provider(
+                remote_provider_id=self.remote_provider_id,
+                name=cleaned["name"],
+                slug=cleaned["slug"],
+                description=cleaned.get("description", ""),
+                is_active=bool(cleaned.get("is_active", False)),
+            )
+        except ProvidersAPIServiceError as exc:
             form.add_error(None, str(exc))
             return self.form_invalid(form)
 
-        form.instance.fastapi_provider_id = remote_provider_id
-        response = super().form_valid(form)
+        self.provider_item = updated_item
         messages.success(self.request, "Provider atualizado com sucesso.")
-        return response
+        return redirect(self.get_success_url())
+
+
+@login_required
+def provider_edit_legacy(request, pk: int):
+    return _redirect_legacy_local_route(request, local_pk=pk)
 
 
 @login_required
 @require_POST
-def provider_toggle_status(request, pk: int):
-    provider = get_object_or_404(Provider, pk=pk)
-    previous_status = bool(provider.is_active)
-    provider.is_active = not previous_status
+def provider_toggle_status(request, remote_id: UUID):
+    service = ProvidersAPIService()
     try:
-        remote_provider_id = ProviderModelsService().sync_provider(provider=provider)
-    except ProviderModelsServiceError as exc:
-        provider.is_active = previous_status
+        provider_item = service.get_provider(remote_provider_id=remote_id)
+        updated = service.set_provider_status(
+            remote_provider_id=remote_id,
+            target_active=not bool(provider_item.is_active),
+        )
+    except ProvidersAPIServiceError as exc:
         messages.error(
             request,
             f"Nao foi possivel sincronizar status do provider na FastAPI: {exc}",
         )
         return redirect("providers:list")
 
-    provider.fastapi_provider_id = remote_provider_id
-    provider.save(update_fields=["is_active", "fastapi_provider_id", "updated_at"])
-
-    if provider.is_active:
+    if updated.is_active:
         messages.success(request, "Provider ativado com sucesso.")
     else:
         messages.success(request, "Provider desativado com sucesso.")
@@ -172,13 +248,28 @@ def provider_toggle_status(request, pk: int):
 
 @login_required
 @require_POST
-def provider_test_connectivity(request, pk: int):
-    provider = get_object_or_404(Provider, pk=pk)
-    result = ProviderConnectivityClientService().test_provider_connectivity(provider=provider)
-    _store_provider_connectivity_result(request, provider_id=provider.id, result=result)
+def provider_toggle_status_legacy(request, pk: int):
+    return _redirect_legacy_local_route(request, local_pk=pk)
+
+
+@login_required
+@require_POST
+def provider_test_connectivity(request, remote_id: UUID):
+    result = ProvidersAPIService().test_provider_connectivity(remote_provider_id=remote_id)
+    _store_provider_connectivity_result(
+        request,
+        remote_provider_id=remote_id,
+        result=result,
+    )
     _publish_provider_connectivity_message(request, result=result)
 
     next_url = str(request.POST.get("next") or "").strip()
     if next_url:
         return redirect(next_url)
     return redirect("providers:list")
+
+
+@login_required
+@require_POST
+def provider_test_connectivity_legacy(request, pk: int):
+    return _redirect_legacy_local_route(request, local_pk=pk)

@@ -9,6 +9,25 @@
         O teste envia o conteudo do prompt e o arquivo para a FastAPI e executa o modelo vinculado ao prompt.
     </p>
 
+    <div class="d-flex align-items-center gap-2 mb-3">
+        {% include "includes/data_origin_badge.html" with source=integration_source %}
+        {% if integration_mode == "api" %}
+            <span class="admin-note">Prompts de teste carregados da API.</span>
+        {% else %}
+            <span class="admin-note">Prompts em transicao: selecao ainda usa cadastro local legado.</span>
+        {% endif %}
+    </div>
+
+    {% if integration_warnings %}
+        <div class="alert alert-warning" role="alert">
+            <ul class="mb-0 ps-3">
+                {% for warning in integration_warnings %}
+                    <li>{{ warning }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+
     {% if form.non_field_errors %}
         <div class="alert alert-danger" role="alert">
             {% for error in form.non_field_errors %}

@@ -1,25 +1,29 @@
+from __future__ import annotations
+
+from uuid import UUID
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.shortcuts import get_object_or_404, redirect
+from django.http import Http404
+from django.shortcuts import redirect
 from django.urls import reverse_lazy
 from django.views.decorators.http import require_POST
-from django.views.generic import CreateView, ListView, UpdateView
+from django.views.generic import FormView, ListView
 
-from core.services.provider_connectivity_service import ProviderConnectivityClientService
-from core.services.provider_credentials_service import (
-    ProviderCredentialSyncError,
-    ProviderCredentialSyncResult,
-    ProviderCredentialsService,
+from core.services.provider_credentials_api_service import (
+    ProviderCredentialReadItem,
+    ProviderCredentialsAPIService,
+    ProviderCredentialsAPIServiceError,
 )
+from core.services.providers_api_service import ProvidersAPIService
 
 from .forms import ProviderCredentialForm
-from .models import ProviderCredential
 
 
-def _store_connectivity_result(request, *, provider_id: int, result: dict) -> None:
+def _store_connectivity_result(request, *, provider_remote_id: UUID, result: dict) -> None:
     cache = request.session.get("provider_connectivity_results", {})
-    cache[str(provider_id)] = {
+    cache[str(provider_remote_id)] = {
         "ok": bool(result.get("ok")),
         "status": str(result.get("status") or ""),
         "status_label": str(result.get("status_label") or ""),
@@ -29,9 +33,14 @@ def _store_connectivity_result(request, *, provider_id: int, result: dict) -> No
     request.session["provider_connectivity_results"] = cache
 
 
-def _store_sync_result(request, *, credential_id: int, result: dict) -> None:
+def _store_sync_result(
+    request,
+    *,
+    remote_credential_id: UUID,
+    result: dict,
+) -> None:
     cache = request.session.get("credential_sync_results", {})
-    cache[str(credential_id)] = {
+    cache[str(remote_credential_id)] = {
         "ok": bool(result.get("ok")),
         "status": str(result.get("status") or ""),
         "status_label": str(result.get("status_label") or ""),
@@ -42,18 +51,18 @@ def _store_sync_result(request, *, credential_id: int, result: dict) -> None:
     request.session["credential_sync_results"] = cache
 
 
-def _result_from_sync(sync_result: ProviderCredentialSyncResult) -> dict:
+def _build_success_result(*, message: str, operation: str) -> dict:
     return {
-        "ok": bool(sync_result.ok),
-        "status": str(sync_result.status),
-        "status_label": str(sync_result.status_label),
-        "message": str(sync_result.message),
-        "error_code": str(sync_result.error_code or ""),
-        "operation": str(sync_result.operation or ""),
+        "ok": True,
+        "status": "api_synced",
+        "status_label": "Sincronizada",
+        "message": str(message),
+        "error_code": "",
+        "operation": str(operation),
     }
 
 
-def _error_result_from_exception(exc: ProviderCredentialSyncError) -> dict:
+def _error_result_from_exception(exc: ProviderCredentialsAPIServiceError) -> dict:
     return {
         "ok": False,
         "status": "sync_error",
@@ -64,7 +73,7 @@ def _error_result_from_exception(exc: ProviderCredentialSyncError) -> dict:
     }
 
 
-def _format_sync_exception(exc: ProviderCredentialSyncError) -> str:
+def _format_sync_exception(exc: ProviderCredentialsAPIServiceError) -> str:
     if exc.code:
         return f"{exc} (codigo: {exc.code})"
     return str(exc)
@@ -95,17 +104,26 @@ def _publish_connectivity_message(request, *, result: dict) -> None:
     messages.error(request, full_message)
 
 
+def _redirect_legacy_local_route(request, *, local_pk: int) -> object:
+    messages.warning(
+        request,
+        (
+            f"Rota legada por ID local ({local_pk}) descontinuada. "
+            "Use rotas com ID remoto (UUID) para operar diretamente na FastAPI."
+        ),
+    )
+    return redirect("credentials:list")
+
+
 class ProviderCredentialListView(LoginRequiredMixin, ListView):
-    model = ProviderCredential
     template_name = "credentials/list.html"
     context_object_name = "credentials"
 
     def get_queryset(self):
-        return (
-            ProviderCredential.objects.select_related("provider")
-            .all()
-            .order_by("provider__name", "name")
-        )
+        payload = ProviderCredentialsAPIService().get_credentials_list()
+        self.credentials_source = payload["source"]
+        self.credentials_warnings = payload["warnings"]
+        return payload["items"]
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -114,23 +132,44 @@ class ProviderCredentialListView(LoginRequiredMixin, ListView):
         credentials = context.get("credentials")
         if credentials is not None:
             for credential in credentials:
-                credential.connectivity_result = connectivity_results.get(str(credential.provider_id))
-                credential.sync_result = sync_results.get(str(credential.id))
+                provider_remote_id = credential.provider.remote_id
+                credential_remote_id = credential.fastapi_credential_id
+                credential.connectivity_result = (
+                    connectivity_results.get(str(provider_remote_id))
+                    if provider_remote_id is not None
+                    else None
+                )
+                credential.sync_result = (
+                    sync_results.get(str(credential_remote_id))
+                    if credential_remote_id is not None
+                    else None
+                )
         context.update(
             {
                 "page_title": "Credenciais",
                 "page_subtitle": "Gestao administrativa de credenciais por provider.",
                 "active_menu": "credenciais",
+                "integration_source": getattr(self, "credentials_source", "fallback_local"),
+                "integration_warnings": getattr(self, "credentials_warnings", []),
             }
         )
         return context
 
 
-class ProviderCredentialCreateView(LoginRequiredMixin, CreateView):
-    model = ProviderCredential
+class ProviderCredentialCreateView(LoginRequiredMixin, FormView):
     form_class = ProviderCredentialForm
     template_name = "credentials/form.html"
     success_url = reverse_lazy("credentials:list")
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        provider_choices_payload = ProviderCredentialsAPIService().get_provider_choices()
+        self.provider_choices_source = provider_choices_payload["source"]
+        self.provider_choices_warnings = provider_choices_payload["warnings"]
+        kwargs["provider_choices"] = provider_choices_payload["choices"]
+        kwargs["is_editing"] = False
+        kwargs["lock_provider"] = False
+        return kwargs
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -142,41 +181,96 @@ class ProviderCredentialCreateView(LoginRequiredMixin, CreateView):
                 "active_menu": "credenciais",
                 "submit_label": "Salvar credencial",
                 "is_editing": False,
+                "object": None,
+                "remote_credential_id": None,
+                "integration_source": getattr(
+                    self,
+                    "provider_choices_source",
+                    "unavailable",
+                ),
+                "integration_warnings": getattr(
+                    self,
+                    "provider_choices_warnings",
+                    [],
+                ),
             }
         )
         return context
 
     def form_valid(self, form):
-        candidate = form.save(commit=False)
-        candidate.fastapi_credential_id = None
+        provider_value = str(form.cleaned_data.get("provider") or "").strip()
+        try:
+            remote_provider_id = UUID(provider_value)
+        except ValueError:
+            form.add_error("provider", "Provider remoto invalido.")
+            return self.form_invalid(form)
 
         try:
-            sync_result = ProviderCredentialsService().sync_credential(credential=candidate)
-        except ProviderCredentialSyncError as exc:
+            created_item = ProviderCredentialsAPIService().create_credential(
+                remote_provider_id=remote_provider_id,
+                credential_name=form.cleaned_data["name"],
+                api_key=form.cleaned_data["api_key"],
+                config_json=form.cleaned_data.get("config_json"),
+                is_active=bool(form.cleaned_data.get("is_active", False)),
+            )
+        except ProviderCredentialsAPIServiceError as exc:
             form.add_error(None, _format_sync_exception(exc))
             return self.form_invalid(form)
 
-        candidate.fastapi_credential_id = sync_result.remote_credential_id
-        candidate.save()
-        self.object = candidate
-
-        _store_sync_result(
-            self.request,
-            credential_id=self.object.id,
-            result=_result_from_sync(sync_result),
-        )
-        messages.success(self.request, "Credencial criada com sucesso. " + sync_result.message)
+        if created_item.fastapi_credential_id is not None:
+            _store_sync_result(
+                self.request,
+                remote_credential_id=created_item.fastapi_credential_id,
+                result=_build_success_result(
+                    message="Credencial criada diretamente na FastAPI.",
+                    operation="created",
+                ),
+            )
+        messages.success(self.request, "Credencial criada com sucesso.")
         return redirect(self.get_success_url())
 
 
-class ProviderCredentialUpdateView(LoginRequiredMixin, UpdateView):
-    model = ProviderCredential
+class ProviderCredentialUpdateView(LoginRequiredMixin, FormView):
     form_class = ProviderCredentialForm
     template_name = "credentials/form.html"
     success_url = reverse_lazy("credentials:list")
+    remote_credential_id: UUID
+    credential_item: ProviderCredentialReadItem
 
-    def get_queryset(self):
-        return ProviderCredential.objects.select_related("provider")
+    def dispatch(self, request, *args, **kwargs):
+        self.remote_credential_id = kwargs["remote_id"]
+        try:
+            self.credential_item = ProviderCredentialsAPIService().get_credential(
+                remote_credential_id=self.remote_credential_id
+            )
+        except ProviderCredentialsAPIServiceError as exc:
+            if exc.code == "provider_credential_not_found":
+                raise Http404("Credencial remota nao encontrada.") from exc
+            messages.error(request, str(exc))
+            return redirect("credentials:list")
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_initial(self):
+        initial = super().get_initial()
+        initial.update(
+            {
+                "provider": str(self.credential_item.provider.remote_id or ""),
+                "name": self.credential_item.name,
+                "is_active": self.credential_item.is_active,
+            }
+        )
+        return initial
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        provider_choices_payload = ProviderCredentialsAPIService().get_provider_choices()
+        self.provider_choices_source = provider_choices_payload["source"]
+        self.provider_choices_warnings = provider_choices_payload["warnings"]
+        kwargs["provider_choices"] = provider_choices_payload["choices"]
+        kwargs["is_editing"] = True
+        kwargs["lock_provider"] = True
+        kwargs["initial_config_json"] = self.credential_item.config_json
+        return kwargs
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -190,72 +284,86 @@ class ProviderCredentialUpdateView(LoginRequiredMixin, UpdateView):
                 "active_menu": "credenciais",
                 "submit_label": "Salvar alteracoes",
                 "is_editing": True,
-                "latest_connectivity_result": connectivity_results.get(str(self.object.provider_id)),
-                "latest_sync_result": sync_results.get(str(self.object.id)),
+                "latest_connectivity_result": connectivity_results.get(
+                    str(self.credential_item.provider.remote_id)
+                ),
+                "latest_sync_result": sync_results.get(str(self.remote_credential_id)),
+                "object": self.credential_item,
+                "remote_credential_id": self.remote_credential_id,
+                "integration_source": getattr(
+                    self,
+                    "provider_choices_source",
+                    "unavailable",
+                ),
+                "integration_warnings": getattr(
+                    self,
+                    "provider_choices_warnings",
+                    [],
+                ),
             }
         )
         return context
 
     def form_valid(self, form):
-        persisted = ProviderCredential.objects.select_related("provider").get(pk=form.instance.pk)
-        candidate = form.save(commit=False)
-        candidate.fastapi_credential_id = persisted.fastapi_credential_id
-
         try:
-            sync_result = ProviderCredentialsService().sync_credential(
-                credential=candidate,
-                previous_provider_id=persisted.provider_id,
+            updated_item = ProviderCredentialsAPIService().update_credential(
+                remote_credential_id=self.remote_credential_id,
+                credential_name=form.cleaned_data["name"],
+                api_key=form.cleaned_data.get("api_key"),
+                config_json=form.cleaned_data.get("config_json"),
+                is_active=bool(form.cleaned_data.get("is_active", False)),
             )
-        except ProviderCredentialSyncError as exc:
+        except ProviderCredentialsAPIServiceError as exc:
             form.add_error(None, _format_sync_exception(exc))
             return self.form_invalid(form)
 
-        candidate.fastapi_credential_id = sync_result.remote_credential_id
-        candidate.save()
-        self.object = candidate
+        self.credential_item = updated_item
 
         _store_sync_result(
             self.request,
-            credential_id=self.object.id,
-            result=_result_from_sync(sync_result),
+            remote_credential_id=self.remote_credential_id,
+            result=_build_success_result(
+                message="Credencial atualizada diretamente na FastAPI.",
+                operation="updated",
+            ),
         )
-        messages.success(self.request, "Credencial atualizada com sucesso. " + sync_result.message)
+        messages.success(self.request, "Credencial atualizada com sucesso.")
         return redirect(self.get_success_url())
 
 
 @login_required
 @require_POST
-def provider_credential_toggle_status(request, pk: int):
-    credential = get_object_or_404(
-        ProviderCredential.objects.select_related("provider"),
-        pk=pk,
-    )
-    new_status = not bool(credential.is_active)
-    credential.is_active = new_status
-
+def provider_credential_toggle_status(request, remote_id: UUID):
+    service = ProviderCredentialsAPIService()
     try:
-        sync_result = ProviderCredentialsService().sync_credential_status(
-            credential=credential,
-            target_active=new_status,
+        current = service.get_credential(remote_credential_id=remote_id)
+        updated = service.set_credential_status(
+            remote_credential_id=remote_id,
+            target_active=not bool(current.is_active),
         )
-    except ProviderCredentialSyncError as exc:
+    except ProviderCredentialsAPIServiceError as exc:
         _store_sync_result(
             request,
-            credential_id=credential.id,
+            remote_credential_id=remote_id,
             result=_error_result_from_exception(exc),
         )
         messages.error(request, _format_sync_exception(exc))
         return redirect("credentials:list")
 
-    credential.fastapi_credential_id = sync_result.remote_credential_id or credential.fastapi_credential_id
-    credential.save(update_fields=["is_active", "fastapi_credential_id", "updated_at"])
     _store_sync_result(
         request,
-        credential_id=credential.id,
-        result=_result_from_sync(sync_result),
+        remote_credential_id=remote_id,
+        result=_build_success_result(
+            message=(
+                "Credencial ativada diretamente na FastAPI."
+                if updated.is_active
+                else "Credencial desativada diretamente na FastAPI."
+            ),
+            operation="status_updated",
+        ),
     )
 
-    if credential.is_active:
+    if updated.is_active:
         messages.success(request, "Credencial ativada com sucesso.")
     else:
         messages.success(request, "Credencial desativada com sucesso.")
@@ -264,40 +372,44 @@ def provider_credential_toggle_status(request, pk: int):
 
 @login_required
 @require_POST
-def provider_credential_sync_api(request, pk: int):
-    credential = get_object_or_404(
-        ProviderCredential.objects.select_related("provider"),
-        pk=pk,
-    )
-    service = ProviderCredentialsService()
+def provider_credential_toggle_status_legacy(request, pk: int):
+    return _redirect_legacy_local_route(request, local_pk=pk)
+
+
+@login_required
+@require_POST
+def provider_credential_test_connectivity(request, remote_id: UUID):
+    service = ProviderCredentialsAPIService()
     try:
-        sync_result = service.sync_credential(
-            credential=credential,
-            previous_provider_id=credential.provider_id,
-        )
-    except ProviderCredentialSyncError as exc:
-        _store_sync_result(
-            request,
-            credential_id=credential.id,
-            result=_error_result_from_exception(exc),
-        )
+        credential = service.get_credential(remote_credential_id=remote_id)
+    except ProviderCredentialsAPIServiceError as exc:
         messages.error(request, _format_sync_exception(exc))
         next_url = str(request.POST.get("next") or "").strip()
         if next_url:
             return redirect(next_url)
         return redirect("credentials:list")
 
-    remote_id = sync_result.remote_credential_id
-    if remote_id is not None and credential.fastapi_credential_id != remote_id:
-        credential.fastapi_credential_id = remote_id
-        credential.save(update_fields=["fastapi_credential_id", "updated_at"])
+    provider_remote_id = credential.provider.remote_id
+    if provider_remote_id is None:
+        messages.error(
+            request,
+            "Provider remoto nao identificado para esta credencial.",
+        )
+        next_url = str(request.POST.get("next") or "").strip()
+        if next_url:
+            return redirect(next_url)
+        return redirect("credentials:list")
 
-    _store_sync_result(
-        request,
-        credential_id=credential.id,
-        result=_result_from_sync(sync_result),
+    result = ProvidersAPIService().test_provider_connectivity(
+        remote_provider_id=provider_remote_id
     )
-    messages.success(request, sync_result.message)
+
+    _store_connectivity_result(
+        request,
+        provider_remote_id=provider_remote_id,
+        result=result,
+    )
+    _publish_connectivity_message(request, result=result)
 
     next_url = str(request.POST.get("next") or "").strip()
     if next_url:
@@ -306,16 +418,11 @@ def provider_credential_sync_api(request, pk: int):
 
 
 @login_required
+def provider_credential_edit_legacy(request, pk: int):
+    return _redirect_legacy_local_route(request, local_pk=pk)
+
+
+@login_required
 @require_POST
-def provider_credential_test_connectivity(request, pk: int):
-    credential = get_object_or_404(ProviderCredential.objects.select_related("provider"), pk=pk)
-    provider = credential.provider
-    result = ProviderConnectivityClientService().test_provider_connectivity(provider=provider)
-
-    _store_connectivity_result(request, provider_id=provider.id, result=result)
-    _publish_connectivity_message(request, result=result)
-
-    next_url = str(request.POST.get("next") or "").strip()
-    if next_url:
-        return redirect(next_url)
-    return redirect("credentials:list")
+def provider_credential_test_connectivity_legacy(request, pk: int):
+    return _redirect_legacy_local_route(request, local_pk=pk)

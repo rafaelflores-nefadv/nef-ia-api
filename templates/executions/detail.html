@@ -10,10 +10,8 @@
     </div>
     {% if integration_source == "api" %}
         <small class="admin-note">Detalhe com dados reais retornados pela FastAPI.</small>
-    {% elif integration_source == "api_hibrido" %}
-        <small class="admin-note">Detalhe com dados reais e complementos de fallback local.</small>
     {% else %}
-        <small class="admin-note">Detalhe em fallback local por indisponibilidade da API.</small>
+        <small class="admin-note">Detalhe indisponível no momento por falha de integração remota; nenhum fallback local oficial foi aplicado.</small>
     {% endif %}
 </section>
 

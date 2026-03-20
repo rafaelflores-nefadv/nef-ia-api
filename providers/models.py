@@ -2,8 +2,16 @@ from django.db import models
 
 
 class Provider(models.Model):
+    """
+    LEGADO (transicao): espelho tecnico local para compatibilidade administrativa.
+
+    Nao usar este model como fonte da verdade para providers operacionais.
+    A fonte oficial e a FastAPI/banco operacional remoto.
+    """
+
     name = models.CharField("Nome", max_length=150)
     slug = models.SlugField("Slug", max_length=160, unique=True)
+    # Marcador tecnico de vinculacao remota. Nao representa autoridade local.
     fastapi_provider_id = models.UUIDField(
         "ID do provider na FastAPI",
         null=True,

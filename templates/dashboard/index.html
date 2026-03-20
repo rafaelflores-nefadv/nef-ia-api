@@ -50,6 +50,21 @@
     </div>
 </section>
 
+{% if catalog_integration_warnings %}
+<section class="mb-4">
+    <article class="panel-card">
+        <div class="border rounded-3 p-2 border-warning-subtle bg-warning-subtle">
+            <strong class="d-block mb-1">Avisos do catalogo remoto</strong>
+            <ul class="mb-0 small">
+                {% for warning in catalog_integration_warnings %}
+                    <li>{{ warning }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </article>
+</section>
+{% endif %}
+
 <section class="mb-4">
     <article class="panel-card">
         <div class="panel-title-wrap">

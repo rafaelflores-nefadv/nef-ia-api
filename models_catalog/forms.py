@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from uuid import UUID
 
 from django import forms
-
-from providers.models import Provider
-
-from .models import ProviderModel
 
 
 class KnownModelSelect(forms.Select):
@@ -41,11 +36,71 @@ class KnownModelSelect(forms.Select):
         return option
 
 
-class ProviderModelCreateForm(forms.ModelForm):
+class ProviderModelCreateForm(forms.Form):
+    provider = forms.ChoiceField(
+        label="Provider",
+        required=True,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
     known_model = forms.ChoiceField(
         label="Modelo disponivel",
         required=True,
         widget=KnownModelSelect(attrs={"class": "form-select"}),
+    )
+    description = forms.CharField(
+        label="Descricao",
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                "class": "form-control",
+                "rows": 4,
+                "placeholder": "Descricao opcional do modelo.",
+            }
+        ),
+    )
+    context_window = forms.IntegerField(
+        label="Janela de contexto",
+        required=False,
+        min_value=1,
+        widget=forms.NumberInput(
+            attrs={"class": "form-control", "placeholder": "Ex.: 128000", "min": 1}
+        ),
+    )
+    input_cost_per_1k = forms.DecimalField(
+        label="Custo input / 1k",
+        required=False,
+        decimal_places=6,
+        max_digits=12,
+        min_value=Decimal("0"),
+        widget=forms.NumberInput(
+            attrs={
+                "class": "form-control",
+                "step": "0.000001",
+                "min": "0",
+                "placeholder": "Ex.: 0.000400",
+            }
+        ),
+    )
+    output_cost_per_1k = forms.DecimalField(
+        label="Custo output / 1k",
+        required=False,
+        decimal_places=6,
+        max_digits=12,
+        min_value=Decimal("0"),
+        widget=forms.NumberInput(
+            attrs={
+                "class": "form-control",
+                "step": "0.000001",
+                "min": "0",
+                "placeholder": "Ex.: 0.001600",
+            }
+        ),
+    )
+    is_active = forms.BooleanField(
+        label="Ativo",
+        required=False,
+        initial=True,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
     )
 
     catalog_help_text = (
@@ -58,69 +113,19 @@ class ProviderModelCreateForm(forms.ModelForm):
     registered_models: list[dict] = []
     selectable_models_count: int = 0
 
-    class Meta:
-        model = ProviderModel
-        fields = [
-            "provider",
-            "known_model",
-            "description",
-            "context_window",
-            "input_cost_per_1k",
-            "output_cost_per_1k",
-            "is_active",
-        ]
-        labels = {
-            "provider": "Provider",
-            "description": "Descricao",
-            "context_window": "Janela de contexto",
-            "input_cost_per_1k": "Custo input / 1k",
-            "output_cost_per_1k": "Custo output / 1k",
-            "is_active": "Ativo",
-        }
-        widgets = {
-            "provider": forms.Select(attrs={"class": "form-select"}),
-            "description": forms.Textarea(
-                attrs={
-                    "class": "form-control",
-                    "rows": 4,
-                    "placeholder": "Descricao opcional do modelo.",
-                }
-            ),
-            "context_window": forms.NumberInput(
-                attrs={"class": "form-control", "placeholder": "Ex.: 128000", "min": 1}
-            ),
-            "input_cost_per_1k": forms.NumberInput(
-                attrs={
-                    "class": "form-control",
-                    "step": "0.000001",
-                    "min": "0",
-                    "placeholder": "Ex.: 0.000400",
-                }
-            ),
-            "output_cost_per_1k": forms.NumberInput(
-                attrs={
-                    "class": "form-control",
-                    "step": "0.000001",
-                    "min": "0",
-                    "placeholder": "Ex.: 0.001600",
-                }
-            ),
-            "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        }
-
     def __init__(self, *args, **kwargs):
+        self.provider_choices = kwargs.pop("provider_choices", [])
         self.catalog_provider_id = kwargs.pop("catalog_provider_id", None)
         self.catalog_model_key = kwargs.pop("catalog_model_key", None)
         self.available_models_payload = kwargs.pop("available_models_payload", None)
         super().__init__(*args, **kwargs)
 
-        self.fields["provider"].queryset = Provider.objects.order_by("name")
-        self.fields["context_window"].required = False
-        self.fields["input_cost_per_1k"].required = False
-        self.fields["output_cost_per_1k"].required = False
+        self.fields["provider"].choices = [("", "Selecione um provider")] + list(
+            self.provider_choices
+        )
 
-        selected_provider = self._get_selected_provider()
-        payload = self._resolve_available_models_payload(selected_provider=selected_provider)
+        selected_provider_id = self._get_selected_provider_id()
+        payload = self._resolve_available_models_payload(selected_provider_id=selected_provider_id)
         known_models = payload["items"]
         self.available_models_source = payload["source"]
         self.available_models_warnings = payload["warnings"]
@@ -142,18 +147,18 @@ class ProviderModelCreateForm(forms.ModelForm):
         if isinstance(widget, KnownModelSelect):
             widget.disabled_values = disabled_values
 
-        if not self.is_bound and selected_provider is not None:
-            self.fields["provider"].initial = selected_provider.pk
+        if not self.is_bound and selected_provider_id:
+            self.fields["provider"].initial = selected_provider_id
             model_key = str(self.catalog_model_key or "").strip()
             if model_key and model_key in self.known_models_by_key:
                 self.fields["known_model"].initial = model_key
 
         self.fields["known_model"].choices = self._build_known_model_choices(
-            selected_provider=selected_provider,
+            selected_provider_id=selected_provider_id,
             known_models=known_models,
         )
 
-        if selected_provider is None:
+        if not selected_provider_id:
             self.catalog_help_text = (
                 "Selecione um provider para carregar os modelos disponiveis via FastAPI."
             )
@@ -177,8 +182,6 @@ class ProviderModelCreateForm(forms.ModelForm):
             self.catalog_help_text = (
                 "Modelos carregados da FastAPI (catalogo administrativo)."
             )
-        elif self.available_models_source == "fallback_local":
-            self.catalog_help_text = "Fallback local ativado por falha real de integracao."
         else:
             self.catalog_help_text = "Integracao indisponivel. Revise mensagens de erro."
 
@@ -191,7 +194,7 @@ class ProviderModelCreateForm(forms.ModelForm):
         self.selected_known_model = self.known_models_by_key.get(selected_model_key)
 
     def _resolve_available_models_payload(
-        self, *, selected_provider: Provider | None
+        self, *, selected_provider_id: str | None
     ) -> dict[str, object]:
         if isinstance(self.available_models_payload, dict):
             raw_items = self.available_models_payload.get("items", [])
@@ -237,19 +240,11 @@ class ProviderModelCreateForm(forms.ModelForm):
                 "warnings": warnings,
             }
 
-        if selected_provider is None:
+        if not selected_provider_id:
             return {"items": [], "source": "unavailable", "warnings": []}
-        if selected_provider.fastapi_provider_id is None:
-            return {
-                "items": [],
-                "source": "provider_not_synced",
-                "warnings": [
-                    "Provider nao sincronizado com a FastAPI. Edite/salve o provider para criar o vinculo remoto."
-                ],
-            }
         return {"items": [], "source": "unavailable", "warnings": []}
 
-    def _get_selected_provider(self) -> Provider | None:
+    def _get_selected_provider_id(self) -> str | None:
         provider_value = None
 
         if self.is_bound:
@@ -257,26 +252,18 @@ class ProviderModelCreateForm(forms.ModelForm):
         elif self.catalog_provider_id:
             provider_value = self.catalog_provider_id
         else:
-            initial_provider = self.initial.get("provider")
-            if isinstance(initial_provider, Provider):
-                return initial_provider
-            provider_value = initial_provider
+            provider_value = self.initial.get("provider")
 
-        if not provider_value:
-            return None
-
-        try:
-            return Provider.objects.get(pk=int(provider_value))
-        except (TypeError, ValueError, Provider.DoesNotExist):
-            return None
+        provider_id = str(provider_value or "").strip()
+        return provider_id or None
 
     def _build_known_model_choices(
         self,
         *,
-        selected_provider: Provider | None,
+        selected_provider_id: str | None,
         known_models,
     ) -> list[tuple[str, str]]:
-        if selected_provider is None:
+        if not selected_provider_id:
             return [("", "Selecione um provider primeiro")]
         if not known_models:
             return [("", "Nenhum modelo disponivel para este provider")]
@@ -291,19 +278,13 @@ class ProviderModelCreateForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        provider = cleaned_data.get("provider")
-        model_key = (cleaned_data.get("known_model") or "").strip()
+        provider_remote_id = str(cleaned_data.get("provider") or "").strip()
+        model_key = str(cleaned_data.get("known_model") or "").strip()
 
-        if provider is None:
+        if not provider_remote_id:
             return cleaned_data
 
         known_models = list(self.known_models_by_key.values())
-        if self.available_models_source == "provider_not_synced":
-            self.add_error(
-                "provider",
-                "Provider nao sincronizado com a FastAPI. Salve o provider para gerar vinculo remoto.",
-            )
-            return cleaned_data
         if not known_models:
             warning_message = str(self.catalog_warning or "").strip()
             if not warning_message and self.available_models_warnings:
@@ -328,16 +309,9 @@ class ProviderModelCreateForm(forms.ModelForm):
             )
             return cleaned_data
 
-        if ProviderModel.objects.filter(provider=provider, slug=known_model["slug"]).exists():
-            self.add_error(
-                "known_model",
-                "Este modelo ja esta cadastrado para este provider.",
-            )
-            return cleaned_data
-
         self.selected_known_model = known_model
-        cleaned_data["name"] = known_model["name"]
-        cleaned_data["slug"] = known_model["slug"]
+        cleaned_data["model_name"] = known_model["name"]
+        cleaned_data["model_slug"] = known_model["slug"]
 
         if not cleaned_data.get("description"):
             cleaned_data["description"] = known_model.get("description") or ""
@@ -357,70 +331,59 @@ class ProviderModelCreateForm(forms.ModelForm):
 
         return cleaned_data
 
-    def save(self, commit=True):
-        instance = super().save(commit=False)
-        known_model = self.selected_known_model
-        if known_model is not None:
-            instance.name = known_model["name"]
-            instance.slug = known_model["slug"]
-            fastapi_model_id = str(known_model.get("fastapi_model_id") or "").strip()
-            if fastapi_model_id:
-                try:
-                    instance.fastapi_model_id = UUID(fastapi_model_id)
-                except ValueError:
-                    instance.fastapi_model_id = None
-        else:
-            instance.name = self.cleaned_data["name"]
-            instance.slug = self.cleaned_data["slug"]
 
-        if commit:
-            instance.save()
-        return instance
-
-
-class ProviderModelUpdateForm(forms.ModelForm):
-    class Meta:
-        model = ProviderModel
-        fields = [
-            "description",
-            "context_window",
-            "input_cost_per_1k",
-            "output_cost_per_1k",
-            "is_active",
-        ]
-        labels = {
-            "description": "Descricao",
-            "context_window": "Janela de contexto",
-            "input_cost_per_1k": "Custo input / 1k",
-            "output_cost_per_1k": "Custo output / 1k",
-            "is_active": "Ativo",
-        }
-        widgets = {
-            "description": forms.Textarea(
-                attrs={
-                    "class": "form-control",
-                    "rows": 4,
-                    "placeholder": "Descricao opcional do modelo.",
-                }
-            ),
-            "context_window": forms.NumberInput(
-                attrs={"class": "form-control", "placeholder": "Ex.: 128000", "min": 1}
-            ),
-            "input_cost_per_1k": forms.NumberInput(
-                attrs={
-                    "class": "form-control",
-                    "step": "0.000001",
-                    "min": "0",
-                    "placeholder": "Ex.: 0.000400",
-                }
-            ),
-            "output_cost_per_1k": forms.NumberInput(
-                attrs={
-                    "class": "form-control",
-                    "step": "0.000001",
-                    "min": "0",
-                    "placeholder": "Ex.: 0.001600",
-                }
-            ),
-            "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        }
+class ProviderModelUpdateForm(forms.Form):
+    description = forms.CharField(
+        label="Descricao",
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                "class": "form-control",
+                "rows": 4,
+                "placeholder": "Descricao opcional do modelo.",
+            }
+        ),
+    )
+    context_window = forms.IntegerField(
+        label="Janela de contexto",
+        required=False,
+        min_value=1,
+        widget=forms.NumberInput(
+            attrs={"class": "form-control", "placeholder": "Ex.: 128000", "min": 1}
+        ),
+    )
+    input_cost_per_1k = forms.DecimalField(
+        label="Custo input / 1k",
+        required=False,
+        decimal_places=6,
+        max_digits=12,
+        min_value=Decimal("0"),
+        widget=forms.NumberInput(
+            attrs={
+                "class": "form-control",
+                "step": "0.000001",
+                "min": "0",
+                "placeholder": "Ex.: 0.000400",
+            }
+        ),
+    )
+    output_cost_per_1k = forms.DecimalField(
+        label="Custo output / 1k",
+        required=False,
+        decimal_places=6,
+        max_digits=12,
+        min_value=Decimal("0"),
+        widget=forms.NumberInput(
+            attrs={
+                "class": "form-control",
+                "step": "0.000001",
+                "min": "0",
+                "placeholder": "Ex.: 0.001600",
+            }
+        ),
+    )
+    is_active = forms.BooleanField(
+        label="Ativo",
+        required=False,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )

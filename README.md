@@ -2,6 +2,10 @@
 
 API operacional de IA com FastAPI, PostgreSQL, Redis e worker assincrono.
 
+## Painel Django (transicao arquitetural)
+- Documento da etapa de limpeza controlada: `docs/django_admin_transition_stage8.md`
+- Regra atual: entidades operacionais devem ter fonte da verdade na FastAPI.
+
 ## Stack
 - Python 3.11+
 - FastAPI

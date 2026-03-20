@@ -11,9 +11,9 @@
 
     {% if is_editing %}
         <div class="d-flex flex-wrap gap-2 mb-3">
-            <form method="post" action="{% url 'providers:test_connectivity' object.id %}">
+            <form method="post" action="{% url 'providers:test_connectivity' remote_provider_id %}">
                 {% csrf_token %}
-                <input type="hidden" name="next" value="{% url 'providers:edit' object.id %}">
+                <input type="hidden" name="next" value="{% url 'providers:edit' remote_provider_id %}">
                 <button type="submit" class="btn btn-outline-primary">Testar conectividade</button>
             </form>
             {% if latest_connectivity_result %}
@@ -36,9 +36,9 @@
         {% endif %}
     {% endif %}
 
-    {% if object and object.fastapi_provider_id %}
+    {% if remote_provider_id %}
         <div class="alert alert-info" role="alert">
-            Provider remoto vinculado: <code>{{ object.fastapi_provider_id }}</code>
+            Provider remoto vinculado: <code>{{ remote_provider_id }}</code>
         </div>
     {% endif %}
 

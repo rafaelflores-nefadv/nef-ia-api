@@ -4,12 +4,20 @@ from providers.models import Provider
 
 
 class ProviderModel(models.Model):
+    """
+    LEGADO (transicao): espelho tecnico local para UI administrativa.
+
+    Nao usar este model como fonte da verdade para modelos operacionais.
+    A fonte oficial e a FastAPI/banco operacional remoto.
+    """
+
     provider = models.ForeignKey(
         Provider,
         on_delete=models.PROTECT,
         related_name="provider_models",
         verbose_name="Provider",
     )
+    # Marcador tecnico de vinculacao remota. Nao representa autoridade local.
     fastapi_model_id = models.UUIDField(
         "ID do modelo na FastAPI",
         null=True,

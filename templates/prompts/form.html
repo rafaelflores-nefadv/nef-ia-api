@@ -9,6 +9,25 @@
         Defina um titulo curto e um conteudo completo para reutilizacao administrativa de prompts.
     </p>
 
+    <div class="d-flex align-items-center gap-2 mb-3">
+        {% include "includes/data_origin_badge.html" with source=integration_source %}
+        {% if integration_mode == "api" %}
+            <span class="admin-note">Edicao remota via FastAPI.</span>
+        {% else %}
+            <span class="admin-note">Modo transicao: alteracoes gravadas no legado local ate endpoint oficial.</span>
+        {% endif %}
+    </div>
+
+    {% if integration_warnings %}
+        <div class="alert alert-warning" role="alert">
+            <ul class="mb-0 ps-3">
+                {% for warning in integration_warnings %}
+                    <li>{{ warning }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+
     {% if form.non_field_errors %}
         <div class="alert alert-danger" role="alert">
             {% for error in form.non_field_errors %}

@@ -11,7 +11,7 @@
     {% if integration_source == "api" %}
         <small class="admin-note">Detalhe construido com dados reais retornados pela FastAPI.</small>
     {% else %}
-        <small class="admin-note">Detalhe exibido em fallback local para manter continuidade operacional.</small>
+        <small class="admin-note">Detalhe indisponível no momento por falha de integração remota; nenhum fallback local oficial foi aplicado.</small>
     {% endif %}
 </section>
 
@@ -90,7 +90,11 @@
                 <h3 class="panel-title">Resumo e ações</h3>
             </div>
             <p class="mb-3">{{ file_item.summary|default:"-" }}</p>
-            <button type="button" class="btn btn-outline-secondary w-100 mb-3" disabled>Download (simulado)</button>
+            {% if file_item.download_available %}
+                <a href="{% url 'files_admin:download' file_item.id %}" class="btn btn-dark w-100 mb-3">Download remoto</a>
+            {% else %}
+                <button type="button" class="btn btn-outline-secondary w-100 mb-3" disabled>Download indisponível</button>
+            {% endif %}
 
             {% if file_item.has_error %}
                 <div class="border rounded-3 p-2 border-danger-subtle bg-danger-subtle">

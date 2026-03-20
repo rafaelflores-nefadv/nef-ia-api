@@ -4,6 +4,25 @@
 {% url "providers:create" as provider_create_url %}
 {% include "includes/page_header.html" with header_title="Providers" header_subtitle=page_subtitle breadcrumb_current="Providers" header_action_url=provider_create_url header_action_label="Novo provider" header_action_icon="bi bi-plus-lg" %}
 
+<div class="d-flex align-items-center gap-2 mb-3">
+    {% include "includes/data_origin_badge.html" with source=integration_source %}
+    {% if integration_source == "api" %}
+        <span class="admin-note">Leitura principal via FastAPI.</span>
+    {% else %}
+        <span class="admin-note">Fallback local temporario.</span>
+    {% endif %}
+</div>
+
+{% if integration_warnings %}
+    <div class="alert alert-warning" role="alert">
+        <ul class="mb-0 ps-3">
+            {% for warning in integration_warnings %}
+                <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
 {% if providers %}
     <section class="panel-card p-0 overflow-hidden">
         <div class="table-responsive">
@@ -26,8 +45,10 @@
                             <td class="fw-semibold">{{ provider.name }}</td>
                             <td><code>{{ provider.slug }}</code></td>
                             <td>
-                                {% if provider.fastapi_provider_id %}
+                                {% if provider.fastapi_provider_id and provider.id %}
                                     <span class="status-pill status-success">Sincronizado</span>
+                                {% elif provider.fastapi_provider_id %}
+                                    <span class="status-pill status-warning">Remoto sem vinculo local</span>
                                 {% else %}
                                     <span class="status-pill status-warning">Pendente</span>
                                 {% endif %}
@@ -60,20 +81,24 @@
                             <td>{{ provider.updated_at|date:"d/m/Y H:i" }}</td>
                             <td class="text-end">
                                 <div class="table-actions">
-                                    <form method="post" action="{% url 'providers:test_connectivity' provider.id %}">
-                                        {% csrf_token %}
-                                        <input type="hidden" name="next" value="{% url 'providers:list' %}">
-                                        <button type="submit" class="btn btn-sm btn-outline-primary">Testar conectividade</button>
-                                    </form>
-                                    <a href="{% url 'providers:edit' provider.id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
-                                    <form method="post" action="{% url 'providers:toggle_status' provider.id %}">
-                                        {% csrf_token %}
-                                        {% if provider.is_active %}
-                                            <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
-                                        {% else %}
-                                            <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
-                                        {% endif %}
-                                    </form>
+                                    {% if provider.fastapi_provider_id %}
+                                        <form method="post" action="{% url 'providers:test_connectivity' provider.fastapi_provider_id %}">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="next" value="{% url 'providers:list' %}">
+                                            <button type="submit" class="btn btn-sm btn-outline-primary">Testar conectividade</button>
+                                        </form>
+                                        <a href="{% url 'providers:edit' provider.fastapi_provider_id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
+                                        <form method="post" action="{% url 'providers:toggle_status' provider.fastapi_provider_id %}">
+                                            {% csrf_token %}
+                                            {% if provider.is_active %}
+                                                <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
+                                            {% else %}
+                                                <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
+                                            {% endif %}
+                                        </form>
+                                    {% else %}
+                                        <span class="admin-note">Sem ID remoto</span>
+                                    {% endif %}
                                 </div>
                             </td>
                         </tr>

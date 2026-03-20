@@ -50,6 +50,11 @@
         <p class="admin-note mb-3">
             Provider e identificacao do modelo estao bloqueados para preservar consistencia.
         </p>
+        {% if remote_model_id %}
+            <div class="alert alert-info" role="alert">
+                Modelo remoto vinculado: <code>{{ remote_model_id }}</code>
+            </div>
+        {% endif %}
         <div class="border rounded-3 p-3 bg-light-subtle mb-3">
             <div class="row g-2">
                 <div class="col-12 col-lg-4">

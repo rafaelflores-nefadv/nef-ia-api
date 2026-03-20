@@ -1,5 +1,6 @@
+from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import Http404
+from django.shortcuts import redirect
 from django.views.generic import TemplateView
 
 from core.services.executions_service import ExecutionsService
@@ -65,25 +66,38 @@ class ExecutionListView(LoginRequiredMixin, TemplateView):
 
 class ExecutionDetailView(LoginRequiredMixin, TemplateView):
     template_name = "executions/detail.html"
+    execution_payload: dict | None = None
+
+    def get(self, request, *args, **kwargs):
+        execution_id = self.kwargs["execution_id"]
+        payload = ExecutionsService().get_execution_detail(execution_id)
+        if not payload["found"] or payload["execution"] is None:
+            messages.error(
+                request,
+                str(
+                    payload.get("limitation_message")
+                    or "Execucao nao encontrada na consulta remota da API."
+                ),
+            )
+            return redirect("executions:list")
+        self.execution_payload = payload
+        return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        service = ExecutionsService()
+        payload = self.execution_payload or {}
+        execution = payload.get("execution")
+        if execution is None:
+            execution = {}
 
-        execution_id = self.kwargs["execution_id"]
-        payload = service.get_execution_detail(execution_id)
-        if not payload["found"] or payload["execution"] is None:
-            raise Http404("Execucao nao encontrada.")
-
-        execution = payload["execution"]
         context.update(
             {
-                "page_title": f"Execucao {execution['id']}",
+                "page_title": f"Execucao {execution.get('id', '-')}",
                 "active_menu": "execucoes",
                 "execution": execution,
-                "integration_source": payload["source"],
-                "integration_warnings": payload["warnings"],
-                "integration_limitation": payload["limitation_message"],
+                "integration_source": payload.get("source", "unavailable"),
+                "integration_warnings": payload.get("warnings", []),
+                "integration_limitation": payload.get("limitation_message"),
             }
         )
         return context

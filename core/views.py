@@ -15,21 +15,52 @@ from core.services.fastapi_integration_service import (
     FastAPIIntegrationService,
     FastAPIIntegrationServiceError,
 )
-from credentials.models import ProviderCredential
-from models_catalog.models import ProviderModel
-from providers.models import Provider
+from core.services.provider_credentials_api_service import ProviderCredentialsAPIService
+from core.services.provider_models_api_service import ProviderModelsAPIService
+from core.services.providers_api_service import ProvidersAPIService
 
 
 class DashboardView(LoginRequiredMixin, TemplateView):
     template_name = "dashboard/index.html"
 
+    @staticmethod
+    def _count_active_items(items: list[object]) -> int:
+        return sum(1 for item in items if bool(getattr(item, "is_active", False)))
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         health = get_operational_health()
 
-        providers_active = Provider.objects.filter(is_active=True).count()
-        models_active = ProviderModel.objects.filter(is_active=True).count()
-        credentials_active = ProviderCredential.objects.filter(is_active=True).count()
+        providers_payload = ProvidersAPIService().get_providers_list()
+        models_payload = ProviderModelsAPIService().get_models_list()
+        credentials_payload = ProviderCredentialsAPIService().get_credentials_list()
+
+        providers_active = self._count_active_items(providers_payload.get("items", []))
+        models_active = self._count_active_items(models_payload.get("items", []))
+        credentials_active = self._count_active_items(credentials_payload.get("items", []))
+
+        catalog_sources = {
+            "providers": str(providers_payload.get("source") or "unavailable"),
+            "models": str(models_payload.get("source") or "unavailable"),
+            "credentials": str(credentials_payload.get("source") or "unavailable"),
+        }
+        catalog_integration_warnings: list[str] = []
+        for domain_label, payload in (
+            ("Providers", providers_payload),
+            ("Modelos", models_payload),
+            ("Credenciais", credentials_payload),
+        ):
+            source = str(payload.get("source") or "unavailable")
+            if source != "api":
+                catalog_integration_warnings.append(
+                    f"{domain_label}: leitura remota indisponivel em modo pleno ({source})."
+                )
+            for warning in payload.get("warnings", []):
+                warning_message = str(warning or "").strip()
+                if warning_message:
+                    catalog_integration_warnings.append(
+                        f"{domain_label}: {warning_message}"
+                    )
 
         context.update(
             {
@@ -44,6 +75,8 @@ class DashboardView(LoginRequiredMixin, TemplateView):
                 "health_checks": health["ready"]["checks"],
                 "health_errors": health["errors"],
                 "last_sync_at": timezone.localtime(),
+                "catalog_sources": catalog_sources,
+                "catalog_integration_warnings": catalog_integration_warnings,
             }
         )
         return context
@@ -66,11 +99,11 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
     def _get_config(self) -> FastAPIIntegrationConfig:
         return FastAPIIntegrationService.get_or_create_config()
 
-    def _extract_token_id(self, value: str | None) -> int | None:
+    def _extract_token_reference(self, value: str | None) -> str | None:
         raw = str(value or "").strip()
-        if not raw.isdigit():
+        if not raw:
             return None
-        return int(raw)
+        return raw
 
     def _build_connection_summary(
         self,
@@ -225,26 +258,22 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
             else:
                 messages.error(request, "Informe um nome valido para criar o token.")
 
-        elif action in {"select_token", "activate_token", "deactivate_token", "revoke_token"}:
-            token_id = self._extract_token_id(request.POST.get("token_id"))
-            if token_id is None:
+        elif action in {"select_token", "deactivate_token", "revoke_token"}:
+            token_reference = self._extract_token_reference(request.POST.get("token_id"))
+            if token_reference is None:
                 messages.error(request, "Token informado e invalido.")
             else:
                 try:
                     if action == "select_token":
-                        token = FastAPIIntegrationService.select_token(config=config, token_id=token_id)
-                        messages.success(request, f"Token '{token.name}' selecionado para uso.")
-                    elif action == "activate_token":
-                        token = FastAPIIntegrationService.set_token_status(
+                        token = FastAPIIntegrationService.select_token(
                             config=config,
-                            token_id=token_id,
-                            is_active=True,
+                            token_reference=token_reference,
                         )
-                        messages.success(request, f"Token '{token.name}' ativado.")
+                        messages.success(request, f"Token '{token.name}' selecionado para uso.")
                     else:
                         token = FastAPIIntegrationService.set_token_status(
                             config=config,
-                            token_id=token_id,
+                            token_reference=token_reference,
                             is_active=False,
                         )
                         messages.success(request, f"Token '{token.name}' revogado/desativado.")

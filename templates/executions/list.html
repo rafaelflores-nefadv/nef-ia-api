@@ -10,10 +10,8 @@
     </div>
     {% if integration_source == "api" %}
         <small class="admin-note">Origem atual: dados reais consumidos da FastAPI administrativa.</small>
-    {% elif integration_source == "api_hibrido" %}
-        <small class="admin-note">Origem atual: integração parcial, combinando API real com fallback local.</small>
     {% else %}
-        <small class="admin-note">Origem atual: fallback local devido a indisponibilidade da API.</small>
+        <small class="admin-note">Origem atual: integração indisponível. Nenhum dado local foi promovido como fonte oficial.</small>
     {% endif %}
 </section>
 

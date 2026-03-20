@@ -4,6 +4,13 @@ from models_catalog.models import ProviderModel
 
 
 class AIPrompt(models.Model):
+    """
+    LEGADO (transicao): espelho local temporario para UI administrativa.
+
+    Nao usar como fonte da verdade para prompts operacionais.
+    O alvo arquitetural e FastAPI/catalogo remoto oficial.
+    """
+
     title = models.CharField("Titulo", max_length=120)
     content = models.TextField("Conteudo")
     ai_model = models.ForeignKey(

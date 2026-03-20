@@ -4,6 +4,13 @@ from providers.models import Provider
 
 
 class ProviderCredential(models.Model):
+    """
+    LEGADO (transicao): espelho tecnico local para compatibilidade do painel.
+
+    Nao usar este model como fonte da verdade para credenciais operacionais.
+    A fonte oficial e a FastAPI/banco operacional remoto.
+    """
+
     provider = models.ForeignKey(
         Provider,
         on_delete=models.PROTECT,
@@ -11,6 +18,7 @@ class ProviderCredential(models.Model):
         verbose_name="Provider",
     )
     name = models.CharField("Nome", max_length=150)
+    # Marcador tecnico de vinculacao remota. Nao representa autoridade local.
     fastapi_credential_id = models.UUIDField(
         "ID da credencial na FastAPI",
         null=True,

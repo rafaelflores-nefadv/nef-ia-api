@@ -14,12 +14,30 @@ from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_POST
 from django.views.generic import CreateView, FormView, ListView, TemplateView, UpdateView
 
+from core.services.prompts_catalog_api_service import PromptsCatalogAPIService
 from core.services.prompt_tests_service import PromptTestsService, PromptTestsServiceError
 
 from models_catalog.models import ProviderModel
 
 from .forms import AIPromptForm, PromptTestForm
 from .models import AIPrompt
+
+
+def _get_prompt_catalog_status() -> dict:
+    return PromptsCatalogAPIService().diagnose_catalog()
+
+
+def _build_transition_warning_message() -> str:
+    return (
+        "Modulo de prompts em transicao arquitetural: sem endpoint oficial de catalogo na FastAPI. "
+        "Operacao aplicada apenas no legado local do Django."
+    )
+
+
+def _add_transition_write_warning(request, *, catalog_status: dict) -> None:
+    if str(catalog_status.get("mode") or "") != "transition_local_legacy":
+        return
+    messages.warning(request, _build_transition_warning_message())
 
 
 def _prompt_test_status_meta(status: str) -> dict[str, str]:
@@ -60,6 +78,7 @@ class AIPromptListView(LoginRequiredMixin, ListView):
     context_object_name = "prompts"
 
     def get_queryset(self):
+        self.catalog_status = _get_prompt_catalog_status()
         queryset = (
             AIPrompt.objects.select_related("ai_model", "ai_model__provider")
             .all()
@@ -115,6 +134,19 @@ class AIPromptListView(LoginRequiredMixin, ListView):
                 "list_counter_label": (
                     f"Exibindo {filtered_count} de {total_count} prompt(s)"
                 ),
+                "integration_source": str(
+                    getattr(self, "catalog_status", {}).get("source") or "fallback_local"
+                ),
+                "integration_mode": str(
+                    getattr(self, "catalog_status", {}).get("mode")
+                    or "transition_local_legacy"
+                ),
+                "integration_warnings": list(
+                    getattr(self, "catalog_status", {}).get("warnings") or []
+                ),
+                "catalog_endpoint_probes": list(
+                    getattr(self, "catalog_status", {}).get("endpoint_probes") or []
+                ),
             }
         )
         return context
@@ -128,6 +160,7 @@ class AIPromptCreateView(LoginRequiredMixin, CreateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        catalog_status = _get_prompt_catalog_status()
         context.update(
             {
                 "page_title": "Novo prompt",
@@ -136,13 +169,23 @@ class AIPromptCreateView(LoginRequiredMixin, CreateView):
                 "active_menu": "prompts",
                 "submit_label": "Salvar prompt",
                 "is_editing": False,
+                "integration_source": str(catalog_status.get("source") or "fallback_local"),
+                "integration_mode": str(
+                    catalog_status.get("mode") or "transition_local_legacy"
+                ),
+                "integration_warnings": list(catalog_status.get("warnings") or []),
+                "catalog_endpoint_probes": list(
+                    catalog_status.get("endpoint_probes") or []
+                ),
             }
         )
         return context
 
     def form_valid(self, form):
+        catalog_status = _get_prompt_catalog_status()
         response = super().form_valid(form)
         messages.success(self.request, "Prompt criado com sucesso.")
+        _add_transition_write_warning(self.request, catalog_status=catalog_status)
         return response
 
 
@@ -157,6 +200,7 @@ class AIPromptUpdateView(LoginRequiredMixin, UpdateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        catalog_status = _get_prompt_catalog_status()
         context.update(
             {
                 "page_title": "Editar prompt",
@@ -165,19 +209,30 @@ class AIPromptUpdateView(LoginRequiredMixin, UpdateView):
                 "active_menu": "prompts",
                 "submit_label": "Salvar alteracoes",
                 "is_editing": True,
+                "integration_source": str(catalog_status.get("source") or "fallback_local"),
+                "integration_mode": str(
+                    catalog_status.get("mode") or "transition_local_legacy"
+                ),
+                "integration_warnings": list(catalog_status.get("warnings") or []),
+                "catalog_endpoint_probes": list(
+                    catalog_status.get("endpoint_probes") or []
+                ),
             }
         )
         return context
 
     def form_valid(self, form):
+        catalog_status = _get_prompt_catalog_status()
         response = super().form_valid(form)
         messages.success(self.request, "Prompt atualizado com sucesso.")
+        _add_transition_write_warning(self.request, catalog_status=catalog_status)
         return response
 
 
 @login_required
 @require_POST
 def ai_prompt_toggle_status(request, pk: int):
+    catalog_status = _get_prompt_catalog_status()
     prompt = get_object_or_404(AIPrompt, pk=pk)
     prompt.is_active = not bool(prompt.is_active)
     prompt.save(update_fields=["is_active", "updated_at"])
@@ -187,12 +242,14 @@ def ai_prompt_toggle_status(request, pk: int):
     else:
         messages.success(request, "Prompt desativado com sucesso.")
 
+    _add_transition_write_warning(request, catalog_status=catalog_status)
     return redirect("prompts:list")
 
 
 @login_required
 @require_POST
 def ai_prompt_delete(request, pk: int):
+    catalog_status = _get_prompt_catalog_status()
     prompt = get_object_or_404(AIPrompt, pk=pk)
     prompt_title = str(prompt.title or "").strip() or "prompt"
 
@@ -218,6 +275,7 @@ def ai_prompt_delete(request, pk: int):
         return redirect("prompts:list")
 
     messages.success(request, f'Prompt "{prompt_title}" excluido com sucesso.')
+    _add_transition_write_warning(request, catalog_status=catalog_status)
     return redirect("prompts:list")
 
 
@@ -234,6 +292,7 @@ class PromptTestCreateView(LoginRequiredMixin, FormView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        catalog_status = _get_prompt_catalog_status()
         context.update(
             {
                 "page_title": "Teste de prompt",
@@ -243,6 +302,14 @@ class PromptTestCreateView(LoginRequiredMixin, FormView):
                 ),
                 "active_menu": "prompts",
                 "submit_label": "Disparar teste",
+                "integration_source": str(catalog_status.get("source") or "fallback_local"),
+                "integration_mode": str(
+                    catalog_status.get("mode") or "transition_local_legacy"
+                ),
+                "integration_warnings": list(catalog_status.get("warnings") or []),
+                "catalog_endpoint_probes": list(
+                    catalog_status.get("endpoint_probes") or []
+                ),
             }
         )
         return context

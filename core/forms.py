@@ -59,11 +59,12 @@ class FastAPIIntegrationTokenRegisterForm(forms.Form):
     integration_token = forms.CharField(
         label="Token bootstrap (plaintext)",
         min_length=10,
-        widget=forms.TextInput(
+        widget=forms.PasswordInput(
             attrs={
                 "class": "form-control",
                 "placeholder": "Ex.: ia_int_xxxxx",
-            }
+            },
+            render_value=False,
         ),
     )
 

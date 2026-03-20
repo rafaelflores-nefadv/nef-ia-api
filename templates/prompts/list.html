@@ -6,6 +6,53 @@
 {% url "prompts:test_create" as prompt_test_url %}
 {% include "includes/page_header.html" with header_title="Prompts" header_subtitle=page_subtitle breadcrumb_current="Prompts" header_action_url=prompt_create_url header_action_label="Novo prompt" header_action_icon="bi bi-plus-lg" header_side_text=list_counter_label %}
 
+<div class="d-flex align-items-center gap-2 mb-3">
+    {% include "includes/data_origin_badge.html" with source=integration_source %}
+    {% if integration_mode == "api" %}
+        <span class="admin-note">Catalogo de prompts operando na FastAPI.</span>
+    {% else %}
+        <span class="admin-note">Modo transicao: CRUD local legado enquanto backend nao expoe catalogo oficial.</span>
+    {% endif %}
+</div>
+
+{% if integration_warnings %}
+    <div class="alert alert-warning" role="alert">
+        <ul class="mb-0 ps-3">
+            {% for warning in integration_warnings %}
+                <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
+{% if catalog_endpoint_probes %}
+    <section class="panel-card mb-3">
+        <h3 class="panel-title mb-2">Diagnostico de endpoints de catalogo</h3>
+        <div class="table-responsive">
+            <table class="table admin-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Endpoint</th>
+                        <th>HTTP</th>
+                        <th>Status</th>
+                        <th>Resultado</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for probe in catalog_endpoint_probes %}
+                        <tr>
+                            <td><code>{{ probe.path }}</code></td>
+                            <td>{{ probe.method }}</td>
+                            <td>{% if probe.status_code %}{{ probe.status_code }}{% else %}-{% endif %}</td>
+                            <td>{{ probe.message }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+{% endif %}
+
 <section class="panel-card mb-3">
     <div class="d-flex justify-content-end mb-3">
         <a href="{{ prompt_test_url }}" class="btn btn-outline-primary">

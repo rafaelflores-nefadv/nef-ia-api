@@ -88,7 +88,7 @@
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div>
             <h3 class="panel-title mb-1">Tokens de integracao</h3>
-            <p class="admin-note mb-0">Gerencie tokens ativos para operacao administrativa normal.</p>
+            <p class="admin-note mb-0">Listagem principal via FastAPI. O Django guarda plaintext apenas quando estritamente necessario para autenticacao local.</p>
         </div>
         <div>
             <a class="btn btn-sm btn-outline-warning" href="{% url 'fastapi_integration_bootstrap' %}">
@@ -119,6 +119,7 @@
                         <th>Nome</th>
                         <th>Token</th>
                         <th>Status</th>
+                        <th>Segredo local</th>
                         <th>Selecionado</th>
                         <th>Atualizado em</th>
                         <th class="text-end">Acoes</th>
@@ -128,12 +129,19 @@
                     {% for token in tokens %}
                         <tr>
                             <td class="fw-semibold">{{ token.name }}</td>
-                            <td><code>{{ token.masked_token }}</code></td>
+                            <td><code>{{ token.display_masked_token }}</code></td>
                             <td>
                                 {% if token.is_active %}
                                     <span class="status-pill status-success">Ativo</span>
                                 {% else %}
                                     <span class="status-pill status-neutral">Inativo</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if token.has_local_secret %}
+                                    <span class="status-pill status-success">Disponivel</span>
+                                {% else %}
+                                    <span class="status-pill status-warning">Nao armazenado</span>
                                 {% endif %}
                             </td>
                             <td>
@@ -146,11 +154,11 @@
                             <td>{{ token.updated_at|date:"d/m/Y H:i" }}</td>
                             <td class="text-end">
                                 <div class="table-actions">
-                                    {% if token.is_active %}
+                                    {% if token.is_active and token.has_local_secret %}
                                         {% if not selected_token or selected_token.id != token.id %}
                                             <form method="post">
                                                 {% csrf_token %}
-                                                <input type="hidden" name="token_id" value="{{ token.id }}">
+                                                <input type="hidden" name="token_id" value="{{ token.external_token_id|default:token.id }}">
                                                 <button type="submit" name="action" value="select_token" class="btn btn-sm btn-outline-secondary">Selecionar</button>
                                             </form>
                                         {% endif %}
@@ -159,15 +167,11 @@
                                     {% if token.is_active %}
                                         <form method="post">
                                             {% csrf_token %}
-                                            <input type="hidden" name="token_id" value="{{ token.id }}">
+                                            <input type="hidden" name="token_id" value="{{ token.external_token_id|default:token.id }}">
                                             <button type="submit" name="action" value="revoke_token" class="btn btn-sm btn-outline-danger">Revogar token</button>
                                         </form>
                                     {% else %}
-                                        <form method="post">
-                                            {% csrf_token %}
-                                            <input type="hidden" name="token_id" value="{{ token.id }}">
-                                            <button type="submit" name="action" value="activate_token" class="btn btn-sm btn-outline-success">Ativar</button>
-                                        </form>
+                                        <span class="admin-note">Reativacao nao suportada pela API</span>
                                     {% endif %}
                                 </div>
                             </td>

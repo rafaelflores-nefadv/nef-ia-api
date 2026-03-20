@@ -2,6 +2,12 @@ from django.db import models
 
 
 class FastAPIIntegrationConfig(models.Model):
+    """
+    Configuracao local de infraestrutura do painel Django.
+
+    Este model e local por definicao (nao pertence ao dominio operacional da API).
+    """
+
     base_url = models.URLField("Base URL FastAPI", max_length=500)
     is_active = models.BooleanField("Ativo", default=True)
     selected_integration_token = models.ForeignKey(
@@ -25,6 +31,13 @@ class FastAPIIntegrationConfig(models.Model):
 
 
 class FastAPIIntegrationToken(models.Model):
+    """
+    Registro local de tokens de integracao usados pelo painel.
+
+    Este model e local por definicao para operacao administrativa da UI.
+    Tokens operacionais de dominio permanecem na FastAPI.
+    """
+
     config = models.ForeignKey(
         FastAPIIntegrationConfig,
         on_delete=models.CASCADE,

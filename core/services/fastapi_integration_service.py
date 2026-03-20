@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-import httpx
 from django.conf import settings
 from django.db import transaction
 
 from core.models import FastAPIIntegrationConfig, FastAPIIntegrationToken
+from core.services.api_client import ApiResponse, FastAPIClient
 
 
 class FastAPIIntegrationServiceError(Exception):
@@ -35,11 +35,24 @@ class FastAPIIntegrationService:
 
     @staticmethod
     def list_tokens(*, config: FastAPIIntegrationConfig) -> list[FastAPIIntegrationToken]:
-        FastAPIIntegrationService._sync_known_tokens_status(config=config)
+        remote_masks = FastAPIIntegrationService._sync_tokens_from_fastapi(config=config)
         FastAPIIntegrationService._ensure_selected_token_consistency(config=config)
-        return list(
+        tokens = list(
             FastAPIIntegrationToken.objects.filter(config_id=config.id).order_by("-updated_at", "-id")
         )
+        for token in tokens:
+            display_mask = str(token.masked_token)
+            if (
+                not FastAPIIntegrationService._has_local_secret(token=token)
+                and token.external_token_id is not None
+            ):
+                display_mask = str(remote_masks.get(token.external_token_id) or "-")
+            token.display_masked_token = display_mask
+            token.remote_managed = token.external_token_id is not None
+            token.has_local_secret = FastAPIIntegrationService._has_local_secret(
+                token=token
+            )
+        return tokens
 
     @staticmethod
     def get_selected_token(
@@ -61,11 +74,18 @@ class FastAPIIntegrationService:
             return FastAPIIntegrationToken.objects.filter(
                 config_id=config.id,
                 is_active=True,
+            ).exclude(
+                integration_token__exact="",
             ).order_by("-updated_at", "-id").first()
-        if active_only and not selected_token.is_active:
+        if active_only and (
+            not selected_token.is_active
+            or not FastAPIIntegrationService._has_local_secret(token=selected_token)
+        ):
             return FastAPIIntegrationToken.objects.filter(
                 config_id=config.id,
                 is_active=True,
+            ).exclude(
+                integration_token__exact="",
             ).order_by("-updated_at", "-id").first()
         return selected_token
 
@@ -170,6 +190,10 @@ class FastAPIIntegrationService:
         if not raw_token:
             raise FastAPIIntegrationServiceError("Resposta da FastAPI nao trouxe o token gerado.")
 
+        should_store_secret = not bool(
+            FastAPIIntegrationService.get_selected_token_value(config=config)
+        )
+
         with transaction.atomic():
             created = None
             if external_token_id is not None:
@@ -183,26 +207,28 @@ class FastAPIIntegrationService:
                     config_id=config.id,
                     external_token_id=external_token_id,
                     name=returned_name,
-                    integration_token=raw_token,
+                    integration_token=raw_token if should_store_secret else "",
                     is_active=is_active,
                 )
             else:
                 created.external_token_id = external_token_id
                 created.name = returned_name
-                created.integration_token = raw_token
+                if should_store_secret:
+                    created.integration_token = raw_token
                 created.is_active = is_active
-                created.save(
-                    update_fields=[
-                        "external_token_id",
-                        "name",
-                        "integration_token",
-                        "is_active",
-                        "updated_at",
-                    ]
-                )
+                update_fields = [
+                    "external_token_id",
+                    "name",
+                    "is_active",
+                    "updated_at",
+                ]
+                if should_store_secret:
+                    update_fields.append("integration_token")
+                created.save(update_fields=update_fields)
 
-            config.selected_integration_token = created
-            config.save(update_fields=["selected_integration_token", "updated_at"])
+            if should_store_secret:
+                config.selected_integration_token = created
+                config.save(update_fields=["selected_integration_token", "updated_at"])
 
         return created, raw_token
 
@@ -210,16 +236,21 @@ class FastAPIIntegrationService:
     def select_token(
         *,
         config: FastAPIIntegrationConfig,
-        token_id: int,
+        token_reference: str,
     ) -> FastAPIIntegrationToken:
-        token = FastAPIIntegrationToken.objects.filter(
-            id=token_id,
-            config_id=config.id,
-        ).first()
+        token = FastAPIIntegrationService._find_token_by_reference(
+            config=config,
+            token_reference=token_reference,
+        )
         if token is None:
             raise FastAPIIntegrationServiceError("Token informado nao foi encontrado.")
         if not token.is_active:
             raise FastAPIIntegrationServiceError("Nao e possivel selecionar um token inativo.")
+        if not FastAPIIntegrationService._has_local_secret(token=token):
+            raise FastAPIIntegrationServiceError(
+                "Token remoto sem segredo local no Django. "
+                "Use bootstrap para cadastrar o valor plaintext apenas para autenticacao local."
+            )
 
         config.selected_integration_token = token
         config.save(update_fields=["selected_integration_token", "updated_at"])
@@ -229,28 +260,22 @@ class FastAPIIntegrationService:
     def set_token_status(
         *,
         config: FastAPIIntegrationConfig,
-        token_id: int,
+        token_reference: str,
         is_active: bool,
     ) -> FastAPIIntegrationToken:
-        token = FastAPIIntegrationToken.objects.filter(
-            id=token_id,
-            config_id=config.id,
-        ).first()
+        token = FastAPIIntegrationService._find_token_by_reference(
+            config=config,
+            token_reference=token_reference,
+        )
         if token is None:
             raise FastAPIIntegrationServiceError("Token informado nao foi encontrado.")
 
-        if is_active and token.external_token_id is not None:
-            remote_is_active = FastAPIIntegrationService._is_token_active_in_fastapi(
-                config=config,
-                external_token_id=token.external_token_id,
+        if is_active:
+            raise FastAPIIntegrationServiceError(
+                "A FastAPI nao oferece endpoint de reativacao de integration token. Gere um novo token."
             )
-            if remote_is_active is False:
-                raise FastAPIIntegrationServiceError(
-                    "Este token ja foi revogado na FastAPI e nao pode ser reativado. Gere um novo token."
-                )
 
-        if not is_active:
-            FastAPIIntegrationService._deactivate_token_in_fastapi(config=config, token=token)
+        FastAPIIntegrationService._deactivate_token_in_fastapi(config=config, token=token)
 
         if token.is_active != is_active:
             token.is_active = is_active
@@ -260,12 +285,12 @@ class FastAPIIntegrationService:
             replacement = FastAPIIntegrationToken.objects.filter(
                 config_id=config.id,
                 is_active=True,
-            ).exclude(id=token.id).order_by("-updated_at", "-id").first()
+            ).exclude(
+                id=token.id,
+            ).exclude(
+                integration_token__exact="",
+            ).order_by("-updated_at", "-id").first()
             config.selected_integration_token = replacement
-            config.save(update_fields=["selected_integration_token", "updated_at"])
-
-        if is_active and config.selected_integration_token_id is None:
-            config.selected_integration_token = token
             config.save(update_fields=["selected_integration_token", "updated_at"])
 
         return token
@@ -351,37 +376,35 @@ class FastAPIIntegrationService:
 
         normalized_method = method.upper()
         normalized_path = "/" + str(path or "").lstrip("/")
-        url = f"{base_url}{normalized_path}"
-        headers = {"Authorization": f"Bearer {admin_token}"}
+        client = FastAPIClient(
+            base_url=base_url,
+            timeout=timeout,
+            admin_token=admin_token,
+            integration_active=True,
+        )
+        result = client.request_json(
+            method=normalized_method,
+            path=normalized_path,
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json_body=json_body,
+            expect_dict=False,
+        )
 
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                response = client.request(
-                    normalized_method,
-                    url,
-                    headers=headers,
-                    json=json_body,
+        if result.status_code is None:
+            response_error = str(result.error or "").strip()
+            if "Tempo limite excedido" in response_error:
+                raise FastAPIIntegrationServiceError(
+                    f"Tempo limite excedido ao chamar FastAPI ({normalized_method} {normalized_path})."
                 )
-        except httpx.TimeoutException as exc:
-            raise FastAPIIntegrationServiceError(
-                f"Tempo limite excedido ao chamar FastAPI ({normalized_method} {normalized_path})."
-            ) from exc
-        except httpx.RequestError as exc:
             raise FastAPIIntegrationServiceError(
                 f"Falha de conexao ao chamar FastAPI ({normalized_method} {normalized_path})."
-            ) from exc
+            )
 
-        payload: Any = None
-        if response.status_code != 204:
-            try:
-                payload = response.json()
-            except ValueError:
-                payload = None
-
-        if response.status_code >= 400:
+        payload = result.data
+        if result.status_code >= 400:
             error_message = FastAPIIntegrationService._parse_error_message(payload)
             if not error_message:
-                error_message = f"FastAPI retornou HTTP {response.status_code} em {normalized_path}."
+                error_message = f"FastAPI retornou HTTP {result.status_code} em {normalized_path}."
             raise FastAPIIntegrationServiceError(error_message)
 
         if payload is None:
@@ -427,10 +450,17 @@ class FastAPIIntegrationService:
         config: FastAPIIntegrationConfig,
         token: FastAPIIntegrationToken,
     ) -> None:
+        request_token_value: str | None = None
         if token.external_token_id is None:
+            token_value = str(token.integration_token or "").strip()
+            if not token_value:
+                raise FastAPIIntegrationServiceError(
+                    "Token sem ID remoto e sem valor local. Nao e possivel revogar na FastAPI."
+                )
+            request_token_value = token_value
             token_info = FastAPIIntegrationService._inspect_admin_token(
                 config=config,
-                integration_token=str(token.integration_token or "").strip(),
+                integration_token=token_value,
             )
             external_token_id = FastAPIIntegrationService._parse_uuid(token_info.get("token_id"))
             if external_token_id is None:
@@ -450,18 +480,18 @@ class FastAPIIntegrationService:
             config=config,
             method="PATCH",
             path=path,
-            token_value=str(token.integration_token or "").strip(),
-            allow_legacy_fallback=False,
+            token_value=request_token_value,
+            allow_legacy_fallback=request_token_value is None,
         )
         if isinstance(payload, dict) and bool(payload.get("is_active", False)):
             raise FastAPIIntegrationServiceError("Falha ao revogar token na FastAPI.")
 
     @staticmethod
-    def _is_token_active_in_fastapi(
+    def _sync_tokens_from_fastapi(
         *,
         config: FastAPIIntegrationConfig,
-        external_token_id: UUID,
-    ) -> bool | None:
+    ) -> dict[UUID, str]:
+        remote_masks: dict[UUID, str] = {}
         try:
             payload = FastAPIIntegrationService._request_admin_api(
                 config=config,
@@ -469,84 +499,109 @@ class FastAPIIntegrationService:
                 path="/api/v1/admin/integration-tokens",
             )
         except FastAPIIntegrationServiceError:
-            return None
+            return remote_masks
 
         if not isinstance(payload, list):
-            return None
+            return remote_masks
 
+        remote_active_ids: set[UUID] = set()
         for item in payload:
             if not isinstance(item, dict):
                 continue
             item_id = FastAPIIntegrationService._parse_uuid(item.get("id"))
-            if item_id == external_token_id:
-                return bool(item.get("is_active", False))
-        return None
+            if item_id is None:
+                continue
+            remote_active_ids.add(item_id)
+            remote_name = str(item.get("name") or "").strip()[:120] or "integration-token"
+            remote_is_active = bool(item.get("is_active", False))
+            remote_mask = str(item.get("token_hash_masked") or "").strip()
+            if remote_mask:
+                remote_masks[item_id] = remote_mask
 
-    @staticmethod
-    def _sync_known_tokens_status(*, config: FastAPIIntegrationConfig) -> None:
-        known_tokens = list(
-            FastAPIIntegrationToken.objects.filter(
-                config_id=config.id,
-                external_token_id__isnull=False,
+            token = FastAPIIntegrationService._find_token_by_external_id(
+                config=config,
+                external_token_id=item_id,
             )
+            if token is None:
+                token = FastAPIIntegrationToken.objects.create(
+                    config_id=config.id,
+                    external_token_id=item_id,
+                    name=remote_name,
+                    integration_token="",
+                    is_active=remote_is_active,
+                )
+            else:
+                changed_fields: list[str] = []
+                if token.name != remote_name:
+                    token.name = remote_name
+                    changed_fields.append("name")
+                if token.is_active != remote_is_active:
+                    token.is_active = remote_is_active
+                    changed_fields.append("is_active")
+                if changed_fields:
+                    token.save(update_fields=[*changed_fields, "updated_at"])
+
+        stale_tokens = FastAPIIntegrationToken.objects.filter(
+            config_id=config.id,
+            external_token_id__isnull=False,
+        ).exclude(
+            external_token_id__in=remote_active_ids,
         )
-        if not known_tokens:
-            return
+        for token in stale_tokens:
+            if token.is_active:
+                token.is_active = False
+                token.save(update_fields=["is_active", "updated_at"])
 
-        try:
-            payload = FastAPIIntegrationService._request_admin_api(
-                config=config,
-                method="GET",
-                path="/api/v1/admin/integration-tokens",
-            )
-        except FastAPIIntegrationServiceError:
-            return
-
-        if not isinstance(payload, list):
-            return
-
-        remote_map: dict[UUID, dict[str, Any]] = {}
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            item_id = FastAPIIntegrationService._parse_uuid(item.get("id"))
-            if item_id is not None:
-                remote_map[item_id] = item
-
-        for token in known_tokens:
-            external_id = token.external_token_id
-            if external_id is None:
-                continue
-            remote_item = remote_map.get(external_id)
-            if remote_item is None:
-                continue
-
-            changed_fields: list[str] = []
-            remote_name = str(remote_item.get("name") or "").strip()[:120]
-            remote_is_active = bool(remote_item.get("is_active", False))
-            if remote_name and token.name != remote_name:
-                token.name = remote_name
-                changed_fields.append("name")
-            if token.is_active != remote_is_active:
-                token.is_active = remote_is_active
-                changed_fields.append("is_active")
-            if changed_fields:
-                token.save(update_fields=[*changed_fields, "updated_at"])
+        return remote_masks
 
     @staticmethod
     def _ensure_selected_token_consistency(*, config: FastAPIIntegrationConfig) -> None:
         selected = FastAPIIntegrationService.get_selected_token(config=config)
-        if selected is not None and selected.is_active:
+        if (
+            selected is not None
+            and selected.is_active
+            and FastAPIIntegrationService._has_local_secret(token=selected)
+        ):
             return
 
         replacement = FastAPIIntegrationToken.objects.filter(
             config_id=config.id,
             is_active=True,
+        ).exclude(
+            integration_token__exact="",
         ).order_by("-updated_at", "-id").first()
 
         if config.selected_integration_token_id != (replacement.id if replacement else None):
             config.selected_integration_token = replacement
             config.save(update_fields=["selected_integration_token", "updated_at"])
+
+    @staticmethod
+    def _has_local_secret(*, token: FastAPIIntegrationToken) -> bool:
+        return bool(str(token.integration_token or "").strip())
+
+    @staticmethod
+    def _find_token_by_reference(
+        *,
+        config: FastAPIIntegrationConfig,
+        token_reference: str,
+    ) -> FastAPIIntegrationToken | None:
+        raw = str(token_reference or "").strip()
+        if not raw:
+            return None
+
+        if raw.isdigit():
+            return FastAPIIntegrationToken.objects.filter(
+                config_id=config.id,
+                id=int(raw),
+            ).first()
+
+        token_uuid = FastAPIIntegrationService._parse_uuid(raw)
+        if token_uuid is None:
+            return None
+        return FastAPIIntegrationToken.objects.filter(
+            config_id=config.id,
+            external_token_id=token_uuid,
+        ).first()
 
     @staticmethod
     def test_connection(
@@ -556,6 +611,21 @@ class FastAPIIntegrationService:
         is_active: bool,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
+        def _build_connection_error(response: ApiResponse) -> dict[str, Any]:
+            response_error = str(response.error or "").strip()
+            is_timeout = "Tempo limite excedido" in response_error
+            return {
+                "ok": False,
+                "status": "error",
+                "status_label": "Timeout" if is_timeout else "Sem conexao",
+                "message": (
+                    "Tempo limite excedido ao conectar com a FastAPI."
+                    if is_timeout
+                    else "Falha de conexao com a FastAPI."
+                ),
+                "checks": checks,
+            }
+
         if not is_active:
             return {
                 "ok": False,
@@ -572,53 +642,46 @@ class FastAPIIntegrationService:
         token = str(integration_token or "").strip()
 
         checks: list[dict[str, Any]] = []
+        client = FastAPIClient(
+            base_url=normalized_base,
+            timeout=timeout,
+            admin_token=token,
+            integration_active=True,
+        )
 
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                live_resp = client.get(f"{normalized_base}/health/live")
-                checks.append(
-                    {
-                        "name": "health_live",
-                        "http_status": live_resp.status_code,
-                        "ok": live_resp.status_code < 400,
-                        "message": "Endpoint /health/live respondeu."
-                        if live_resp.status_code < 400
-                        else "Endpoint /health/live retornou erro.",
-                    }
-                )
+        live_resp = client.get("/health/live")
+        if live_resp.status_code is None:
+            return _build_connection_error(live_resp)
+        checks.append(
+            {
+                "name": "health_live",
+                "http_status": live_resp.status_code,
+                "ok": live_resp.status_code < 400,
+                "message": "Endpoint /health/live respondeu."
+                if live_resp.status_code < 400
+                else "Endpoint /health/live retornou erro.",
+            }
+        )
 
-                admin_headers = {"Authorization": f"Bearer {token}"} if token else {}
-                providers_resp = client.get(
-                    f"{normalized_base}/api/v1/admin/providers",
-                    headers=admin_headers,
-                )
-                providers_ok = providers_resp.status_code < 400
-                checks.append(
-                    {
-                        "name": "admin_providers",
-                        "http_status": providers_resp.status_code,
-                        "ok": providers_ok,
-                        "message": "Endpoint administrativo respondeu."
-                        if providers_ok
-                        else "Endpoint administrativo retornou erro.",
-                    }
-                )
-        except httpx.TimeoutException:
-            return {
-                "ok": False,
-                "status": "error",
-                "status_label": "Timeout",
-                "message": "Tempo limite excedido ao conectar com a FastAPI.",
-                "checks": checks,
+        admin_headers = {"Authorization": f"Bearer {token}"} if token else {}
+        providers_resp = client.get(
+            "/api/v1/admin/providers",
+            headers=admin_headers,
+            expect_dict=False,
+        )
+        if providers_resp.status_code is None:
+            return _build_connection_error(providers_resp)
+        providers_ok = providers_resp.status_code < 400
+        checks.append(
+            {
+                "name": "admin_providers",
+                "http_status": providers_resp.status_code,
+                "ok": providers_ok,
+                "message": "Endpoint administrativo respondeu."
+                if providers_ok
+                else "Endpoint administrativo retornou erro.",
             }
-        except httpx.RequestError:
-            return {
-                "ok": False,
-                "status": "error",
-                "status_label": "Sem conexao",
-                "message": "Falha de conexao com a FastAPI.",
-                "checks": checks,
-            }
+        )
 
         live_ok = bool(next((item["ok"] for item in checks if item["name"] == "health_live"), False))
         admin_ok = bool(next((item["ok"] for item in checks if item["name"] == "admin_providers"), False))
