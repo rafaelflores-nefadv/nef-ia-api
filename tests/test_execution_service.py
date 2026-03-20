@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
+import io
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID, uuid4
+
+from openpyxl import load_workbook
 
 from app.core.constants import ExecutionStatus
 from app.core.exceptions import AppException
@@ -163,11 +166,19 @@ class FakeProviderClient:
         input_tokens: int = 150,
         output_tokens: int = 75,
         estimated_cost: Decimal = Decimal("0.022500"),
+        output_text: str = (
+            "Classificacao da planilha: Classe A\n"
+            "Classificacao correta: Classe B\n"
+            "Veredito: Divergente\n"
+            "Motivo: Fundamentacao teste\n"
+            "Trecho determinante: Trecho teste"
+        ),
     ) -> None:
         self.modes = modes or ["success"]
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.estimated_cost = estimated_cost
+        self.output_text = output_text
         self.execute_calls: list[dict] = []
 
     def execute_prompt(self, **kwargs):  # type: ignore[no-untyped-def]
@@ -180,7 +191,7 @@ class FakeProviderClient:
         if mode == "logic_error":
             raise AppException("Invalid input.", status_code=422, code="invalid_input")
         return ProviderExecutionResult(
-            output_text="resultado final da IA",
+            output_text=self.output_text,
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
             raw_response={"id": "resp_test"},
@@ -248,7 +259,7 @@ def _build_api_token() -> DjangoAiApiToken:
     )
 
 
-def _build_request_file(analysis_request_id: UUID, *, file_name: str = "input.csv") -> DjangoAiRequestFile:
+def _build_request_file(analysis_request_id: UUID, *, file_name: str = "input.pdf") -> DjangoAiRequestFile:
     return DjangoAiRequestFile(
         id=uuid4(),
         analysis_request_id=analysis_request_id,
@@ -629,3 +640,102 @@ def test_concurrency_limit_schedules_retry(monkeypatch) -> None:
     assert queue_repo.jobs[queue_job.id].job_status == ExecutionStatus.QUEUED.value
     assert queue_repo.jobs[queue_job.id].retry_count == 1
     assert dispatched and dispatched[0] == 1000
+
+
+def test_tabular_csv_processes_each_row_and_generates_xlsx(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(FakeProviderClient(modes=["success", "success", "success"]))
+    service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text=(
+            "Conteudo: {{CONTEUDO}}\n"
+            "Prazo: {{PRAZO_AGENDADO}}\n"
+            "Valor: {{VALOR_DA_CAUSA}}\n"
+            "Acao: {{TIPO_DE_ACAO}}"
+        )
+    )
+
+    csv_payload = (
+        "processo,conteudo,prazo agendado,valor da causa,tipo de acao\n"
+        "P1,Conteudo linha 1,2026-01-10,1000,Acao A\n"
+        "P2,Conteudo linha 2,2026-01-11,2000,Acao B\n"
+        "P3,Conteudo linha 3,2026-01-12,3000,Acao C\n"
+    ).encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    assert len(provider_service.client.execute_calls) == 3
+    assert "Conteudo linha 1" in provider_service.client.execute_calls[0]["prompt"]
+
+    assert service.file_service.calls
+    generated = service.file_service.calls[0]
+    assert generated["file_type"] == "output"
+    assert generated["file_name"].endswith("_resultado.xlsx")
+    assert generated["mime_type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    workbook = load_workbook(io.BytesIO(generated["content"]))
+    sheet = workbook.active
+    header = [str(item or "") for item in next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))]
+    rows = list(sheet.iter_rows(min_row=2, values_only=True))
+    assert len(rows) == 3
+    assert "classificacao_correta" in header
+    assert "veredito" in header
+
+
+def test_tabular_csv_row_error_does_not_abort_execution(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(
+        FakeProviderClient(modes=["success", "logic_error", "success"])
+    )
+    service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text="Conteudo: {{CONTEUDO}}"
+    )
+
+    csv_payload = (
+        "conteudo,prazo agendado\n"
+        "Conteudo linha 1,2026-01-10\n"
+        "Conteudo linha 2,2026-01-11\n"
+        "Conteudo linha 3,2026-01-12\n"
+    ).encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    assert len(provider_service.client.execute_calls) == 3
+    assert len(service.usage_service.calls) == 2
+
+    generated = service.file_service.calls[0]
+    workbook = load_workbook(io.BytesIO(generated["content"]))
+    sheet = workbook.active
+    header = [str(item or "") for item in next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))]
+    status_index = header.index("status")
+    error_index = header.index("erro")
+    rows = list(sheet.iter_rows(min_row=2, values_only=True))
+    statuses = [str(row[status_index] or "") for row in rows]
+    errors = [str(row[error_index] or "") for row in rows]
+    assert statuses == ["ok", "erro", "ok"]
+    assert "Invalid input." in errors[1]

@@ -1,9 +1,14 @@
 import logging
+import csv
+import io
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -33,6 +38,71 @@ logger = logging.getLogger(__name__)
 
 RETRYABLE_PROVIDER_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 RETRYABLE_ERROR_CODES = {"provider_timeout", "provider_network_error"}
+TABULAR_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+
+TABULAR_FIELD_ALIASES = {
+    "conteudo": {
+        "conteudo",
+        "conteudo_texto",
+        "texto",
+        "descricao",
+        "descricao_fato",
+        "historico",
+    },
+    "prazo_agendado": {
+        "prazo_agendado",
+        "prazo",
+        "data_prazo",
+        "prazo_previsto",
+    },
+    "valor_da_causa": {
+        "valor_da_causa",
+        "valor_causa",
+        "valor",
+    },
+    "tipo_de_acao": {
+        "tipo_de_acao",
+        "tipo_acao",
+        "acao",
+        "classe_acao",
+    },
+}
+
+STRUCTURED_OUTPUT_ALIASES = {
+    "classificacao_da_planilha": {
+        "classificacao da planilha",
+        "classificacao_planilha",
+    },
+    "classificacao_correta": {
+        "classificacao correta",
+        "classificacao_correta",
+    },
+    "veredito": {
+        "veredito",
+    },
+    "motivo": {
+        "motivo",
+    },
+    "trecho_determinante": {
+        "trecho determinante",
+        "trecho_determinante",
+    },
+}
+
+TABULAR_OUTPUT_COLUMNS = (
+    "linha_origem",
+    "conteudo",
+    "prazo_agendado",
+    "valor_da_causa",
+    "tipo_de_acao",
+    "classificacao_da_planilha",
+    "classificacao_correta",
+    "veredito",
+    "motivo",
+    "trecho_determinante",
+    "status",
+    "erro",
+)
 
 
 @dataclass(slots=True)
@@ -51,6 +121,18 @@ class ExecutionStatusResult:
     finished_at: datetime | None
     error_message: str | None
     created_at: datetime
+
+
+@dataclass(slots=True)
+class ProcessedOutput:
+    content: bytes
+    file_name: str
+    mime_type: str
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost: Decimal
+    providers_used: set[str]
+    models_used: set[str]
 
 
 class ExecutionService:
@@ -363,85 +445,23 @@ class ExecutionService:
                 },
             )
 
-            input_file_content = self._read_input_file_content(
-                file_path=request_file.file_path,
-                file_name=request_file.file_name,
-            )
-            content_chunks = self._chunk_content(input_file_content)
-
             self.shared_executions.update_status(execution_id=execution_id, status=ExecutionStatus.GENERATING_OUTPUT.value)
             self.shared_session.commit()
 
-            total_input_tokens = 0
-            total_output_tokens = 0
-            total_cost = Decimal("0")
-            output_chunks: list[str] = []
-            providers_used: set[str] = set()
-            models_used: set[str] = set()
             started = perf_counter()
+            processed_output = self._process_request_file(
+                execution_id=execution_id,
+                request_file=request_file,
+                official_prompt=resolved_runtime.prompt_text,
+                runtime=runtime,
+            )
 
-            for chunk_index, content_chunk in enumerate(content_chunks, start=1):
-                prompt_input = self._build_provider_prompt(
-                    official_prompt=resolved_runtime.prompt_text,
-                    file_content=content_chunk,
-                )
-
-                sanitized_prompt, was_truncated = self._enforce_token_limit(
-                    prompt=prompt_input,
-                    provider_runtime=runtime,
-                )
-                if was_truncated:
-                    logger.warning(
-                        "Prompt content truncated due to token limit.",
-                        extra={
-                            "execution_id": str(execution_id),
-                            "event": "content_truncated",
-                            "chunk_index": chunk_index,
-                        },
-                    )
-
-                provider_result = self._execute_with_runtime(
-                    prompt_input=sanitized_prompt,
-                    runtime=runtime,
-                )
-
-                chunk_cost = runtime.client.estimate_cost(
-                    input_tokens=provider_result.input_tokens,
-                    output_tokens=provider_result.output_tokens,
-                    cost_input_per_1k_tokens=runtime.model.cost_input_per_1k_tokens,
-                    cost_output_per_1k_tokens=runtime.model.cost_output_per_1k_tokens,
-                )
-                if total_cost + chunk_cost > Decimal(str(settings.max_cost_per_execution)):
-                    raise AppException(
-                        "Execution aborted due to estimated cost limit.",
-                        status_code=422,
-                        code="cost_limit_exceeded",
-                        details={"max_cost_per_execution": settings.max_cost_per_execution},
-                    )
-
-                self.usage_service.register_usage(
-                    provider_id=runtime.provider.id,
-                    model_id=runtime.model.id,
-                    execution_id=execution_id,
-                    input_tokens=provider_result.input_tokens,
-                    output_tokens=provider_result.output_tokens,
-                    estimated_cost=chunk_cost,
-                )
-
-                total_input_tokens += provider_result.input_tokens
-                total_output_tokens += provider_result.output_tokens
-                total_cost += chunk_cost
-                providers_used.add(runtime.provider.slug)
-                models_used.add(runtime.model.model_slug)
-                output_chunks.append(provider_result.output_text)
-
-            merged_output = "\n\n".join(output_chunks)
             self.file_service.register_generated_execution_file(
                 execution_id=execution_id,
                 file_type="output",
-                file_name=f"execution_{execution_id}.txt",
-                content=merged_output.encode("utf-8"),
-                mime_type="text/plain",
+                file_name=processed_output.file_name,
+                content=processed_output.content,
+                mime_type=processed_output.mime_type,
             )
 
             queue_job.job_status = ExecutionStatus.COMPLETED.value
@@ -456,11 +476,11 @@ class ExecutionService:
                     performed_by_user_id=None,
                     changes_json={
                         "queue_job_id": str(queue_job_id),
-                        "providers_used": sorted(providers_used),
-                        "models_used": sorted(models_used),
-                        "input_tokens": total_input_tokens,
-                        "output_tokens": total_output_tokens,
-                        "estimated_cost": str(total_cost),
+                        "providers_used": sorted(processed_output.providers_used),
+                        "models_used": sorted(processed_output.models_used),
+                        "input_tokens": processed_output.total_input_tokens,
+                        "output_tokens": processed_output.total_output_tokens,
+                        "estimated_cost": str(processed_output.total_cost),
                     },
                     ip_address=None,
                 )
@@ -471,11 +491,15 @@ class ExecutionService:
                 "Execution processing completed.",
                 extra={
                     "execution_id": str(execution_id),
-                    "provider": ",".join(sorted(providers_used)) if providers_used else None,
-                    "model": ",".join(sorted(models_used)) if models_used else None,
-                    "input_tokens": total_input_tokens,
-                    "output_tokens": total_output_tokens,
-                    "estimated_cost": str(total_cost),
+                    "provider": ",".join(sorted(processed_output.providers_used))
+                    if processed_output.providers_used
+                    else None,
+                    "model": ",".join(sorted(processed_output.models_used))
+                    if processed_output.models_used
+                    else None,
+                    "input_tokens": processed_output.total_input_tokens,
+                    "output_tokens": processed_output.total_output_tokens,
+                    "estimated_cost": str(processed_output.total_cost),
                     "duration_seconds": round(perf_counter() - started, 4),
                 },
             )
@@ -500,15 +524,482 @@ class ExecutionService:
                 register_error_file=True,
             )
 
+    def _process_request_file(
+        self,
+        *,
+        execution_id: UUID,
+        request_file,
+        official_prompt: str,
+        runtime: ProviderRuntimeSelection,
+    ) -> ProcessedOutput:
+        extension = Path(str(request_file.file_name or "")).suffix.lower()
+        if extension in TABULAR_EXTENSIONS:
+            return self._process_tabular_file(
+                execution_id=execution_id,
+                file_path=request_file.file_path,
+                file_name=request_file.file_name,
+                official_prompt=official_prompt,
+                runtime=runtime,
+            )
+        return self._process_text_file(
+            execution_id=execution_id,
+            file_path=request_file.file_path,
+            file_name=request_file.file_name,
+            official_prompt=official_prompt,
+            runtime=runtime,
+        )
+
+    def _process_text_file(
+        self,
+        *,
+        execution_id: UUID,
+        file_path: str,
+        file_name: str,
+        official_prompt: str,
+        runtime: ProviderRuntimeSelection,
+    ) -> ProcessedOutput:
+        input_file_content = self._read_input_file_content(
+            file_path=file_path,
+            file_name=file_name,
+        )
+        content_chunks = self._chunk_content(input_file_content)
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_cost = Decimal("0")
+        output_chunks: list[str] = []
+        providers_used: set[str] = set()
+        models_used: set[str] = set()
+
+        for chunk_index, content_chunk in enumerate(content_chunks, start=1):
+            prompt_input = self._build_provider_prompt(
+                official_prompt=official_prompt,
+                file_content=content_chunk,
+            )
+            sanitized_prompt, was_truncated = self._enforce_token_limit(
+                prompt=prompt_input,
+                provider_runtime=runtime,
+            )
+            if was_truncated:
+                logger.warning(
+                    "Prompt content truncated due to token limit.",
+                    extra={
+                        "execution_id": str(execution_id),
+                        "event": "content_truncated",
+                        "chunk_index": chunk_index,
+                    },
+                )
+
+            provider_result = self._execute_with_runtime(
+                prompt_input=sanitized_prompt,
+                runtime=runtime,
+            )
+            chunk_cost = runtime.client.estimate_cost(
+                input_tokens=provider_result.input_tokens,
+                output_tokens=provider_result.output_tokens,
+                cost_input_per_1k_tokens=runtime.model.cost_input_per_1k_tokens,
+                cost_output_per_1k_tokens=runtime.model.cost_output_per_1k_tokens,
+            )
+            if total_cost + chunk_cost > Decimal(str(settings.max_cost_per_execution)):
+                raise AppException(
+                    "Execution aborted due to estimated cost limit.",
+                    status_code=422,
+                    code="cost_limit_exceeded",
+                    details={"max_cost_per_execution": settings.max_cost_per_execution},
+                )
+
+            self.usage_service.register_usage(
+                provider_id=runtime.provider.id,
+                model_id=runtime.model.id,
+                execution_id=execution_id,
+                input_tokens=provider_result.input_tokens,
+                output_tokens=provider_result.output_tokens,
+                estimated_cost=chunk_cost,
+            )
+
+            total_input_tokens += provider_result.input_tokens
+            total_output_tokens += provider_result.output_tokens
+            total_cost += chunk_cost
+            providers_used.add(runtime.provider.slug)
+            models_used.add(runtime.model.model_slug)
+            output_chunks.append(str(provider_result.output_text or "").strip())
+
+        merged_output = "\n\n".join([item for item in output_chunks if item]).strip()
+        return ProcessedOutput(
+            content=(merged_output or "(sem retorno textual do modelo)").encode("utf-8"),
+            file_name=f"execution_{execution_id}.txt",
+            mime_type="text/plain",
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+            total_cost=total_cost,
+            providers_used=providers_used,
+            models_used=models_used,
+        )
+
+    def _process_tabular_file(
+        self,
+        *,
+        execution_id: UUID,
+        file_path: str,
+        file_name: str,
+        official_prompt: str,
+        runtime: ProviderRuntimeSelection,
+    ) -> ProcessedOutput:
+        extension = Path(str(file_name or "")).suffix.lower()
+        file_bytes = self._read_input_file_bytes(file_path=file_path)
+        input_rows, input_headers = self._load_tabular_rows(
+            content=file_bytes,
+            extension=extension,
+        )
+        if not input_rows:
+            raise AppException(
+                "Tabular file does not contain valid rows for processing.",
+                status_code=422,
+                code="tabular_file_without_rows",
+            )
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_cost = Decimal("0")
+        providers_used: set[str] = set()
+        models_used: set[str] = set()
+        output_rows: list[dict[str, Any]] = []
+
+        original_header_map: dict[str, str] = {}
+        for header in input_headers:
+            output_header = header
+            if output_header in TABULAR_OUTPUT_COLUMNS:
+                output_header = f"entrada_{header}"
+            original_header_map[header] = output_header
+
+        for row in input_rows:
+            row_index = int(row.get("row_index") or 0)
+            row_values = row.get("values") if isinstance(row.get("values"), dict) else {}
+            prompt_fields = self._extract_prompt_fields_from_row(row_values=row_values)
+            prompt_input = self._render_prompt_for_row(
+                official_prompt=official_prompt,
+                prompt_fields=prompt_fields,
+            )
+
+            output_row: dict[str, Any] = {
+                "linha_origem": row_index,
+                "conteudo": prompt_fields["conteudo"],
+                "prazo_agendado": prompt_fields["prazo_agendado"],
+                "valor_da_causa": prompt_fields["valor_da_causa"],
+                "tipo_de_acao": prompt_fields["tipo_de_acao"],
+                "classificacao_da_planilha": "",
+                "classificacao_correta": "",
+                "veredito": "",
+                "motivo": "",
+                "trecho_determinante": "",
+                "status": "erro",
+                "erro": "",
+            }
+            for original_header, output_header in original_header_map.items():
+                output_row[output_header] = row_values.get(original_header, "")
+
+            try:
+                sanitized_prompt, _ = self._enforce_token_limit(
+                    prompt=prompt_input,
+                    provider_runtime=runtime,
+                )
+                provider_result = self._execute_with_runtime(
+                    prompt_input=sanitized_prompt,
+                    runtime=runtime,
+                )
+                line_cost = runtime.client.estimate_cost(
+                    input_tokens=provider_result.input_tokens,
+                    output_tokens=provider_result.output_tokens,
+                    cost_input_per_1k_tokens=runtime.model.cost_input_per_1k_tokens,
+                    cost_output_per_1k_tokens=runtime.model.cost_output_per_1k_tokens,
+                )
+                if total_cost + line_cost > Decimal(str(settings.max_cost_per_execution)):
+                    raise AppException(
+                        "Execution aborted due to estimated cost limit.",
+                        status_code=422,
+                        code="cost_limit_exceeded",
+                        details={"max_cost_per_execution": settings.max_cost_per_execution},
+                    )
+
+                self.usage_service.register_usage(
+                    provider_id=runtime.provider.id,
+                    model_id=runtime.model.id,
+                    execution_id=execution_id,
+                    input_tokens=provider_result.input_tokens,
+                    output_tokens=provider_result.output_tokens,
+                    estimated_cost=line_cost,
+                )
+
+                parsed_output = self._parse_structured_output(
+                    output_text=str(provider_result.output_text or "").strip()
+                )
+                output_row.update(parsed_output)
+                output_row["status"] = "ok"
+                output_row["erro"] = ""
+
+                total_input_tokens += provider_result.input_tokens
+                total_output_tokens += provider_result.output_tokens
+                total_cost += line_cost
+                providers_used.add(runtime.provider.slug)
+                models_used.add(runtime.model.model_slug)
+            except Exception as row_exc:
+                output_row["status"] = "erro"
+                output_row["erro"] = self._error_message(row_exc)
+                logger.warning(
+                    "Failed to process tabular row; execution will continue for remaining rows.",
+                    extra={"execution_id": str(execution_id), "row_index": row_index},
+                    exc_info=row_exc,
+                )
+
+            output_rows.append(output_row)
+
+        output_columns = ["linha_origem", *original_header_map.values()]
+        for column in TABULAR_OUTPUT_COLUMNS:
+            if column not in output_columns:
+                output_columns.append(column)
+
+        output_bytes = self._build_tabular_workbook(
+            rows=output_rows,
+            columns=output_columns,
+        )
+        logger.info(
+            "Tabular execution completed.",
+            extra={
+                "execution_id": str(execution_id),
+                "processed_rows": len(output_rows),
+                "successful_rows": sum(1 for row in output_rows if row.get("status") == "ok"),
+                "failed_rows": sum(1 for row in output_rows if row.get("status") == "erro"),
+            },
+        )
+        return ProcessedOutput(
+            content=output_bytes,
+            file_name=f"execution_{execution_id}_resultado.xlsx",
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+            total_cost=total_cost,
+            providers_used=providers_used,
+            models_used=models_used,
+        )
+
+    @staticmethod
+    def _normalize_key(value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return ""
+        normalized = unicodedata.normalize("NFKD", raw)
+        normalized = normalized.encode("ascii", "ignore").decode("ascii")
+        normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
+        return normalized
+
+    @classmethod
+    def _extract_prompt_fields_from_row(cls, *, row_values: dict[str, Any]) -> dict[str, str]:
+        indexed: dict[str, str] = {}
+        for raw_key, raw_value in row_values.items():
+            indexed[cls._normalize_key(raw_key)] = str(raw_value or "").strip()
+
+        def _pick(field_name: str) -> str:
+            aliases = TABULAR_FIELD_ALIASES[field_name]
+            for alias in aliases:
+                value = indexed.get(cls._normalize_key(alias))
+                if value:
+                    return value
+            return ""
+
+        conteudo = _pick("conteudo")
+        if not conteudo:
+            conteudo = next((value for value in indexed.values() if value), "")
+
+        return {
+            "conteudo": conteudo,
+            "prazo_agendado": _pick("prazo_agendado"),
+            "valor_da_causa": _pick("valor_da_causa"),
+            "tipo_de_acao": _pick("tipo_de_acao"),
+        }
+
+    def _render_prompt_for_row(
+        self,
+        *,
+        official_prompt: str,
+        prompt_fields: dict[str, str],
+    ) -> str:
+        rendered = str(official_prompt or "")
+        replacements = {
+            "CONTEUDO": prompt_fields.get("conteudo") or "",
+            "PRAZO_AGENDADO": prompt_fields.get("prazo_agendado") or "",
+            "VALOR_DA_CAUSA": prompt_fields.get("valor_da_causa") or "",
+            "TIPO_DE_ACAO": prompt_fields.get("tipo_de_acao") or "",
+        }
+        replaced_any = False
+        for key, value in replacements.items():
+            pattern = re.compile(r"\{\{\s*" + re.escape(key) + r"\s*\}\}", re.IGNORECASE)
+            rendered, replaced_count = pattern.subn(value, rendered)
+            if replaced_count:
+                replaced_any = True
+
+        if replaced_any:
+            return rendered
+        return (
+            f"{rendered}\n\n"
+            "Dados da linha:\n"
+            f"CONTEUDO: {replacements['CONTEUDO']}\n"
+            f"PRAZO_AGENDADO: {replacements['PRAZO_AGENDADO']}\n"
+            f"VALOR_DA_CAUSA: {replacements['VALOR_DA_CAUSA']}\n"
+            f"TIPO_DE_ACAO: {replacements['TIPO_DE_ACAO']}\n"
+        )
+
+    @classmethod
+    def _parse_structured_output(cls, *, output_text: str) -> dict[str, str]:
+        parsed = {key: "" for key in STRUCTURED_OUTPUT_ALIASES}
+        current_field: str | None = None
+        for raw_line in str(output_text or "").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            normalized_line = line
+            if normalized_line.startswith(("-", "*")):
+                normalized_line = normalized_line[1:].strip()
+            if ":" in normalized_line:
+                label_raw, value_raw = normalized_line.split(":", 1)
+                label_key = cls._normalize_key(label_raw).replace("_", " ")
+                matched_field = None
+                for field_name, aliases in STRUCTURED_OUTPUT_ALIASES.items():
+                    if label_key in {cls._normalize_key(alias).replace("_", " ") for alias in aliases}:
+                        matched_field = field_name
+                        break
+                if matched_field is not None:
+                    parsed[matched_field] = value_raw.strip()
+                    current_field = matched_field
+                    continue
+
+            if current_field is not None:
+                parsed[current_field] = (
+                    f"{parsed[current_field]}\n{line}".strip()
+                    if parsed[current_field]
+                    else line
+                )
+        return parsed
+
+    @staticmethod
+    def _normalize_tabular_value(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value).strip()
+
+    def _load_tabular_rows(
+        self,
+        *,
+        content: bytes,
+        extension: str,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        if extension == ".csv":
+            return self._load_csv_rows(content=content)
+        if extension in {".xlsx", ".xls"}:
+            return self._load_excel_rows(content=content)
+        raise AppException(
+            "Unsupported tabular file extension.",
+            status_code=422,
+            code="unsupported_tabular_extension",
+        )
+
+    def _load_csv_rows(self, *, content: bytes) -> tuple[list[dict[str, Any]], list[str]]:
+        try:
+            csv_text = content.decode("utf-8-sig", errors="ignore")
+            reader = csv.DictReader(io.StringIO(csv_text))
+        except Exception as exc:
+            raise AppException(
+                "Failed to parse CSV content.",
+                status_code=422,
+                code="tabular_file_parse_error",
+            ) from exc
+
+        raw_fieldnames = list(reader.fieldnames or [])
+        headers = [
+            str(name or "").strip() or f"coluna_{index + 1}"
+            for index, name in enumerate(raw_fieldnames)
+        ]
+
+        rows: list[dict[str, Any]] = []
+        for row_index, row in enumerate(reader, start=2):
+            if not isinstance(row, dict):
+                continue
+            row_values = {
+                header: self._normalize_tabular_value(row.get(raw_fieldnames[position], ""))
+                for position, header in enumerate(headers)
+            }
+            if not any(str(value or "").strip() for value in row_values.values()):
+                continue
+            rows.append({"row_index": row_index, "values": row_values})
+        return rows, headers
+
+    def _load_excel_rows(self, *, content: bytes) -> tuple[list[dict[str, Any]], list[str]]:
+        try:
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(filename=io.BytesIO(content), read_only=True, data_only=True)
+            sheet = workbook.worksheets[0]
+        except Exception as exc:
+            raise AppException(
+                "Failed to parse spreadsheet. Convert legacy .xls to .xlsx when necessary.",
+                status_code=422,
+                code="tabular_file_parse_error",
+            ) from exc
+
+        header_values = []
+        for header_row in sheet.iter_rows(min_row=1, max_row=1, values_only=True):
+            header_values = list(header_row or [])
+        headers: list[str] = []
+        for index, header_value in enumerate(header_values):
+            normalized_header = self._normalize_tabular_value(header_value)
+            headers.append(normalized_header or f"coluna_{index + 1}")
+        if not headers:
+            raise AppException(
+                "Spreadsheet header row is empty.",
+                status_code=422,
+                code="tabular_file_header_missing",
+            )
+
+        rows: list[dict[str, Any]] = []
+        for row_index, values in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+            current_values = list(values or [])
+            row_values: dict[str, str] = {}
+            for index, header in enumerate(headers):
+                cell_value = current_values[index] if index < len(current_values) else ""
+                row_values[header] = self._normalize_tabular_value(cell_value)
+
+            if not any(str(value or "").strip() for value in row_values.values()):
+                continue
+            rows.append({"row_index": row_index, "values": row_values})
+        return rows, headers
+
+    @staticmethod
+    def _build_tabular_workbook(*, rows: list[dict[str, Any]], columns: list[str]) -> bytes:
+        from openpyxl import Workbook
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "resultado"
+        sheet.append(columns)
+        for row in rows:
+            sheet.append([row.get(column, "") for column in columns])
+        sheet.freeze_panes = "A2"
+
+        output = io.BytesIO()
+        workbook.save(output)
+        return output.getvalue()
+
+    def _read_input_file_bytes(self, *, file_path: str) -> bytes:
+        with self.file_service.storage.open_file(file_path) as handle:
+            return handle.read()
+
     def _read_input_file_content(self, *, file_path: str, file_name: str) -> str:
         extension = Path(file_name).suffix.lower()
         with self.file_service.storage.open_file(file_path) as handle:
-            if extension == ".csv":
-                return handle.read().decode("utf-8", errors="ignore")
             if extension == ".pdf":
                 return self._extract_pdf_text(handle.read())
-            if extension == ".xlsx":
-                return self._extract_xlsx_text(handle.read())
             raw_bytes = handle.read()
             return raw_bytes.decode("utf-8", errors="ignore")
 

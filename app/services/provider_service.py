@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.crypto import decrypt_secret
 from app.core.exceptions import AppException
-from app.integrations.providers import AiProviderClient, ProviderRegistry
+from app.integrations.providers.base import AiProviderClient
+from app.integrations.providers.registry import ProviderRegistry
 from app.models.operational import DjangoAiProvider, DjangoAiProviderCredential, DjangoAiProviderModel
 from app.repositories.operational import ProviderModelRepository, ProviderRepository
 from app.services.providers.provider_resolution import resolve_discovery_provider_slug
