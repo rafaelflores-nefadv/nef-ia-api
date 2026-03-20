@@ -17,7 +17,7 @@ from core.services.automation_prompts_execution_service import (
     AutomationExecutionStatusItem,
     AutomationPromptsExecutionService,
     AutomationPromptsExecutionServiceError,
-    AutomationRuntimeReadItem,
+    TestPromptRuntimeReadItem,
 )
 
 from .forms import TestPromptExecutionForm, TestPromptForm
@@ -52,13 +52,12 @@ def _format_file_size(size_bytes: int) -> str:
     return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-def _load_automation_runtime_payload() -> tuple[list[AutomationRuntimeReadItem], str, list[str]]:
-    payload = AutomationPromptsExecutionService().list_automations_runtime()
-    return (
-        list(payload.get("items", [])),
-        str(payload.get("source") or "unavailable"),
-        list(payload.get("warnings") or []),
-    )
+def _load_test_prompt_runtime_payload() -> tuple[TestPromptRuntimeReadItem | None, str, list[str]]:
+    service = AutomationPromptsExecutionService()
+    try:
+        return service.get_test_prompt_runtime(), "api", []
+    except AutomationPromptsExecutionServiceError as exc:
+        return None, "unavailable", [str(exc)]
 
 
 class TestPromptListView(LoginRequiredMixin, ListView):
@@ -70,7 +69,6 @@ class TestPromptListView(LoginRequiredMixin, ListView):
         queryset = TestPrompt.objects.all().order_by("-updated_at", "name")
         search_query = str(self.request.GET.get("q") or "").strip()
         selected_status = str(self.request.GET.get("status") or "").strip().lower()
-        selected_automation = str(self.request.GET.get("automation") or "").strip()
 
         if search_query:
             queryset = queryset.filter(name__icontains=search_query)
@@ -78,39 +76,24 @@ class TestPromptListView(LoginRequiredMixin, ListView):
             queryset = queryset.filter(is_active=True)
         elif selected_status == "inativo":
             queryset = queryset.filter(is_active=False)
-        if selected_automation:
-            try:
-                selected_automation_uuid = UUID(selected_automation)
-            except ValueError:
-                selected_automation_uuid = None
-            if selected_automation_uuid is not None:
-                queryset = queryset.filter(automation_id=selected_automation_uuid)
 
         return queryset
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        automations, integration_source, integration_warnings = _load_automation_runtime_payload()
-        automation_name_by_id = {str(item.automation_id): item.automation_name for item in automations}
-
+        test_runtime, integration_source, integration_warnings = _load_test_prompt_runtime_payload()
         prompts = context.get("test_prompts") or []
-        for prompt in prompts:
-            prompt.automation_name = automation_name_by_id.get(str(prompt.automation_id), str(prompt.automation_id))
 
         context.update(
             {
                 "page_title": "Prompts de teste",
-                "page_subtitle": "Uso local da interface. Nao altera o prompt oficial da automacao.",
+                "page_subtitle": "Uso local da interface. Nao exige selecao manual de automacao.",
                 "active_menu": "prompts_teste",
                 "integration_source": integration_source,
                 "integration_warnings": integration_warnings,
-                "automation_filter_options": [
-                    (str(item.automation_id), f"{item.automation_name} ({item.automation_id})")
-                    for item in automations
-                ],
+                "test_runtime": test_runtime,
                 "search_query": str(self.request.GET.get("q") or "").strip(),
                 "selected_status": str(self.request.GET.get("status") or "").strip().lower(),
-                "selected_automation": str(self.request.GET.get("automation") or "").strip(),
                 "total_count": TestPrompt.objects.count(),
                 "filtered_count": len(prompts),
                 "list_counter_label": f"{len(prompts)} prompt(s) de teste",
@@ -123,21 +106,11 @@ class TestPromptCreateView(LoginRequiredMixin, FormView):
     template_name = "test_prompts/form.html"
     form_class = TestPromptForm
 
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        automations, integration_source, integration_warnings = _load_automation_runtime_payload()
-        self.integration_source = integration_source
-        self.integration_warnings = integration_warnings
-        kwargs["automation_choices"] = [
-            (item.automation_id, f"{item.automation_name} ({item.automation_id})")
-            for item in automations
-        ]
-        return kwargs
-
     def form_valid(self, form):
+        test_runtime, _, _ = _load_test_prompt_runtime_payload()
         prompt = TestPrompt(
             name=form.cleaned_data["name"],
-            automation_id=form.cleaned_data["automation"],
+            automation_id=test_runtime.automation_id if test_runtime is not None else None,
             prompt_text=form.cleaned_data["prompt_text"],
             notes=form.cleaned_data.get("notes") or "",
             is_active=bool(form.cleaned_data.get("is_active", False)),
@@ -150,6 +123,7 @@ class TestPromptCreateView(LoginRequiredMixin, FormView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        test_runtime, integration_source, integration_warnings = _load_test_prompt_runtime_payload()
         context.update(
             {
                 "page_title": "Novo prompt de teste",
@@ -158,8 +132,9 @@ class TestPromptCreateView(LoginRequiredMixin, FormView):
                 "active_menu": "prompts_teste",
                 "submit_label": "Salvar prompt de teste",
                 "is_editing": False,
-                "integration_source": getattr(self, "integration_source", "unavailable"),
-                "integration_warnings": getattr(self, "integration_warnings", []),
+                "test_runtime": test_runtime,
+                "integration_source": integration_source,
+                "integration_warnings": integration_warnings,
             }
         )
         return context
@@ -177,34 +152,16 @@ class TestPromptUpdateView(LoginRequiredMixin, FormView):
     def get_initial(self):
         return {
             "name": self.test_prompt.name,
-            "automation": str(self.test_prompt.automation_id),
             "prompt_text": self.test_prompt.prompt_text,
             "notes": self.test_prompt.notes,
             "is_active": self.test_prompt.is_active,
         }
 
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        automations, integration_source, integration_warnings = _load_automation_runtime_payload()
-        self.integration_source = integration_source
-        self.integration_warnings = integration_warnings
-        choices = [
-            (item.automation_id, f"{item.automation_name} ({item.automation_id})")
-            for item in automations
-        ]
-        if str(self.test_prompt.automation_id) not in {str(choice_id) for choice_id, _ in choices}:
-            choices.append(
-                (
-                    self.test_prompt.automation_id,
-                    f"Automacao atual ({self.test_prompt.automation_id})",
-                )
-            )
-        kwargs["automation_choices"] = choices
-        return kwargs
-
     def form_valid(self, form):
+        test_runtime, _, _ = _load_test_prompt_runtime_payload()
         self.test_prompt.name = form.cleaned_data["name"]
-        self.test_prompt.automation_id = form.cleaned_data["automation"]
+        if test_runtime is not None:
+            self.test_prompt.automation_id = test_runtime.automation_id
         self.test_prompt.prompt_text = form.cleaned_data["prompt_text"]
         self.test_prompt.notes = form.cleaned_data.get("notes") or ""
         self.test_prompt.is_active = bool(form.cleaned_data.get("is_active", False))
@@ -215,6 +172,7 @@ class TestPromptUpdateView(LoginRequiredMixin, FormView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        test_runtime, integration_source, integration_warnings = _load_test_prompt_runtime_payload()
         context.update(
             {
                 "page_title": "Editar prompt de teste",
@@ -224,8 +182,9 @@ class TestPromptUpdateView(LoginRequiredMixin, FormView):
                 "submit_label": "Salvar alteracoes",
                 "is_editing": True,
                 "object": self.test_prompt,
-                "integration_source": getattr(self, "integration_source", "unavailable"),
-                "integration_warnings": getattr(self, "integration_warnings", []),
+                "test_runtime": test_runtime,
+                "integration_source": integration_source,
+                "integration_warnings": integration_warnings,
             }
         )
         return context
@@ -234,21 +193,12 @@ class TestPromptUpdateView(LoginRequiredMixin, FormView):
 class TestPromptDetailView(LoginRequiredMixin, TemplateView):
     template_name = "test_prompts/detail.html"
     test_prompt: TestPrompt
-    automation_runtime: AutomationRuntimeReadItem | None = None
+    test_runtime: TestPromptRuntimeReadItem | None = None
     integration_warnings: list[str]
 
     def dispatch(self, request, *args, **kwargs):
         self.test_prompt = get_object_or_404(TestPrompt, pk=kwargs["pk"])
-        self.integration_warnings = []
-        try:
-            self.automation_runtime = AutomationPromptsExecutionService().get_automation_runtime(
-                automation_id=self.test_prompt.automation_id
-            )
-            self.integration_source = "api"
-        except AutomationPromptsExecutionServiceError as exc:
-            self.automation_runtime = None
-            self.integration_source = "unavailable"
-            self.integration_warnings.append(str(exc))
+        self.test_runtime, self.integration_source, self.integration_warnings = _load_test_prompt_runtime_payload()
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -258,7 +208,7 @@ class TestPromptDetailView(LoginRequiredMixin, TemplateView):
                 "page_title": self.test_prompt.name,
                 "active_menu": "prompts_teste",
                 "test_prompt": self.test_prompt,
-                "automation_runtime": self.automation_runtime,
+                "test_runtime": self.test_runtime,
                 "integration_source": getattr(self, "integration_source", "unavailable"),
                 "integration_warnings": self.integration_warnings,
             }
@@ -270,28 +220,18 @@ class TestPromptExecutionCreateView(LoginRequiredMixin, FormView):
     template_name = "test_prompts/execute.html"
     form_class = TestPromptExecutionForm
     test_prompt: TestPrompt
-    automation_runtime: AutomationRuntimeReadItem | None = None
+    test_runtime: TestPromptRuntimeReadItem | None = None
     integration_warnings: list[str]
 
     def dispatch(self, request, *args, **kwargs):
         self.test_prompt = get_object_or_404(TestPrompt, pk=kwargs["pk"])
-        self.integration_warnings = []
-        try:
-            self.automation_runtime = AutomationPromptsExecutionService().get_automation_runtime(
-                automation_id=self.test_prompt.automation_id
-            )
-            self.integration_source = "api"
-        except AutomationPromptsExecutionServiceError as exc:
-            self.automation_runtime = None
-            self.integration_source = "unavailable"
-            self.integration_warnings.append(str(exc))
+        self.test_runtime, self.integration_source, self.integration_warnings = _load_test_prompt_runtime_payload()
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form):
         service = AutomationPromptsExecutionService()
         try:
-            result = service.start_execution(
-                automation_id=self.test_prompt.automation_id,
+            result = service.start_test_prompt_execution(
                 uploaded_file=form.cleaned_data["request_file"],
                 prompt_override=self.test_prompt.prompt_text,
             )
@@ -316,7 +256,7 @@ class TestPromptExecutionCreateView(LoginRequiredMixin, FormView):
                 "page_title": "Executar prompt de teste",
                 "active_menu": "prompts_teste",
                 "test_prompt": self.test_prompt,
-                "automation_runtime": self.automation_runtime,
+                "test_runtime": self.test_runtime,
                 "integration_source": getattr(self, "integration_source", "unavailable"),
                 "integration_warnings": self.integration_warnings,
             }
@@ -347,10 +287,6 @@ class TestPromptExecutionDetailView(LoginRequiredMixin, TemplateView):
         service = AutomationPromptsExecutionService()
         self.execution_status = service.get_execution_status(execution_id=execution_id)
         self.integration_source = "api"
-        if self.execution_status.automation_id != self.test_prompt.automation_id:
-            self.integration_warnings.append(
-                "A execucao carregada pertence a outra automacao oficial. Verifique o vinculo antes de usar o resultado."
-            )
         try:
             self.execution_files = service.list_execution_files(execution_id=execution_id)
         except AutomationPromptsExecutionServiceError as exc:
@@ -374,7 +310,7 @@ class TestPromptExecutionDetailView(LoginRequiredMixin, TemplateView):
             execution = AutomationExecutionStatusItem(
                 execution_id=UUID("00000000-0000-0000-0000-000000000000"),
                 analysis_request_id=UUID("00000000-0000-0000-0000-000000000000"),
-                automation_id=self.test_prompt.automation_id,
+                automation_id=UUID("00000000-0000-0000-0000-000000000000"),
                 request_file_id=None,
                 request_file_name=None,
                 prompt_override_applied=False,

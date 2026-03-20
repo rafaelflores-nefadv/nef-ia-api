@@ -6,14 +6,24 @@
 
 <section class="panel-card mb-3">
     <p class="admin-note mb-0">
-        Prompt experimental de uso local da interface. Nao substitui nem sincroniza o prompt oficial da automacao.
+        Prompt experimental de uso local da interface. Nao substitui nem sincroniza prompts oficiais.
     </p>
 </section>
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">A escolha da automacao oficial e consultada na FastAPI.</span>
+    <span class="admin-note">Execucao sempre usa automacao tecnica interna de teste.</span>
 </div>
+
+{% if test_runtime %}
+    <section class="panel-card mb-3">
+        <div class="admin-note">
+            Runtime tecnico:
+            <strong>{{ test_runtime.automation_name }}</strong>
+            (<code>{{ test_runtime.automation_slug }}</code>)
+        </div>
+    </section>
+{% endif %}
 
 {% if integration_warnings %}
     <div class="alert alert-warning" role="alert">
@@ -41,13 +51,6 @@
                 <label for="{{ form.name.id_for_label }}" class="form-label fw-semibold">{{ form.name.label }}</label>
                 {{ form.name }}
                 {% for error in form.name.errors %}
-                    <div class="invalid-feedback d-block">{{ error }}</div>
-                {% endfor %}
-            </div>
-            <div class="col-12 col-lg-6">
-                <label for="{{ form.automation.id_for_label }}" class="form-label fw-semibold">{{ form.automation.label }}</label>
-                {{ form.automation }}
-                {% for error in form.automation.errors %}
                     <div class="invalid-feedback d-block">{{ error }}</div>
                 {% endfor %}
             </div>
@@ -80,4 +83,3 @@
     </form>
 </section>
 {% endblock %}
-

@@ -42,7 +42,9 @@ def _to_uuid(value: Any) -> UUID | None:
 class AutomationRuntimeReadItem:
     automation_id: UUID
     automation_name: str
+    automation_slug: str | None
     automation_is_active: bool
+    is_test_automation: bool
     prompt_available: bool
     prompt_version: int | None
     prompt_summary: str | None
@@ -62,6 +64,16 @@ class AutomationExecutionStartItem:
     status: str
     prompt_version: int
     prompt_override_applied: bool
+
+
+@dataclass
+class TestPromptRuntimeReadItem:
+    automation_id: UUID
+    automation_name: str
+    automation_slug: str
+    analysis_request_id: UUID
+    created_automation: bool
+    created_analysis_request: bool
 
 
 @dataclass
@@ -143,6 +155,12 @@ class AutomationPromptsExecutionService:
                 "Nao existe analysis_request para esta automacao no sistema compartilhado. "
                 "Sem esse vinculo, nao e possivel subir arquivo e executar."
             )
+        if code == "test_prompt_runtime_unavailable":
+            return "Runtime tecnico de prompt de teste indisponivel na FastAPI."
+        if code == "test_prompt_runtime_autocreate_failed":
+            return "Falha ao criar automaticamente a automacao tecnica de teste na FastAPI."
+        if code == "test_prompt_analysis_request_autocreate_failed":
+            return "Falha ao criar automaticamente analysis_request tecnico de teste na FastAPI."
         if code == "invalid_integration_token":
             return "Token de integracao FastAPI invalido."
         if code == "deactivated_integration_token":
@@ -163,7 +181,9 @@ class AutomationPromptsExecutionService:
         return AutomationRuntimeReadItem(
             automation_id=automation_id,
             automation_name=str(row.get("automation_name") or "").strip() or str(automation_id),
+            automation_slug=str(row.get("automation_slug") or "").strip() or None,
             automation_is_active=bool(row.get("automation_is_active", False)),
+            is_test_automation=bool(row.get("is_test_automation", False)),
             prompt_available=bool(row.get("prompt_available", False)),
             prompt_version=(None if row.get("prompt_version") is None else int(row.get("prompt_version"))),
             prompt_summary=str(row.get("prompt_summary") or "").strip() or None,
@@ -171,6 +191,22 @@ class AutomationPromptsExecutionService:
             provider_slug=str(row.get("provider_slug") or "").strip() or None,
             model_slug=str(row.get("model_slug") or "").strip() or None,
             latest_analysis_request_id=_to_uuid(row.get("latest_analysis_request_id")),
+        )
+
+    @staticmethod
+    def _normalize_test_prompt_runtime(payload: dict[str, Any]) -> TestPromptRuntimeReadItem | None:
+        automation_id = _to_uuid(payload.get("automation_id"))
+        analysis_request_id = _to_uuid(payload.get("analysis_request_id"))
+        automation_slug = str(payload.get("automation_slug") or "").strip()
+        if automation_id is None or analysis_request_id is None or not automation_slug:
+            return None
+        return TestPromptRuntimeReadItem(
+            automation_id=automation_id,
+            automation_name=str(payload.get("automation_name") or "").strip() or str(automation_id),
+            automation_slug=automation_slug,
+            analysis_request_id=analysis_request_id,
+            created_automation=bool(payload.get("created_automation", False)),
+            created_analysis_request=bool(payload.get("created_analysis_request", False)),
         )
 
     @staticmethod
@@ -317,6 +353,31 @@ class AutomationPromptsExecutionService:
         uploaded_file,
         prompt_override: str | None = None,
     ) -> AutomationExecutionStartItem:
+        file_name, file_content, content_type = self._read_uploaded_file_payload(uploaded_file)
+        return self._start_execution_request(
+            path=f"/api/v1/admin/automations/{automation_id}/executions",
+            file_name=file_name,
+            file_content=file_content,
+            content_type=content_type,
+            prompt_override=prompt_override,
+        )
+
+    def start_test_prompt_execution(
+        self,
+        *,
+        uploaded_file,
+        prompt_override: str | None = None,
+    ) -> AutomationExecutionStartItem:
+        file_name, file_content, content_type = self._read_uploaded_file_payload(uploaded_file)
+        return self._start_execution_request(
+            path="/api/v1/admin/test-prompts/executions",
+            file_name=file_name,
+            file_content=file_content,
+            content_type=content_type,
+            prompt_override=prompt_override,
+        )
+
+    def _read_uploaded_file_payload(self, uploaded_file) -> tuple[str, bytes, str]:
         file_name = str(getattr(uploaded_file, "name", "") or "").strip()
         if not file_name:
             raise AutomationPromptsExecutionServiceError(
@@ -339,16 +400,26 @@ class AutomationPromptsExecutionService:
                 code="empty_uploaded_file",
                 status_code=400,
             )
+        return file_name, bytes(file_content), content_type
 
+    def _start_execution_request(
+        self,
+        *,
+        path: str,
+        file_name: str,
+        file_content: bytes,
+        content_type: str,
+        prompt_override: str | None,
+    ) -> AutomationExecutionStartItem:
         result = self.client.request_multipart(
             method="POST",
-            path=f"/api/v1/admin/automations/{automation_id}/executions",
+            path=path,
             data=(
                 {"prompt_override": str(prompt_override).strip()}
                 if str(prompt_override or "").strip()
                 else None
             ),
-            files={"file": (file_name, bytes(file_content), content_type)},
+            files={"file": (file_name, file_content, content_type)},
             headers=self.client.get_admin_headers(),
             expect_dict=True,
         )
@@ -368,6 +439,33 @@ class AutomationPromptsExecutionService:
         if item is None:
             raise AutomationPromptsExecutionServiceError(
                 "Resposta invalida da FastAPI ao disparar execucao.",
+                code="fastapi_invalid_response",
+                status_code=result.status_code,
+            )
+        return item
+
+    def get_test_prompt_runtime(self) -> TestPromptRuntimeReadItem:
+        result = self.client.get(
+            "/api/v1/admin/test-prompts/runtime",
+            headers=self.client.get_admin_headers(),
+            expect_dict=True,
+        )
+        if not result.is_success or not isinstance(result.data, dict):
+            code, message = self._extract_error_meta(result)
+            raise AutomationPromptsExecutionServiceError(
+                self._friendly_error(
+                    code=code,
+                    status_code=result.status_code,
+                    fallback_message=message,
+                    action="carregar runtime de prompt de teste",
+                ),
+                code=code,
+                status_code=result.status_code,
+            )
+        item = self._normalize_test_prompt_runtime(result.data)
+        if item is None:
+            raise AutomationPromptsExecutionServiceError(
+                "Resposta invalida da FastAPI ao carregar runtime tecnico de prompt de teste.",
                 code="fastapi_invalid_response",
                 status_code=result.status_code,
             )

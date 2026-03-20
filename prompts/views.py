@@ -56,7 +56,7 @@ class AutomationPromptListView(LoginRequiredMixin, ListView):
         payload = AutomationPromptsExecutionService().list_automations_runtime()
         self.integration_source = payload["source"]
         self.integration_warnings = payload["warnings"]
-        return payload["items"]
+        return [item for item in payload["items"] if not bool(getattr(item, "is_test_automation", False))]
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -84,6 +84,10 @@ class AutomationExecutionCreateView(LoginRequiredMixin, FormView):
         payload = AutomationPromptsExecutionService().list_automations_runtime()
         self.integration_source = payload["source"]
         self.integration_warnings = payload["warnings"]
+        payload["items"] = [
+            item for item in payload.get("items", [])
+            if not bool(getattr(item, "is_test_automation", False))
+        ]
         return payload
 
     def get_form_kwargs(self):

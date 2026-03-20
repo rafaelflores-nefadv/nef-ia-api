@@ -1,5 +1,3 @@
-from uuid import UUID
-
 from django import forms
 from django.core.exceptions import ValidationError
 
@@ -15,11 +13,6 @@ class TestPromptForm(forms.Form):
                 "placeholder": "Ex.: Classificacao homologacao lote 1",
             }
         ),
-    )
-    automation = forms.ChoiceField(
-        label="Automacao oficial",
-        required=True,
-        widget=forms.Select(attrs={"class": "form-select"}),
     )
     prompt_text = forms.CharField(
         label="Texto do prompt de teste",
@@ -50,29 +43,11 @@ class TestPromptForm(forms.Form):
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
     )
 
-    def __init__(self, *args, **kwargs):
-        automation_choices = kwargs.pop("automation_choices", [])
-        super().__init__(*args, **kwargs)
-        self.fields["automation"].choices = [("", "Selecione uma automacao")] + [
-            (str(automation_id), label)
-            for automation_id, label in automation_choices
-        ]
-
     def clean_name(self) -> str:
         value = str(self.cleaned_data.get("name") or "").strip()
         if not value:
             raise ValidationError("Nome e obrigatorio.")
         return value
-
-    def clean_automation(self) -> str:
-        raw_value = str(self.cleaned_data.get("automation") or "").strip()
-        if not raw_value:
-            raise ValidationError("Selecione uma automacao oficial.")
-        try:
-            parsed = UUID(raw_value)
-        except ValueError as exc:
-            raise ValidationError("Automacao invalida.") from exc
-        return str(parsed)
 
     def clean_prompt_text(self) -> str:
         value = str(self.cleaned_data.get("prompt_text") or "").strip()
@@ -99,4 +74,3 @@ class TestPromptExecutionForm(forms.Form):
         if not file_name:
             raise ValidationError("Arquivo invalido para execucao.")
         return uploaded_file
-

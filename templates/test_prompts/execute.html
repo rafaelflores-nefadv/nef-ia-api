@@ -6,7 +6,7 @@
 
 <section class="panel-card mb-3">
     <p class="admin-note mb-0">
-        Modo: teste com <code>prompt_override</code> local. O prompt oficial da automacao nao sera alterado.
+        Modo: teste com <code>prompt_override</code> local em automacao tecnica interna. Prompt oficial nao sera alterado.
     </p>
 </section>
 
@@ -33,9 +33,9 @@
             <div class="admin-note"><code>ID local {{ test_prompt.pk }}</code></div>
         </div>
         <div class="col-12 col-lg-6">
-            <small class="text-secondary d-block">Automacao oficial</small>
-            <div>{{ automation_runtime.automation_name|default:"-" }}</div>
-            <div class="admin-note"><code>{{ test_prompt.automation_id }}</code></div>
+            <small class="text-secondary d-block">Automacao tecnica</small>
+            <div>{{ test_runtime.automation_name|default:"-" }}</div>
+            <div class="admin-note"><code>{{ test_runtime.automation_slug|default:"-" }}</code></div>
         </div>
         <div class="col-12">
             <small class="text-secondary d-block">Resumo do override</small>
@@ -72,4 +72,3 @@
     </form>
 </section>
 {% endblock %}
-

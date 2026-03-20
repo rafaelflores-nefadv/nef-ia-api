@@ -11,11 +11,15 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppException
 from app.core.constants import ExecutionStatus
+from app.core.config import get_settings
 from app.models.operational import DjangoAiApiToken, DjangoAiApiTokenPermission
 from app.repositories.operational import QueueJobRepository
 from app.repositories.shared import SharedAnalysisRepository, SharedAutomationRepository
 from app.services.execution_service import ExecutionService
 from app.services.file_service import DownloadableFile, FileService
+from app.services.prompt_test_runtime_service import PromptTestRuntimeContext, PromptTestRuntimeService
+
+settings = get_settings()
 
 
 @dataclass(slots=True, frozen=True)
@@ -50,6 +54,19 @@ class AdminAutomationExecutionService:
             operational_session=operational_session,
             shared_session=shared_session,
         )
+        self.test_prompt_runtime = PromptTestRuntimeService(shared_session)
+
+    @staticmethod
+    def _is_test_automation(*, automation_name: str | None, automation_slug: str | None) -> bool:
+        configured_slug = str(settings.test_prompts_automation_slug or "").strip().lower()
+        configured_name = str(settings.test_prompts_automation_name or "").strip().lower()
+        normalized_slug = str(automation_slug or "").strip().lower()
+        normalized_name = str(automation_name or "").strip().lower()
+        if configured_slug and normalized_slug == configured_slug:
+            return True
+        if configured_name and normalized_name == configured_name:
+            return True
+        return False
 
     @staticmethod
     def _summarize_prompt_text(prompt_text: str, *, limit: int = 220) -> str:
@@ -70,6 +87,7 @@ class AdminAutomationExecutionService:
                 {
                     "automation_id": automation.id,
                     "automation_name": str(automation.name or "").strip() or str(automation.id),
+                    "automation_slug": runtime.automation_slug if runtime is not None else None,
                     "automation_is_active": bool(automation.is_active),
                     "prompt_available": runtime is not None,
                     "prompt_version": runtime.prompt_version if runtime is not None else None,
@@ -77,6 +95,10 @@ class AdminAutomationExecutionService:
                     "provider_slug": runtime.provider_slug if runtime is not None else None,
                     "model_slug": runtime.model_slug if runtime is not None else None,
                     "latest_analysis_request_id": latest_request.id if latest_request is not None else None,
+                    "is_test_automation": self._is_test_automation(
+                        automation_name=str(automation.name or "").strip() or None,
+                        automation_slug=runtime.automation_slug if runtime is not None else None,
+                    ),
                 }
             )
         return items
@@ -96,6 +118,7 @@ class AdminAutomationExecutionService:
         return {
             "automation_id": automation.id,
             "automation_name": str(automation.name or "").strip() or str(automation.id),
+            "automation_slug": runtime.automation_slug if runtime is not None else None,
             "automation_is_active": bool(automation.is_active),
             "prompt_available": runtime is not None,
             "prompt_version": runtime.prompt_version if runtime is not None else None,
@@ -104,7 +127,41 @@ class AdminAutomationExecutionService:
             "provider_slug": runtime.provider_slug if runtime is not None else None,
             "model_slug": runtime.model_slug if runtime is not None else None,
             "latest_analysis_request_id": latest_request.id if latest_request is not None else None,
+            "is_test_automation": self._is_test_automation(
+                automation_name=str(automation.name or "").strip() or None,
+                automation_slug=runtime.automation_slug if runtime is not None else None,
+            ),
         }
+
+    def ensure_test_prompt_runtime(self) -> dict[str, Any]:
+        context: PromptTestRuntimeContext = self.test_prompt_runtime.ensure_runtime_context()
+        return {
+            "automation_id": context.automation_id,
+            "automation_name": context.automation_name,
+            "automation_slug": context.automation_slug,
+            "analysis_request_id": context.analysis_request_id,
+            "created_automation": context.created_automation,
+            "created_analysis_request": context.created_analysis_request,
+        }
+
+    def start_execution_for_test_prompt(
+        self,
+        *,
+        upload_file: UploadFile,
+        prompt_override: str | None,
+        actor_user_id: UUID,
+        ip_address: str | None,
+        correlation_id: str | None = None,
+    ) -> AdminAutomationExecutionStartResult:
+        runtime_context = self.test_prompt_runtime.ensure_runtime_context()
+        return self.start_execution_for_automation(
+            automation_id=runtime_context.automation_id,
+            upload_file=upload_file,
+            prompt_override=prompt_override,
+            actor_user_id=actor_user_id,
+            ip_address=ip_address,
+            correlation_id=correlation_id,
+        )
 
     @staticmethod
     def _build_admin_token_and_permissions(

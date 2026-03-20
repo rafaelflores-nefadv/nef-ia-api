@@ -9,7 +9,9 @@ from app.core.constants import ExecutionStatus
 class AutomationRuntimeItemResponse(BaseModel):
     automation_id: UUID
     automation_name: str
+    automation_slug: str | None = None
     automation_is_active: bool
+    is_test_automation: bool = False
     prompt_available: bool
     prompt_version: int | None = None
     prompt_summary: str | None = None
@@ -26,6 +28,15 @@ class AutomationRuntimeListResponse(BaseModel):
     generated_at: datetime
     total: int
     items: list[AutomationRuntimeItemResponse] = Field(default_factory=list)
+
+
+class TestPromptRuntimeResponse(BaseModel):
+    automation_id: UUID
+    automation_name: str
+    automation_slug: str
+    analysis_request_id: UUID
+    created_automation: bool = False
+    created_analysis_request: bool = False
 
 
 class AutomationExecutionCreateResponse(BaseModel):

@@ -6,14 +6,24 @@
 
 <section class="panel-card mb-3">
     <p class="admin-note mb-0">
-        Uso local da interface. Prompts de teste sao experimentais e <strong>nao alteram</strong> o prompt oficial da automacao.
+        Uso local da interface. Prompts de teste sao experimentais, independentes para o usuario e <strong>nao alteram</strong> prompts oficiais.
     </p>
 </section>
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Automacoes oficiais carregadas via FastAPI para vinculo logico.</span>
+    <span class="admin-note">Execucao em automacao tecnica interna (sem selecao manual).</span>
 </div>
+
+{% if test_runtime %}
+    <section class="panel-card mb-3">
+        <div class="admin-note">
+            Runtime tecnico ativo:
+            <strong>{{ test_runtime.automation_name }}</strong>
+            (<code>{{ test_runtime.automation_slug }}</code>)
+        </div>
+    </section>
+{% endif %}
 
 {% if integration_warnings %}
     <div class="alert alert-warning" role="alert">
@@ -39,17 +49,6 @@
                 <option value="inativo" {% if selected_status == "inativo" %}selected{% endif %}>Inativos</option>
             </select>
         </div>
-        <div class="col-12 col-md-5">
-            <label class="form-label small fw-semibold mb-1">Automacao</label>
-            <select name="automation" class="form-select">
-                <option value="">Todas as automacoes</option>
-                {% for automation_id, automation_label in automation_filter_options %}
-                    <option value="{{ automation_id }}" {% if selected_automation == automation_id %}selected{% endif %}>
-                        {{ automation_label }}
-                    </option>
-                {% endfor %}
-            </select>
-        </div>
         <div class="col-12 d-flex gap-2">
             <button type="submit" class="btn btn-dark">Filtrar</button>
             <a href="{% url 'test_prompts:list' %}" class="btn btn-outline-secondary">Limpar</a>
@@ -64,7 +63,6 @@
                 <thead>
                     <tr>
                         <th>Nome</th>
-                        <th>Automacao oficial</th>
                         <th>Status</th>
                         <th>Atualizado</th>
                         <th class="text-end">Acoes</th>
@@ -74,10 +72,6 @@
                     {% for item in test_prompts %}
                         <tr>
                             <td class="fw-semibold">{{ item.name }}</td>
-                            <td>
-                                <div>{{ item.automation_name }}</div>
-                                <div class="admin-note"><code>{{ item.automation_id }}</code></div>
-                            </td>
                             <td>
                                 {% if item.is_active %}
                                     <span class="status-pill status-success">Ativo</span>
@@ -115,4 +109,3 @@
     {% include "includes/empty_state.html" with empty_icon="bi bi-flask" empty_title="Nenhum prompt de teste cadastrado" empty_message="Crie prompts experimentais locais para homologar sem alterar o prompt oficial." empty_action_url=create_url empty_action_label="Novo prompt de teste" empty_action_icon="bi bi-plus-lg" %}
 {% endif %}
 {% endblock %}
-

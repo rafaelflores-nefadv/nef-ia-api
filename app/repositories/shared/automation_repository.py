@@ -12,6 +12,7 @@ class SharedAutomationRuntimeRecord:
     automation_id: uuid.UUID
     prompt_text: str
     prompt_version: int
+    automation_slug: str | None
     provider_slug: str | None
     model_slug: str | None
 
@@ -70,6 +71,11 @@ class SharedAutomationRepository:
             available_columns=automation_columns,
             candidates=["model_slug", "model", "ai_model_slug", "ai_model", "llm_model"],
         )
+        automation_slug_expr, _ = self._build_runtime_expr(
+            table_alias="a",
+            available_columns=automation_columns,
+            candidates=["slug", "automation_slug", "key", "code"],
+        )
 
         runtime_stmt = text(
             f"""
@@ -77,6 +83,7 @@ class SharedAutomationRepository:
                 ap.automation_id,
                 ap.prompt_text,
                 ap.version AS prompt_version,
+                {automation_slug_expr} AS automation_slug,
                 COALESCE({prompt_provider_expr}, {automation_provider_expr}) AS provider_slug,
                 COALESCE({prompt_model_expr}, {automation_model_expr}) AS model_slug
             FROM automation_prompts ap
@@ -94,6 +101,7 @@ class SharedAutomationRepository:
             automation_id=uuid.UUID(str(row["automation_id"])),
             prompt_text=str(row["prompt_text"]),
             prompt_version=int(row["prompt_version"]),
+            automation_slug=self._clean_runtime_value(row.get("automation_slug")),
             provider_slug=self._clean_runtime_value(row.get("provider_slug")),
             model_slug=self._clean_runtime_value(row.get("model_slug")),
         )
