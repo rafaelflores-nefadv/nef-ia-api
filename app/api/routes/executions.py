@@ -42,6 +42,7 @@ def create_execution(
         request_file_id=payload.request_file_id,
         request_file_ids=payload.request_file_ids,
         input_files=payload.input_files,
+        prompt_override=payload.prompt_override,
         api_token=api_token,
         token_permissions=token_permissions,
         ip_address=ip_address,

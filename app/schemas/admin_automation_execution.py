@@ -36,6 +36,7 @@ class AutomationExecutionCreateResponse(BaseModel):
     queue_job_id: UUID
     status: ExecutionStatus
     prompt_version: int
+    prompt_override_applied: bool = False
 
 
 class AdminExecutionStatusResponse(BaseModel):
@@ -44,6 +45,7 @@ class AdminExecutionStatusResponse(BaseModel):
     automation_id: UUID
     request_file_id: UUID | None = None
     request_file_name: str | None = None
+    prompt_override_applied: bool = False
     status: ExecutionStatus
     progress: int | None = None
     started_at: datetime | None = None

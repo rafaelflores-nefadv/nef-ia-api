@@ -27,6 +27,7 @@ class AdminAutomationExecutionStartResult:
     queue_job_id: UUID
     status: ExecutionStatus
     prompt_version: int
+    prompt_override_applied: bool
 
 
 class AdminAutomationExecutionService:
@@ -135,6 +136,7 @@ class AdminAutomationExecutionService:
         *,
         automation_id: UUID,
         upload_file: UploadFile,
+        prompt_override: str | None,
         actor_user_id: UUID,
         ip_address: str | None,
         correlation_id: str | None = None,
@@ -178,9 +180,11 @@ class AdminAutomationExecutionService:
             token_permissions=permissions,
             ip_address=ip_address,
         )
+        normalized_prompt_override = str(prompt_override or "").strip() or None
         execution = self.execution_service.create_execution(
             analysis_request_id=latest_request.id,
             request_file_id=request_file.id,
+            prompt_override=normalized_prompt_override,
             api_token=admin_token,
             token_permissions=permissions,
             ip_address=ip_address,
@@ -194,6 +198,7 @@ class AdminAutomationExecutionService:
             queue_job_id=execution.queue_job_id,
             status=execution.status,
             prompt_version=runtime.prompt_version,
+            prompt_override_applied=bool(normalized_prompt_override),
         )
 
     def get_execution_status_for_admin(self, *, execution_id: UUID, actor_user_id: UUID) -> dict[str, Any]:
@@ -224,12 +229,15 @@ class AdminAutomationExecutionService:
         )
         request_file_id: UUID | None = None
         request_file_name: str | None = None
+        prompt_override_applied = False
         latest_queue_job = self.queue_jobs.get_latest_by_execution_id(execution_id)
-        if latest_queue_job is not None and latest_queue_job.request_file_id is not None:
-            request_file = self.file_service.request_files.get_by_id(latest_queue_job.request_file_id)
-            request_file_id = latest_queue_job.request_file_id
-            if request_file is not None:
-                request_file_name = request_file.file_name
+        if latest_queue_job is not None:
+            prompt_override_applied = bool(str(latest_queue_job.prompt_override_text or "").strip())
+            if latest_queue_job.request_file_id is not None:
+                request_file = self.file_service.request_files.get_by_id(latest_queue_job.request_file_id)
+                request_file_id = latest_queue_job.request_file_id
+                if request_file is not None:
+                    request_file_name = request_file.file_name
 
         return {
             "execution_id": result.execution_id,
@@ -237,6 +245,7 @@ class AdminAutomationExecutionService:
             "automation_id": shared_request.automation_id,
             "request_file_id": request_file_id,
             "request_file_name": request_file_name,
+            "prompt_override_applied": prompt_override_applied,
             "status": result.status,
             "progress": result.progress,
             "started_at": result.started_at,

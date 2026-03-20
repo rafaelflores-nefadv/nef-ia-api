@@ -32,5 +32,6 @@ class DjangoAiQueueJob(UUIDPrimaryKeyMixin, TimestampMixin, OperationalBase):
     worker_name: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_override_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

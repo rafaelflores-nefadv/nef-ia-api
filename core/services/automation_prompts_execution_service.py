@@ -61,6 +61,7 @@ class AutomationExecutionStartItem:
     queue_job_id: UUID
     status: str
     prompt_version: int
+    prompt_override_applied: bool
 
 
 @dataclass
@@ -70,6 +71,7 @@ class AutomationExecutionStatusItem:
     automation_id: UUID
     request_file_id: UUID | None
     request_file_name: str | None
+    prompt_override_applied: bool
     status: str
     progress: int | None
     started_at: datetime | None
@@ -194,6 +196,7 @@ class AutomationPromptsExecutionService:
             queue_job_id=queue_job_id,
             status=str(payload.get("status") or "").strip().lower() or "queued",
             prompt_version=int(payload.get("prompt_version") or 0),
+            prompt_override_applied=bool(payload.get("prompt_override_applied", False)),
         )
 
     @staticmethod
@@ -216,6 +219,7 @@ class AutomationPromptsExecutionService:
             automation_id=automation_id,
             request_file_id=_to_uuid(payload.get("request_file_id")),
             request_file_name=str(payload.get("request_file_name") or "").strip() or None,
+            prompt_override_applied=bool(payload.get("prompt_override_applied", False)),
             status=str(payload.get("status") or "").strip().lower() or "queued",
             progress=progress,
             started_at=_parse_dt(payload.get("started_at")),
@@ -311,6 +315,7 @@ class AutomationPromptsExecutionService:
         *,
         automation_id: UUID,
         uploaded_file,
+        prompt_override: str | None = None,
     ) -> AutomationExecutionStartItem:
         file_name = str(getattr(uploaded_file, "name", "") or "").strip()
         if not file_name:
@@ -338,6 +343,11 @@ class AutomationPromptsExecutionService:
         result = self.client.request_multipart(
             method="POST",
             path=f"/api/v1/admin/automations/{automation_id}/executions",
+            data=(
+                {"prompt_override": str(prompt_override).strip()}
+                if str(prompt_override or "").strip()
+                else None
+            ),
             files={"file": (file_name, bytes(file_content), content_type)},
             headers=self.client.get_admin_headers(),
             expect_dict=True,

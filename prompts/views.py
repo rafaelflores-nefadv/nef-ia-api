@@ -213,6 +213,7 @@ class AutomationExecutionDetailView(LoginRequiredMixin, TemplateView):
                 automation_id=UUID("00000000-0000-0000-0000-000000000000"),
                 request_file_id=None,
                 request_file_name=None,
+                prompt_override_applied=False,
                 status="unknown",
                 progress=None,
                 started_at=None,

@@ -782,6 +782,7 @@ class ExecutionService:
         request_file_id: UUID | None = None,
         request_file_ids: list[UUID] | None = None,
         input_files: list[Any] | None = None,
+        prompt_override: str | None = None,
         api_token: DjangoAiApiToken,
         token_permissions: list[DjangoAiApiTokenPermission],
         ip_address: str | None = None,
@@ -847,6 +848,7 @@ class ExecutionService:
                 status_code=422,
                 code="execution_primary_input_missing",
             )
+        normalized_prompt_override = self._normalize_prompt_override(prompt_override)
 
         execution = self.shared_executions.create(
             analysis_request_id=analysis_request_id,
@@ -859,6 +861,7 @@ class ExecutionService:
             request_file_id=primary_input.request_file_id,
             job_status=ExecutionStatus.QUEUED.value,
             retry_count=0,
+            prompt_override_text=normalized_prompt_override,
         )
         self.queue_jobs.add(queue_job)
         for selection in resolved_inputs:
@@ -890,6 +893,8 @@ class ExecutionService:
                     "request_file_id": str(primary_input.request_file_id),
                     "request_file_ids": [entry["request_file_id"] for entry in serialized_inputs],
                     "input_files": serialized_inputs,
+                    "prompt_override_applied": bool(normalized_prompt_override),
+                    "prompt_override_characters": len(normalized_prompt_override or ""),
                     "token_id": str(api_token.id),
                     "queue_job_id": str(queue_job.id),
                 },
@@ -940,6 +945,7 @@ class ExecutionService:
                 "request_file_id": str(primary_input.request_file_id),
                 "request_file_ids": [str(item.request_file_id) for item in resolved_inputs],
                 "queue_job_id": str(queue_job.id),
+                "prompt_override_applied": bool(normalized_prompt_override),
                 "phase": "execution_create.enqueued",
                 "event": "execution_create_completed",
             },
@@ -1409,6 +1415,8 @@ class ExecutionService:
 
             failure_phase = "execution.process.runtime_resolution"
             resolved_runtime = self.runtime_resolver.resolve(shared_request.automation_id)
+            prompt_override = self._normalize_prompt_override(queue_job.prompt_override_text)
+            effective_prompt = prompt_override or resolved_runtime.prompt_text
             logger.info(
                 "Execution runtime resolved from shared system.",
                 extra={
@@ -1417,8 +1425,17 @@ class ExecutionService:
                     "provider": resolved_runtime.provider_slug,
                     "model": resolved_runtime.model_slug,
                     "prompt_version": resolved_runtime.prompt_version,
+                    "prompt_source": "override" if prompt_override else "official",
                 },
             )
+            if prompt_override:
+                self._log_execution_phase(
+                    phase="execution.process.prompt_override",
+                    message="Prompt override detected for this execution; official prompt remains unchanged.",
+                    execution_id=str(execution_id),
+                    queue_job_id=str(queue_job_id),
+                    prompt_override_characters=len(prompt_override),
+                )
 
             runtime = self.provider_service.resolve_runtime(
                 provider_slug=resolved_runtime.provider_slug,
@@ -1466,7 +1483,7 @@ class ExecutionService:
             processed_output = self._process_execution_by_strategy(
                 execution_id=execution_id,
                 processing_plan=processing_plan,
-                official_prompt=resolved_runtime.prompt_text,
+                official_prompt=effective_prompt,
                 runtime=runtime,
                 execution_started_at=execution_started_at,
                 execution_profile=execution_profile,
@@ -1539,6 +1556,8 @@ class ExecutionService:
                     "execution_profile_hard_clamped_fields": list(execution_profile.hard_clamped_fields)
                     if execution_profile
                     else None,
+                    "prompt_override_applied": bool(prompt_override),
+                    "prompt_source": "override" if prompt_override else "official",
                 },
                 ip_address=None,
             )
@@ -3150,6 +3169,13 @@ class ExecutionService:
         if isinstance(exc, AppException):
             return exc.payload.message
         return str(exc)
+
+    @staticmethod
+    def _normalize_prompt_override(value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return None
+        return normalized
 
     def _mark_execution_failed(
         self,

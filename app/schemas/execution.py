@@ -18,6 +18,7 @@ class ExecutionCreateRequest(BaseModel):
     request_file_id: UUID | None = None
     request_file_ids: list[UUID] | None = None
     input_files: list[ExecutionInputFileCreateItem] | None = None
+    prompt_override: str | None = None
 
     @model_validator(mode="after")
     def validate_input_payload(self) -> "ExecutionCreateRequest":
