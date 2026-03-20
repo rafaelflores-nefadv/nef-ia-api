@@ -361,6 +361,7 @@ class ProviderModelsAPIService:
             }
 
         items: list[ProviderModelReadItem] = []
+        mirror_failures = 0
         for provider_row in providers_result.data:
             if not isinstance(provider_row, dict):
                 continue
@@ -397,9 +398,16 @@ class ProviderModelsAPIService:
                 item = self._normalize_model_row(model_row, provider_ref=provider_ref)
                 if item is None:
                     continue
+                mirrored_local_id = self._upsert_local_model_mirror(item)
+                if mirrored_local_id is None:
+                    mirror_failures += 1
                 items.append(item)
 
         items.sort(key=lambda item: (item.provider.name.lower(), item.name.lower()))
+        if mirror_failures:
+            warnings.append(
+                f"{mirror_failures} modelo(s) remoto(s) nao puderam ser espelhados localmente no Django."
+            )
         if items:
             return {
                 "items": items,

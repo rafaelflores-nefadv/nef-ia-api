@@ -1,9 +1,26 @@
 from django import forms
 from django.core.exceptions import ValidationError
 
+from core.services.provider_models_api_service import ProviderModelsAPIService
 from models_catalog.models import ProviderModel
 
 from .models import AIPrompt
+
+
+def _sync_local_provider_models_for_prompt_form() -> None:
+    """
+    Tenta atualizar o espelho local de modelos via FastAPI antes de montar o select.
+
+    Fluxo defensivo:
+    - sucesso remoto: preenche/atualiza mirror local (fonte oficial = API)
+    - falha remota: preserva fluxo legado local sem quebrar formulario
+    """
+
+    try:
+        ProviderModelsAPIService().get_models_list()
+    except Exception:
+        # Formulario de prompts permanece funcional com dados locais em caso de falha de integracao.
+        return
 
 
 class AIPromptForm(forms.ModelForm):
@@ -37,6 +54,7 @@ class AIPromptForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        _sync_local_provider_models_for_prompt_form()
         self.fields["ai_model"].queryset = ProviderModel.objects.select_related("provider").order_by(
             "provider__name",
             "name",
