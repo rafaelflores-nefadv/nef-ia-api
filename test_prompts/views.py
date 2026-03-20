@@ -128,18 +128,10 @@ class TestPromptCreateView(LoginRequiredMixin, FormView):
         automations, integration_source, integration_warnings = _load_automation_runtime_payload()
         self.integration_source = integration_source
         self.integration_warnings = integration_warnings
-        choices = [
+        kwargs["automation_choices"] = [
             (item.automation_id, f"{item.automation_name} ({item.automation_id})")
             for item in automations
         ]
-        if str(self.test_prompt.automation_id) not in {str(choice_id) for choice_id, _ in choices}:
-            choices.append(
-                (
-                    self.test_prompt.automation_id,
-                    f"Automacao atual ({self.test_prompt.automation_id})",
-                )
-            )
-        kwargs["automation_choices"] = choices
         return kwargs
 
     def form_valid(self, form):
@@ -196,10 +188,18 @@ class TestPromptUpdateView(LoginRequiredMixin, FormView):
         automations, integration_source, integration_warnings = _load_automation_runtime_payload()
         self.integration_source = integration_source
         self.integration_warnings = integration_warnings
-        kwargs["automation_choices"] = [
+        choices = [
             (item.automation_id, f"{item.automation_name} ({item.automation_id})")
             for item in automations
         ]
+        if str(self.test_prompt.automation_id) not in {str(choice_id) for choice_id, _ in choices}:
+            choices.append(
+                (
+                    self.test_prompt.automation_id,
+                    f"Automacao atual ({self.test_prompt.automation_id})",
+                )
+            )
+        kwargs["automation_choices"] = choices
         return kwargs
 
     def form_valid(self, form):
