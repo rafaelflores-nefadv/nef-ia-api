@@ -27,7 +27,12 @@ class AutomationRuntimeResolverService:
     def __init__(self, shared_session: Session) -> None:
         self.repository = SharedAutomationRepository(shared_session)
 
-    def resolve(self, automation_id: str | uuid.UUID) -> AutomationRuntimeResolution:
+    def resolve(
+        self,
+        automation_id: str | uuid.UUID,
+        *,
+        require_prompt: bool = True,
+    ) -> AutomationRuntimeResolution:
         try:
             automation_uuid = uuid.UUID(str(automation_id))
         except ValueError as exc:
@@ -48,7 +53,7 @@ class AutomationRuntimeResolverService:
             )
 
         runtime_record = self.repository.get_runtime_config_for_automation(automation_uuid)
-        if runtime_record is None:
+        if runtime_record is None and require_prompt:
             raise AppException(
                 "Official prompt not found for automation.",
                 status_code=404,
@@ -56,10 +61,31 @@ class AutomationRuntimeResolverService:
                 details={"automation_id": str(automation_uuid)},
             )
 
+        runtime_target = None
+        if runtime_record is None:
+            runtime_target = self.repository.get_runtime_target_for_automation(automation_uuid)
+            if runtime_target is None:
+                raise AppException(
+                    "Automation not found in general system.",
+                    status_code=404,
+                    code="automation_not_found",
+                    details={"automation_id": str(automation_uuid)},
+                )
+
         missing_fields: list[str] = []
-        if not runtime_record.provider_slug:
+        provider_slug = (
+            runtime_record.provider_slug
+            if runtime_record is not None
+            else runtime_target.provider_slug if runtime_target is not None else None
+        )
+        model_slug = (
+            runtime_record.model_slug
+            if runtime_record is not None
+            else runtime_target.model_slug if runtime_target is not None else None
+        )
+        if not provider_slug:
             missing_fields.append("provider")
-        if not runtime_record.model_slug:
+        if not model_slug:
             missing_fields.append("model")
         if missing_fields:
             raise AppException(
@@ -73,9 +99,9 @@ class AutomationRuntimeResolverService:
             )
 
         return AutomationRuntimeResolution(
-            automation_id=runtime_record.automation_id,
-            prompt_text=runtime_record.prompt_text,
-            prompt_version=runtime_record.prompt_version,
-            provider_slug=runtime_record.provider_slug,
-            model_slug=runtime_record.model_slug,
+            automation_id=automation_uuid,
+            prompt_text=runtime_record.prompt_text if runtime_record is not None else "",
+            prompt_version=runtime_record.prompt_version if runtime_record is not None else 0,
+            provider_slug=provider_slug,
+            model_slug=model_slug,
         )

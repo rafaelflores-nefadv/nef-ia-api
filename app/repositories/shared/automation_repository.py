@@ -16,6 +16,13 @@ class SharedAutomationRuntimeRecord:
     model_slug: str | None
 
 
+@dataclass(slots=True)
+class SharedAutomationTargetRecord:
+    automation_id: uuid.UUID
+    provider_slug: str | None
+    model_slug: str | None
+
+
 class SharedAutomationRepository:
     """Repository for general-system automation data (source of truth)."""
 
@@ -87,6 +94,38 @@ class SharedAutomationRepository:
             automation_id=uuid.UUID(str(row["automation_id"])),
             prompt_text=str(row["prompt_text"]),
             prompt_version=int(row["prompt_version"]),
+            provider_slug=self._clean_runtime_value(row.get("provider_slug")),
+            model_slug=self._clean_runtime_value(row.get("model_slug")),
+        )
+
+    def get_runtime_target_for_automation(self, automation_id: uuid.UUID) -> SharedAutomationTargetRecord | None:
+        automation_columns = self._get_table_columns("automations")
+        provider_expr, _ = self._build_runtime_expr(
+            table_alias="a",
+            available_columns=automation_columns,
+            candidates=["provider_slug", "provider", "ai_provider_slug", "ai_provider", "llm_provider"],
+        )
+        model_expr, _ = self._build_runtime_expr(
+            table_alias="a",
+            available_columns=automation_columns,
+            candidates=["model_slug", "model", "ai_model_slug", "ai_model", "llm_model"],
+        )
+        stmt = text(
+            f"""
+            SELECT
+                a.id AS automation_id,
+                {provider_expr} AS provider_slug,
+                {model_expr} AS model_slug
+            FROM automations a
+            WHERE a.id = :automation_id
+            LIMIT 1
+            """
+        )
+        row = self.session.execute(stmt, {"automation_id": str(automation_id)}).mappings().first()
+        if row is None:
+            return None
+        return SharedAutomationTargetRecord(
+            automation_id=uuid.UUID(str(row["automation_id"])),
             provider_slug=self._clean_runtime_value(row.get("provider_slug")),
             model_slug=self._clean_runtime_value(row.get("model_slug")),
         )

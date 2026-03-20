@@ -150,8 +150,9 @@ class AdminAutomationExecutionService:
                 details={"automation_id": str(automation_id)},
             )
 
+        normalized_prompt_override = str(prompt_override or "").strip() or None
         runtime = self.shared_automations.get_runtime_config_for_automation(automation_id)
-        if runtime is None:
+        if runtime is None and not normalized_prompt_override:
             raise AppException(
                 "Official automation prompt not found.",
                 status_code=404,
@@ -180,7 +181,6 @@ class AdminAutomationExecutionService:
             token_permissions=permissions,
             ip_address=ip_address,
         )
-        normalized_prompt_override = str(prompt_override or "").strip() or None
         execution = self.execution_service.create_execution(
             analysis_request_id=latest_request.id,
             request_file_id=request_file.id,
@@ -197,7 +197,7 @@ class AdminAutomationExecutionService:
             execution_id=execution.execution_id,
             queue_job_id=execution.queue_job_id,
             status=execution.status,
-            prompt_version=runtime.prompt_version,
+            prompt_version=runtime.prompt_version if runtime is not None else 0,
             prompt_override_applied=bool(normalized_prompt_override),
         )
 

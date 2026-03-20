@@ -1414,8 +1414,11 @@ class ExecutionService:
             )
 
             failure_phase = "execution.process.runtime_resolution"
-            resolved_runtime = self.runtime_resolver.resolve(shared_request.automation_id)
             prompt_override = self._normalize_prompt_override(queue_job.prompt_override_text)
+            resolved_runtime = self.runtime_resolver.resolve(
+                shared_request.automation_id,
+                require_prompt=not bool(prompt_override),
+            )
             effective_prompt = prompt_override or resolved_runtime.prompt_text
             logger.info(
                 "Execution runtime resolved from shared system.",

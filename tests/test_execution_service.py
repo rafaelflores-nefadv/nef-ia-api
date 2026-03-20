@@ -174,9 +174,11 @@ class FakeAutomationRuntimeResolver:
         self.model_slug = model_slug
         self.prompt_text = prompt_text
         self.resolve_calls: list[UUID] = []
+        self.resolve_require_prompt_calls: list[bool] = []
 
-    def resolve(self, automation_id):  # type: ignore[no-untyped-def]
+    def resolve(self, automation_id, *, require_prompt: bool = True):  # type: ignore[no-untyped-def]
         self.resolve_calls.append(automation_id)
+        self.resolve_require_prompt_calls.append(require_prompt)
         return SimpleNamespace(
             automation_id=automation_id,
             prompt_text=self.prompt_text,
@@ -459,6 +461,35 @@ def test_create_execution_supports_input_files_roles(monkeypatch) -> None:
     roles = {item.request_file_id: item.role for item in service.execution_inputs.items}  # type: ignore[attr-defined]
     assert roles[first_file.id] == "primary"
     assert roles[second_file.id] == "context"
+
+
+def test_execution_with_prompt_override_skips_official_prompt_requirement(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id)
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    runtime_resolver = FakeAutomationRuntimeResolver(prompt_text="")
+    provider_service = FakeProviderService(FakeProviderClient(modes=["success"]))
+    service.runtime_resolver = runtime_resolver  # type: ignore[assignment]
+    service.provider_service = provider_service  # type: ignore[assignment]
+
+    monkeypatch.setattr(service, "_read_input_file_content", lambda **_: "conteudo arquivo")
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    queue_job.prompt_override_text = "Prompt override para execucao"
+
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    assert runtime_resolver.resolve_calls == [automation_id]
+    assert runtime_resolver.resolve_require_prompt_calls == [False]
+    assert provider_service.client.execute_calls
+    sent_prompt = provider_service.client.execute_calls[0]["prompt"]
+    assert "Prompt override para execucao" in sent_prompt
 
 
 def test_list_execution_inputs_returns_legacy_queue_fallback() -> None:
