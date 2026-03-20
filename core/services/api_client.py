@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from django.conf import settings
-from django.db import DatabaseError
-from django.db.utils import OperationalError, ProgrammingError
+from django.db import close_old_connections
+from django.db.utils import Error as DjangoDBError
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -140,7 +144,14 @@ class FastAPIClient:
                 "integration_token": selected_token.integration_token if selected_token else "",
                 "is_active": config.is_active,
             }
-        except (OperationalError, ProgrammingError, DatabaseError):
+        except DjangoDBError:
+            # Evita falha global no primeiro request quando a conexao com DB oscila.
+            # A UI continua com fallback de settings/env para integracao FastAPI.
+            close_old_connections()
+            logger.warning(
+                "Falha ao carregar configuracao de integracao FastAPI no banco local; usando fallback de settings.",
+                exc_info=True,
+            )
             return None
 
     def get_admin_headers(self) -> dict[str, str] | None:
