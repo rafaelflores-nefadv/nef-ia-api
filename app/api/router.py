@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.routes import (
+    admin_automation_execution,
     admin_auth,
     admin_catalog,
     admin_execution_files,
@@ -23,6 +24,7 @@ api_router.include_router(system.router, prefix=f"{settings.api_prefix}/system")
 api_router.include_router(admin_auth.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(admin_tokens.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(admin_catalog.router, prefix=f"{settings.api_prefix}/admin")
+api_router.include_router(admin_automation_execution.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(admin_execution_files.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(admin_execution_profiles.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(admin_metrics.router, prefix=f"{settings.api_prefix}/admin")

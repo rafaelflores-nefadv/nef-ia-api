@@ -1,17 +1,15 @@
 {% extends "layouts/base_admin.html" %}
 
 {% block content %}
-{% url "prompts:create" as prompt_create_url %}
-{% url "prompts:list" as prompts_list_url %}
-{% url "prompts:test_create" as prompt_test_url %}
-{% include "includes/page_header.html" with header_title="Prompts" header_subtitle=page_subtitle breadcrumb_current="Prompts" header_action_url=prompt_create_url header_action_label="Novo prompt" header_action_icon="bi bi-plus-lg" header_side_text=list_counter_label %}
+{% url "prompts:execute" as prompt_execute_url %}
+{% include "includes/page_header.html" with header_title="Prompts de automação" header_subtitle=page_subtitle breadcrumb_current="Prompts de automação" header_action_url=prompt_execute_url header_action_label="Executar automação" header_action_icon="bi bi-play-circle" header_side_text=list_counter_label %}
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    {% if integration_mode == "api" %}
-        <span class="admin-note">Catalogo de prompts operando na FastAPI.</span>
+    {% if integration_source == "api" %}
+        <span class="admin-note">Fonte oficial: automations + automation_prompts via FastAPI.</span>
     {% else %}
-        <span class="admin-note">Modo transicao: CRUD local legado enquanto backend nao expoe catalogo oficial.</span>
+        <span class="admin-note">Nao foi possivel carregar dados oficiais da FastAPI.</span>
     {% endif %}
 </div>
 
@@ -25,131 +23,59 @@
     </div>
 {% endif %}
 
-{% if catalog_endpoint_probes %}
-    <section class="panel-card mb-3">
-        <h3 class="panel-title mb-2">Diagnostico de endpoints de catalogo</h3>
-        <div class="table-responsive">
-            <table class="table admin-table align-middle mb-0">
-                <thead>
-                    <tr>
-                        <th>Endpoint</th>
-                        <th>HTTP</th>
-                        <th>Status</th>
-                        <th>Resultado</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for probe in catalog_endpoint_probes %}
-                        <tr>
-                            <td><code>{{ probe.path }}</code></td>
-                            <td>{{ probe.method }}</td>
-                            <td>{% if probe.status_code %}{{ probe.status_code }}{% else %}-{% endif %}</td>
-                            <td>{{ probe.message }}</td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
-{% endif %}
-
-<section class="panel-card mb-3">
-    <div class="d-flex justify-content-end mb-3">
-        <a href="{{ prompt_test_url }}" class="btn btn-outline-primary">
-            <i class="bi bi-play-circle me-1"></i>
-            Teste de prompt
-        </a>
-    </div>
-    <form method="get" class="row g-2">
-        <div class="col-12 col-md-4">
-            <label class="form-label small fw-semibold mb-1">Status</label>
-            <select name="status" class="form-select">
-                {% for value, label in status_options %}
-                    <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="col-12 col-md-4">
-            <label class="form-label small fw-semibold mb-1">Modelo de IA</label>
-            <select name="modelo" class="form-select">
-                <option value="">Todos os modelos</option>
-                {% for model in model_options %}
-                    <option value="{{ model.id }}" {% if selected_model == model.id|stringformat:"s" %}selected{% endif %}>
-                        {{ model.provider.name }} - {{ model.name }}
-                    </option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="col-12 col-md-4">
-            <label class="form-label small fw-semibold mb-1">Busca</label>
-            <input
-                type="text"
-                name="q"
-                class="form-control"
-                placeholder="Titulo ou conteudo"
-                value="{{ search_query }}"
-            >
-        </div>
-        <div class="col-12 d-flex gap-2">
-            <button type="submit" class="btn btn-dark">Filtrar</button>
-            <a href="{{ prompts_list_url }}" class="btn btn-outline-secondary">Limpar</a>
-        </div>
-    </form>
-</section>
-
-{% if prompts %}
+{% if automations %}
     <section class="panel-card p-0 overflow-hidden">
         <div class="table-responsive">
             <table class="table admin-table align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Titulo</th>
-                        <th>Modelo de IA</th>
-                        <th>Conteudo</th>
+                        <th>Automação</th>
+                        <th>ID</th>
                         <th>Status</th>
-                        <th>Atualizado em</th>
-                        <th class="text-end">Acoes</th>
+                        <th>Prompt oficial</th>
+                        <th>Versão</th>
+                        <th>Runtime</th>
+                        <th class="text-end">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for prompt in prompts %}
+                    {% for automation in automations %}
                         <tr>
-                            <td class="fw-semibold">{{ prompt.title }}</td>
-                            <td>{{ prompt.ai_model.provider.name }} - {{ prompt.ai_model.name }}</td>
-                            <td class="text-muted">{{ prompt.content|truncatechars:120 }}</td>
+                            <td class="fw-semibold">{{ automation.automation_name }}</td>
+                            <td><code>{{ automation.automation_id }}</code></td>
                             <td>
-                                {% if prompt.is_active %}
-                                    <span class="status-pill status-success">Ativo</span>
+                                {% if automation.automation_is_active %}
+                                    <span class="status-pill status-success">Ativa</span>
                                 {% else %}
-                                    <span class="status-pill status-neutral">Inativo</span>
+                                    <span class="status-pill status-neutral">Inativa</span>
                                 {% endif %}
                             </td>
-                            <td>{{ prompt.updated_at|date:"d/m/Y H:i" }}</td>
+                            <td>
+                                {% if automation.prompt_available %}
+                                    <span class="status-pill status-success">Disponível</span>
+                                    <div class="admin-note mt-1">{{ automation.prompt_summary|default:"-" }}</div>
+                                {% else %}
+                                    <span class="status-pill status-danger">Indisponível</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if automation.prompt_version %}
+                                    <code>v{{ automation.prompt_version }}</code>
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if automation.provider_slug and automation.model_slug %}
+                                    <code>{{ automation.provider_slug }}/{{ automation.model_slug }}</code>
+                                {% else %}
+                                    <span class="admin-note">Não resolvido</span>
+                                {% endif %}
+                            </td>
                             <td class="text-end">
-                                <div class="table-actions">
-                                    {% if prompt.is_active %}
-                                        <a href="{% url 'prompts:test_create' %}?prompt={{ prompt.id }}" class="btn btn-sm btn-outline-primary">Testar</a>
-                                    {% endif %}
-                                    <a href="{% url 'prompts:edit' prompt.id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
-                                    <form method="post" action="{% url 'prompts:toggle_status' prompt.id %}">
-                                        {% csrf_token %}
-                                        {% if prompt.is_active %}
-                                            <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
-                                        {% else %}
-                                            <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
-                                        {% endif %}
-                                    </form>
-                                    <button
-                                        type="button"
-                                        class="btn btn-sm btn-outline-danger"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#deletePromptModal"
-                                        data-delete-url="{% url 'prompts:delete' prompt.id %}"
-                                        data-prompt-title="{{ prompt.title|escape }}"
-                                    >
-                                        Excluir
-                                    </button>
-                                </div>
+                                <a href="{% url 'prompts:execute' %}?automation={{ automation.automation_id }}" class="btn btn-sm btn-outline-primary">
+                                    Executar automação
+                                </a>
                             </td>
                         </tr>
                     {% endfor %}
@@ -158,67 +84,6 @@
         </div>
     </section>
 {% else %}
-    {% include "includes/empty_state.html" with empty_icon="bi bi-chat-square-text" empty_title="Nenhum prompt cadastrado" empty_message="Cadastre prompts para centralizar instrucoes administrativas de IA." empty_action_url=prompt_create_url empty_action_label="Criar prompt" empty_action_icon="bi bi-plus-lg" %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-chat-square-text" empty_title="Nenhuma automação disponível" empty_message="A lista oficial de automações não retornou itens para este ambiente." empty_action_url=prompt_execute_url empty_action_label="Executar automação" empty_action_icon="bi bi-play-circle" %}
 {% endif %}
-
-{% if prompts %}
-    <div class="modal fade" id="deletePromptModal" tabindex="-1" aria-labelledby="deletePromptModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="deletePromptModalLabel">Excluir prompt</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
-                </div>
-                <div class="modal-body">
-                    <p class="mb-2">Tem certeza que deseja excluir este prompt? Essa acao nao podera ser desfeita.</p>
-                    <small id="deletePromptName" class="text-secondary d-none"></small>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-                    <form id="deletePromptForm" method="post" action="">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn-danger">Excluir prompt</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </div>
-{% endif %}
-{% endblock %}
-
-{% block extra_js %}
-    {{ block.super }}
-    {% if prompts %}
-        <script>
-            (function () {
-                const deleteModal = document.getElementById("deletePromptModal");
-                const deleteForm = document.getElementById("deletePromptForm");
-                const deletePromptName = document.getElementById("deletePromptName");
-                if (!deleteModal || !deleteForm) {
-                    return;
-                }
-
-                deleteModal.addEventListener("show.bs.modal", function (event) {
-                    const trigger = event.relatedTarget;
-                    if (!trigger) {
-                        return;
-                    }
-                    const action = String(trigger.getAttribute("data-delete-url") || "").trim();
-                    const promptTitle = String(trigger.getAttribute("data-prompt-title") || "").trim();
-
-                    deleteForm.setAttribute("action", action);
-                    if (!deletePromptName) {
-                        return;
-                    }
-                    if (!promptTitle) {
-                        deletePromptName.classList.add("d-none");
-                        deletePromptName.textContent = "";
-                        return;
-                    }
-                    deletePromptName.classList.remove("d-none");
-                    deletePromptName.textContent = "Prompt selecionado: " + promptTitle;
-                });
-            })();
-        </script>
-    {% endif %}
 {% endblock %}

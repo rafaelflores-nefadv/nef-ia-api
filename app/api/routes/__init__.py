@@ -3,6 +3,7 @@
 from . import (
     admin_auth,
     admin_catalog,
+    admin_automation_execution,
     admin_execution_files,
     admin_execution_profiles,
     admin_metrics,
@@ -19,6 +20,7 @@ __all__ = [
     "admin_auth",
     "admin_tokens",
     "admin_catalog",
+    "admin_automation_execution",
     "admin_execution_profiles",
     "admin_prompt_tests",
     "admin_metrics",

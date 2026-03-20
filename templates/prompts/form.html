@@ -2,19 +2,19 @@
 
 {% block content %}
 {% url "prompts:list" as prompts_list_url %}
-{% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Prompts" breadcrumb_parent_url=prompts_list_url breadcrumb_current=form_title %}
+{% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Prompts de automação" breadcrumb_parent_url=prompts_list_url breadcrumb_current=form_title %}
 
 <section class="panel-card">
     <p class="admin-note mb-3">
-        Defina um titulo curto e um conteudo completo para reutilizacao administrativa de prompts.
+        Fluxo oficial da execução real: selecionar automação, subir arquivo, criar execution, acompanhar status e baixar resultado.
     </p>
 
     <div class="d-flex align-items-center gap-2 mb-3">
         {% include "includes/data_origin_badge.html" with source=integration_source %}
-        {% if integration_mode == "api" %}
-            <span class="admin-note">Edicao remota via FastAPI.</span>
+        {% if integration_source == "api" %}
+            <span class="admin-note">Operação remota via FastAPI (sem pipeline paralelo no Django).</span>
         {% else %}
-            <span class="admin-note">Modo transicao: alteracoes gravadas no legado local ate endpoint oficial.</span>
+            <span class="admin-note">FastAPI indisponível para execução no momento.</span>
         {% endif %}
     </div>
 
@@ -28,6 +28,44 @@
         </div>
     {% endif %}
 
+    {% if selected_automation %}
+        <div class="border rounded-3 p-3 bg-light-subtle mb-3">
+            <div class="row g-2">
+                <div class="col-12 col-lg-6">
+                    <small class="text-secondary d-block">Automação selecionada</small>
+                    <strong>{{ selected_automation.automation_name }}</strong>
+                    <div class="admin-note"><code>{{ selected_automation.automation_id }}</code></div>
+                </div>
+                <div class="col-12 col-lg-3">
+                    <small class="text-secondary d-block">Versão do prompt</small>
+                    {% if selected_automation.prompt_version %}
+                        <code>v{{ selected_automation.prompt_version }}</code>
+                    {% else %}
+                        -
+                    {% endif %}
+                </div>
+                <div class="col-12 col-lg-3">
+                    <small class="text-secondary d-block">Runtime</small>
+                    {% if selected_automation.provider_slug and selected_automation.model_slug %}
+                        <code>{{ selected_automation.provider_slug }}/{{ selected_automation.model_slug }}</code>
+                    {% else %}
+                        <span class="admin-note">Não resolvido</span>
+                    {% endif %}
+                </div>
+                <div class="col-12">
+                    <small class="text-secondary d-block">Prompt oficial vigente</small>
+                    <span class="admin-note">{{ selected_automation.prompt_summary|default:"-" }}</span>
+                    {% if selected_automation.prompt_text %}
+                        <details class="mt-2">
+                            <summary class="small text-secondary">Ver prompt completo</summary>
+                            <pre class="mt-2 mb-0 p-2 border rounded-2 bg-light-subtle" style="white-space: pre-wrap; max-height: 260px; overflow: auto;">{{ selected_automation.prompt_text }}</pre>
+                        </details>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
     {% if form.non_field_errors %}
         <div class="alert alert-danger" role="alert">
             {% for error in form.non_field_errors %}
@@ -36,45 +74,30 @@
         </div>
     {% endif %}
 
-    <form method="post" novalidate>
+    <form method="post" enctype="multipart/form-data" novalidate>
         {% csrf_token %}
 
         <div class="row g-3">
             <div class="col-12 col-lg-6">
-                <label for="{{ form.title.id_for_label }}" class="form-label fw-semibold">{{ form.title.label }}</label>
-                {{ form.title }}
-                {% for error in form.title.errors %}
+                <label for="{{ form.automation.id_for_label }}" class="form-label fw-semibold">{{ form.automation.label }}</label>
+                {{ form.automation }}
+                <div class="form-text">Selecione a automação oficial para execução real.</div>
+                {% for error in form.automation.errors %}
                     <div class="invalid-feedback d-block">{{ error }}</div>
                 {% endfor %}
             </div>
 
             <div class="col-12 col-lg-6">
-                <label for="{{ form.ai_model.id_for_label }}" class="form-label fw-semibold">{{ form.ai_model.label }}</label>
-                {{ form.ai_model }}
-                {% for error in form.ai_model.errors %}
-                    <div class="invalid-feedback d-block">{{ error }}</div>
-                {% endfor %}
-            </div>
-
-            <div class="col-12">
-                <label for="{{ form.content.id_for_label }}" class="form-label fw-semibold">{{ form.content.label }}</label>
-                {{ form.content }}
-                <div class="form-text">Use um texto completo, com contexto e instrucoes para o modelo.</div>
-                {% for error in form.content.errors %}
+                <label for="{{ form.request_file.id_for_label }}" class="form-label fw-semibold">{{ form.request_file.label }}</label>
+                {{ form.request_file }}
+                <div class="form-text">O arquivo será enviado para o fluxo oficial da automação na FastAPI.</div>
+                {% for error in form.request_file.errors %}
                     <div class="invalid-feedback d-block">{{ error }}</div>
                 {% endfor %}
             </div>
         </div>
 
-        <div class="form-check form-switch my-4">
-            {{ form.is_active }}
-            <label for="{{ form.is_active.id_for_label }}" class="form-check-label">{{ form.is_active.label }}</label>
-            {% for error in form.is_active.errors %}
-                <div class="invalid-feedback d-block">{{ error }}</div>
-            {% endfor %}
-        </div>
-
-        <div class="d-flex gap-2">
+        <div class="d-flex gap-2 mt-4">
             <button type="submit" class="btn btn-dark">{{ submit_label }}</button>
             <a href="{{ prompts_list_url }}" class="btn btn-outline-secondary">Voltar</a>
         </div>

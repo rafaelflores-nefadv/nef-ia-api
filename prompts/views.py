@@ -1,384 +1,286 @@
+from __future__ import annotations
+
 from uuid import UUID
 
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db import IntegrityError
-from django.db.models import Q
-from django.db.models.deletion import ProtectedError
-from django.http import Http404
-from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse_lazy
-from django.utils import timezone
-from django.utils.dateparse import parse_datetime
-from django.views.decorators.http import require_POST
-from django.views.generic import CreateView, FormView, ListView, TemplateView, UpdateView
+from django.http import Http404, HttpResponse
+from django.shortcuts import redirect
+from django.urls import reverse
+from django.views import View
+from django.views.generic import FormView, ListView, TemplateView
 
-from core.services.prompts_catalog_api_service import PromptsCatalogAPIService
-from core.services.prompt_tests_service import PromptTestsService, PromptTestsServiceError
+from core.services.automation_prompts_execution_service import (
+    AutomationExecutionFileItem,
+    AutomationExecutionStatusItem,
+    AutomationPromptsExecutionService,
+    AutomationPromptsExecutionServiceError,
+)
 
-from models_catalog.models import ProviderModel
-
-from .forms import AIPromptForm, PromptTestForm
-from .models import AIPrompt
+from .forms import AutomationExecutionForm
 
 
-def _get_prompt_catalog_status() -> dict:
-    return PromptsCatalogAPIService().diagnose_catalog()
-
-
-def _build_transition_warning_message() -> str:
-    return (
-        "Modulo de prompts em transicao arquitetural: sem endpoint oficial de catalogo na FastAPI. "
-        "Operacao aplicada apenas no legado local do Django."
-    )
-
-
-def _add_transition_write_warning(request, *, catalog_status: dict) -> None:
-    if str(catalog_status.get("mode") or "") != "transition_local_legacy":
-        return
-    messages.warning(request, _build_transition_warning_message())
-
-
-def _prompt_test_status_meta(status: str) -> dict[str, str]:
+def _execution_status_meta(status: str) -> dict[str, str]:
     table = {
         "queued": {"label": "Na fila", "css_class": "status-neutral"},
+        "pending": {"label": "Pendente", "css_class": "status-neutral"},
         "processing": {"label": "Processando", "css_class": "status-warning"},
-        "completed": {"label": "Concluido", "css_class": "status-success"},
+        "generating_output": {"label": "Gerando resultado", "css_class": "status-warning"},
+        "completed": {"label": "Concluida", "css_class": "status-success"},
         "failed": {"label": "Falhou", "css_class": "status-danger"},
     }
-    return table.get(status, {"label": status or "Desconhecido", "css_class": "status-neutral"})
+    normalized = str(status or "").strip().lower()
+    return table.get(normalized, {"label": normalized or "Desconhecido", "css_class": "status-neutral"})
 
 
-def _parse_dt(value):
-    if value is None:
-        return None
-    if isinstance(value, str):
-        parsed = parse_datetime(value)
-        if parsed is None:
-            return None
-        if timezone.is_aware(parsed):
-            return timezone.localtime(parsed)
-        return timezone.make_aware(parsed, timezone.get_current_timezone())
-    if timezone.is_aware(value):
-        return timezone.localtime(value)
-    return timezone.make_aware(value, timezone.get_current_timezone())
+def _is_terminal_status(status: str) -> bool:
+    normalized = str(status or "").strip().lower()
+    return normalized in {"completed", "failed"}
 
 
-def _to_int(value, default=0):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+def _format_file_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < (1024 * 1024):
+        return f"{size_bytes / 1024:.1f} KB"
+    if size_bytes < (1024 * 1024 * 1024):
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
+    return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-class AIPromptListView(LoginRequiredMixin, ListView):
-    model = AIPrompt
+class AutomationPromptListView(LoginRequiredMixin, ListView):
     template_name = "prompts/list.html"
-    context_object_name = "prompts"
+    context_object_name = "automations"
 
     def get_queryset(self):
-        self.catalog_status = _get_prompt_catalog_status()
-        queryset = (
-            AIPrompt.objects.select_related("ai_model", "ai_model__provider")
-            .all()
-            .order_by("-updated_at", "title")
+        payload = AutomationPromptsExecutionService().list_automations_runtime()
+        self.integration_source = payload["source"]
+        self.integration_warnings = payload["warnings"]
+        return payload["items"]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        items = context.get("automations") or []
+        context.update(
+            {
+                "page_title": "Prompts de automacao",
+                "page_subtitle": "Fonte oficial via FastAPI e banco compartilhado (automations + automation_prompts).",
+                "active_menu": "prompts",
+                "integration_source": getattr(self, "integration_source", "unavailable"),
+                "integration_warnings": getattr(self, "integration_warnings", []),
+                "total_count": len(items),
+                "list_counter_label": f"{len(items)} automacao(oes) carregada(s)",
+            }
         )
+        return context
 
-        search_query = str(self.request.GET.get("q") or "").strip()
-        selected_status = str(self.request.GET.get("status") or "").strip().lower()
-        selected_model = str(self.request.GET.get("modelo") or "").strip()
 
-        if search_query:
-            queryset = queryset.filter(
-                Q(title__icontains=search_query) | Q(content__icontains=search_query)
+class AutomationExecutionCreateView(LoginRequiredMixin, FormView):
+    template_name = "prompts/form.html"
+    form_class = AutomationExecutionForm
+    selected_automation = None
+
+    def _load_runtime_payload(self) -> dict:
+        payload = AutomationPromptsExecutionService().list_automations_runtime()
+        self.integration_source = payload["source"]
+        self.integration_warnings = payload["warnings"]
+        return payload
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        payload = self._load_runtime_payload()
+        items = payload.get("items", [])
+        selected_automation = str(self.request.GET.get("automation") or "").strip()
+        if self.request.method == "POST":
+            selected_automation = str(self.request.POST.get("automation") or selected_automation).strip()
+
+        choices = [
+            (
+                item.automation_id,
+                f"{item.automation_name} ({item.automation_id})",
             )
+            for item in items
+        ]
+        kwargs["automation_choices"] = choices
+        kwargs["selected_automation"] = selected_automation or None
 
-        if selected_status == "ativo":
-            queryset = queryset.filter(is_active=True)
-        elif selected_status == "inativo":
-            queryset = queryset.filter(is_active=False)
-
-        if selected_model.isdigit():
-            queryset = queryset.filter(ai_model_id=int(selected_model))
-
-        return queryset
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        total_count = AIPrompt.objects.count()
-        filtered_count = len(context.get("prompts", []))
-        search_query = str(self.request.GET.get("q") or "").strip()
-        selected_status = str(self.request.GET.get("status") or "").strip().lower()
-        selected_model = str(self.request.GET.get("modelo") or "").strip()
-
-        context.update(
-            {
-                "page_title": "Prompts",
-                "page_subtitle": "Gestao administrativa de prompts da plataforma de IA.",
-                "active_menu": "prompts",
-                "search_query": search_query,
-                "selected_status": selected_status,
-                "selected_model": selected_model,
-                "status_options": [
-                    ("", "Todos os status"),
-                    ("ativo", "Ativos"),
-                    ("inativo", "Inativos"),
-                ],
-                "model_options": ProviderModel.objects.select_related("provider").order_by(
-                    "provider__name",
-                    "name",
-                ),
-                "filtered_count": filtered_count,
-                "total_count": total_count,
-                "list_counter_label": (
-                    f"Exibindo {filtered_count} de {total_count} prompt(s)"
-                ),
-                "integration_source": str(
-                    getattr(self, "catalog_status", {}).get("source") or "fallback_local"
-                ),
-                "integration_mode": str(
-                    getattr(self, "catalog_status", {}).get("mode")
-                    or "transition_local_legacy"
-                ),
-                "integration_warnings": list(
-                    getattr(self, "catalog_status", {}).get("warnings") or []
-                ),
-                "catalog_endpoint_probes": list(
-                    getattr(self, "catalog_status", {}).get("endpoint_probes") or []
-                ),
-            }
-        )
-        return context
-
-
-class AIPromptCreateView(LoginRequiredMixin, CreateView):
-    model = AIPrompt
-    form_class = AIPromptForm
-    template_name = "prompts/form.html"
-    success_url = reverse_lazy("prompts:list")
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        catalog_status = _get_prompt_catalog_status()
-        context.update(
-            {
-                "page_title": "Novo prompt",
-                "form_title": "Novo prompt",
-                "form_subtitle": "Cadastre um prompt administrativo vinculado a um modelo de IA.",
-                "active_menu": "prompts",
-                "submit_label": "Salvar prompt",
-                "is_editing": False,
-                "integration_source": str(catalog_status.get("source") or "fallback_local"),
-                "integration_mode": str(
-                    catalog_status.get("mode") or "transition_local_legacy"
-                ),
-                "integration_warnings": list(catalog_status.get("warnings") or []),
-                "catalog_endpoint_probes": list(
-                    catalog_status.get("endpoint_probes") or []
-                ),
-            }
-        )
-        return context
+        self.selected_automation = None
+        if selected_automation:
+            for item in items:
+                if str(item.automation_id) == selected_automation:
+                    self.selected_automation = item
+                    break
+        if self.selected_automation is not None:
+            service = AutomationPromptsExecutionService()
+            try:
+                self.selected_automation = service.get_automation_runtime(
+                    automation_id=self.selected_automation.automation_id,
+                )
+            except AutomationPromptsExecutionServiceError as exc:
+                existing_warnings = list(getattr(self, "integration_warnings", []) or [])
+                warning_message = str(exc).strip()
+                if warning_message and warning_message not in existing_warnings:
+                    existing_warnings.append(warning_message)
+                    self.integration_warnings = existing_warnings
+        return kwargs
 
     def form_valid(self, form):
-        catalog_status = _get_prompt_catalog_status()
-        response = super().form_valid(form)
-        messages.success(self.request, "Prompt criado com sucesso.")
-        _add_transition_write_warning(self.request, catalog_status=catalog_status)
-        return response
-
-
-class AIPromptUpdateView(LoginRequiredMixin, UpdateView):
-    model = AIPrompt
-    form_class = AIPromptForm
-    template_name = "prompts/form.html"
-    success_url = reverse_lazy("prompts:list")
-
-    def get_queryset(self):
-        return AIPrompt.objects.select_related("ai_model", "ai_model__provider")
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        catalog_status = _get_prompt_catalog_status()
-        context.update(
-            {
-                "page_title": "Editar prompt",
-                "form_title": "Editar prompt",
-                "form_subtitle": "Atualize os dados do prompt selecionado.",
-                "active_menu": "prompts",
-                "submit_label": "Salvar alteracoes",
-                "is_editing": True,
-                "integration_source": str(catalog_status.get("source") or "fallback_local"),
-                "integration_mode": str(
-                    catalog_status.get("mode") or "transition_local_legacy"
-                ),
-                "integration_warnings": list(catalog_status.get("warnings") or []),
-                "catalog_endpoint_probes": list(
-                    catalog_status.get("endpoint_probes") or []
-                ),
-            }
-        )
-        return context
-
-    def form_valid(self, form):
-        catalog_status = _get_prompt_catalog_status()
-        response = super().form_valid(form)
-        messages.success(self.request, "Prompt atualizado com sucesso.")
-        _add_transition_write_warning(self.request, catalog_status=catalog_status)
-        return response
-
-
-@login_required
-@require_POST
-def ai_prompt_toggle_status(request, pk: int):
-    catalog_status = _get_prompt_catalog_status()
-    prompt = get_object_or_404(AIPrompt, pk=pk)
-    prompt.is_active = not bool(prompt.is_active)
-    prompt.save(update_fields=["is_active", "updated_at"])
-
-    if prompt.is_active:
-        messages.success(request, "Prompt ativado com sucesso.")
-    else:
-        messages.success(request, "Prompt desativado com sucesso.")
-
-    _add_transition_write_warning(request, catalog_status=catalog_status)
-    return redirect("prompts:list")
-
-
-@login_required
-@require_POST
-def ai_prompt_delete(request, pk: int):
-    catalog_status = _get_prompt_catalog_status()
-    prompt = get_object_or_404(AIPrompt, pk=pk)
-    prompt_title = str(prompt.title or "").strip() or "prompt"
-
-    try:
-        prompt.delete()
-    except ProtectedError:
-        messages.error(
-            request,
-            "Nao foi possivel excluir este prompt porque existem vinculacoes que impedem a exclusao.",
-        )
-        return redirect("prompts:list")
-    except IntegrityError:
-        messages.error(
-            request,
-            "Nao foi possivel excluir este prompt no momento. Verifique se ele possui vinculacoes ativas.",
-        )
-        return redirect("prompts:list")
-    except Exception:
-        messages.error(
-            request,
-            "Nao foi possivel excluir este prompt no momento. Tente novamente.",
-        )
-        return redirect("prompts:list")
-
-    messages.success(request, f'Prompt "{prompt_title}" excluido com sucesso.')
-    _add_transition_write_warning(request, catalog_status=catalog_status)
-    return redirect("prompts:list")
-
-
-class PromptTestCreateView(LoginRequiredMixin, FormView):
-    template_name = "prompts/test_form.html"
-    form_class = PromptTestForm
-
-    def get_initial(self):
-        initial = super().get_initial()
-        prompt_value = str(self.request.GET.get("prompt") or "").strip()
-        if prompt_value.isdigit():
-            initial["prompt"] = int(prompt_value)
-        return initial
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        catalog_status = _get_prompt_catalog_status()
-        context.update(
-            {
-                "page_title": "Teste de prompt",
-                "form_title": "Teste de prompt",
-                "form_subtitle": (
-                    "Selecione um prompt ativo, anexe um arquivo e dispare a execucao real na FastAPI."
-                ),
-                "active_menu": "prompts",
-                "submit_label": "Disparar teste",
-                "integration_source": str(catalog_status.get("source") or "fallback_local"),
-                "integration_mode": str(
-                    catalog_status.get("mode") or "transition_local_legacy"
-                ),
-                "integration_warnings": list(catalog_status.get("warnings") or []),
-                "catalog_endpoint_probes": list(
-                    catalog_status.get("endpoint_probes") or []
-                ),
-            }
-        )
-        return context
-
-    def form_valid(self, form):
-        prompt = form.cleaned_data["prompt"]
-        uploaded_file = form.cleaned_data["request_file"]
-
+        automation_value = str(form.cleaned_data["automation"] or "").strip()
         try:
-            payload = PromptTestsService().start_prompt_test(
-                prompt=prompt,
-                uploaded_file=uploaded_file,
-            )
-        except PromptTestsServiceError as exc:
-            form.add_error(None, str(exc))
+            automation_id = UUID(automation_value)
+        except ValueError:
+            form.add_error("automation", "Automacao invalida.")
             return self.form_invalid(form)
 
-        prompt_test_id = str(payload.get("id") or "").strip()
-        if not prompt_test_id:
-            form.add_error(None, "FastAPI nao retornou identificador do teste de prompt.")
+        uploaded_file = form.cleaned_data["request_file"]
+        service = AutomationPromptsExecutionService()
+        try:
+            result = service.start_execution(
+                automation_id=automation_id,
+                uploaded_file=uploaded_file,
+            )
+        except AutomationPromptsExecutionServiceError as exc:
+            form.add_error(None, str(exc))
             return self.form_invalid(form)
 
         messages.success(
             self.request,
-            "Teste de prompt enviado com sucesso. Acompanhe o status da execucao.",
+            "Execucao real iniciada com sucesso. Acompanhe o status no detalhe.",
         )
-        return redirect("prompts:test_detail", test_id=prompt_test_id)
-
-
-class PromptTestDetailView(LoginRequiredMixin, TemplateView):
-    template_name = "prompts/test_detail.html"
+        return redirect("prompts:execution_detail", execution_id=str(result.execution_id))
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        test_id = self.kwargs["test_id"]
-        try:
-            prompt_test_uuid = UUID(str(test_id))
-        except ValueError as exc:
-            raise Http404("Identificador do teste de prompt invalido.") from exc
-
-        try:
-            payload = PromptTestsService().get_prompt_test_status(prompt_test_id=prompt_test_uuid)
-        except PromptTestsServiceError as exc:
-            raise Http404(str(exc)) from exc
-
-        status_value = str(payload.get("status") or "").strip().lower()
-        status_meta = _prompt_test_status_meta(status_value)
-        is_terminal = status_value in {"completed", "failed"}
-
         context.update(
             {
-                "page_title": "Detalhe do teste de prompt",
+                "page_title": "Executar automacao",
+                "form_title": "Executar automacao",
+                "form_subtitle": "Fluxo oficial: upload de arquivo + criacao de execution real.",
                 "active_menu": "prompts",
-                "test_id": str(payload.get("id") or test_id),
-                "status_value": status_value,
-                "status_label": status_meta["label"],
-                "status_css_class": status_meta["css_class"],
-                "prompt_title": str(payload.get("prompt_title") or "-"),
-                "provider_slug": str(payload.get("provider_slug") or "-"),
-                "model_slug": str(payload.get("model_slug") or "-"),
-                "file_name": str(payload.get("file_name") or "-"),
-                "file_size": _to_int(payload.get("file_size"), default=0),
-                "created_at": _parse_dt(payload.get("created_at")),
-                "started_at": _parse_dt(payload.get("started_at")),
-                "finished_at": _parse_dt(payload.get("finished_at")),
-                "error_message": str(payload.get("error_message") or "").strip(),
-                "output_text": str(payload.get("output_text") or "").strip(),
-                "is_terminal": is_terminal,
-                "auto_refresh_seconds": 4 if not is_terminal else 0,
+                "integration_source": getattr(self, "integration_source", "unavailable"),
+                "integration_warnings": getattr(self, "integration_warnings", []),
+                "selected_automation": getattr(self, "selected_automation", None),
+                "submit_label": "Subir arquivo e executar",
             }
         )
         return context
+
+
+class AutomationExecutionDetailView(LoginRequiredMixin, TemplateView):
+    template_name = "prompts/execution_detail.html"
+    execution_status: AutomationExecutionStatusItem | None = None
+    execution_files: list[AutomationExecutionFileItem] = []
+
+    def _parse_execution_id(self) -> UUID:
+        execution_id_raw = str(self.kwargs.get("execution_id") or "").strip()
+        try:
+            return UUID(execution_id_raw)
+        except ValueError as exc:
+            raise Http404("ID de execucao invalido.") from exc
+
+    def _load_execution(self, *, execution_id: UUID) -> None:
+        service = AutomationPromptsExecutionService()
+        self.execution_status = service.get_execution_status(execution_id=execution_id)
+        self.integration_source = "api"
+        self.integration_warnings = []
+        try:
+            self.execution_files = service.list_execution_files(execution_id=execution_id)
+        except AutomationPromptsExecutionServiceError as exc:
+            self.execution_files = []
+            self.integration_source = "api_partial"
+            self.integration_warnings = [str(exc)]
+
+    def get(self, request, *args, **kwargs):
+        execution_id = self._parse_execution_id()
+        try:
+            self._load_execution(execution_id=execution_id)
+        except AutomationPromptsExecutionServiceError as exc:
+            messages.error(
+                request,
+                f"Nao foi possivel carregar a execucao real: {exc}",
+            )
+            return redirect("prompts:list")
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        execution = self.execution_status
+        files = self.execution_files
+        if execution is None:
+            execution = AutomationExecutionStatusItem(
+                execution_id=UUID("00000000-0000-0000-0000-000000000000"),
+                analysis_request_id=UUID("00000000-0000-0000-0000-000000000000"),
+                automation_id=UUID("00000000-0000-0000-0000-000000000000"),
+                request_file_id=None,
+                request_file_name=None,
+                status="unknown",
+                progress=None,
+                started_at=None,
+                finished_at=None,
+                error_message="",
+                created_at=None,
+                checked_at=None,
+            )
+        status_meta = _execution_status_meta(execution.status)
+        is_terminal = _is_terminal_status(execution.status)
+
+        file_rows = []
+        for file_item in files:
+            file_rows.append(
+                {
+                    "id": file_item.id,
+                    "file_type": file_item.file_type,
+                    "file_name": file_item.file_name,
+                    "file_size": file_item.file_size,
+                    "file_size_display": _format_file_size(file_item.file_size),
+                    "created_at": file_item.created_at,
+                    "mime_type": file_item.mime_type or "-",
+                    "download_url": reverse("prompts:execution_file_download", kwargs={"file_id": str(file_item.id)}),
+                }
+            )
+
+        context.update(
+            {
+                "page_title": f"Execucao real {execution.execution_id}",
+                "active_menu": "prompts",
+                "execution": execution,
+                "status_label": status_meta["label"],
+                "status_css_class": status_meta["css_class"],
+                "is_terminal": is_terminal,
+                "auto_refresh_seconds": 4 if not is_terminal else 0,
+                "file_rows": file_rows,
+                "integration_source": getattr(self, "integration_source", "api"),
+                "integration_warnings": getattr(self, "integration_warnings", []),
+            }
+        )
+        return context
+
+
+class AutomationExecutionFileDownloadView(LoginRequiredMixin, View):
+    def get(self, request, file_id: str):
+        try:
+            file_uuid = UUID(str(file_id))
+        except ValueError:
+            messages.error(request, "ID de arquivo invalido para download.")
+            return redirect("prompts:list")
+
+        payload = AutomationPromptsExecutionService().download_execution_file(file_id=file_uuid)
+        if not payload.get("ok"):
+            messages.error(
+                request,
+                str(payload.get("error") or "Falha ao baixar arquivo remoto da execucao."),
+            )
+            referer = str(request.META.get("HTTP_REFERER") or "").strip()
+            if referer:
+                return redirect(referer)
+            return redirect("prompts:list")
+
+        content = payload.get("content") or b""
+        filename = str(payload.get("filename") or f"{file_uuid}.bin")
+        content_type = str(payload.get("content_type") or "application/octet-stream")
+        response = HttpResponse(content, content_type=content_type)
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        checksum = payload.get("checksum")
+        if checksum:
+            response["X-File-Checksum"] = str(checksum)
+        return response

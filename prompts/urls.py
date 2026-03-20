@@ -1,23 +1,17 @@
 from django.urls import path
 
 from .views import (
-    AIPromptCreateView,
-    AIPromptListView,
-    PromptTestCreateView,
-    PromptTestDetailView,
-    AIPromptUpdateView,
-    ai_prompt_delete,
-    ai_prompt_toggle_status,
+    AutomationExecutionCreateView,
+    AutomationExecutionDetailView,
+    AutomationExecutionFileDownloadView,
+    AutomationPromptListView,
 )
 
 app_name = "prompts"
 
 urlpatterns = [
-    path("", AIPromptListView.as_view(), name="list"),
-    path("novo/", AIPromptCreateView.as_view(), name="create"),
-    path("teste/", PromptTestCreateView.as_view(), name="test_create"),
-    path("teste/<uuid:test_id>/", PromptTestDetailView.as_view(), name="test_detail"),
-    path("<int:pk>/editar/", AIPromptUpdateView.as_view(), name="edit"),
-    path("<int:pk>/toggle-status/", ai_prompt_toggle_status, name="toggle_status"),
-    path("<int:pk>/excluir/", ai_prompt_delete, name="delete"),
+    path("", AutomationPromptListView.as_view(), name="list"),
+    path("executar/", AutomationExecutionCreateView.as_view(), name="execute"),
+    path("execucoes/<str:execution_id>/", AutomationExecutionDetailView.as_view(), name="execution_detail"),
+    path("arquivos/<str:file_id>/download/", AutomationExecutionFileDownloadView.as_view(), name="execution_file_download"),
 ]
