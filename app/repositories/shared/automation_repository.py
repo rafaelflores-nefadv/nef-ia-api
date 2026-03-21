@@ -4,7 +4,14 @@ import uuid
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.models.shared import Automation, AutomationPrompt
+from app.models.shared import AutomationPrompt
+
+
+@dataclass(slots=True)
+class SharedAutomationRecord:
+    id: uuid.UUID
+    name: str
+    is_active: bool
 
 
 @dataclass(slots=True)
@@ -33,23 +40,63 @@ class SharedAutomationRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def get_automation_by_id(self, automation_id: uuid.UUID) -> Automation | None:
-        stmt = select(Automation).where(Automation.id == automation_id)
-        return self.session.execute(stmt).scalar_one_or_none()
+    def get_automation_by_id(self, automation_id: uuid.UUID) -> SharedAutomationRecord | None:
+        automation_columns = self._get_table_columns("automations")
+        if "id" not in automation_columns:
+            return None
 
-    def list_automations(self) -> list[Automation]:
-        stmt = select(Automation).order_by(Automation.name.asc(), Automation.id.asc())
-        return list(self.session.execute(stmt).scalars().all())
+        stmt = text(
+            f"""
+            SELECT {self._build_automation_select_sql(table_alias="a", available_columns=automation_columns)}
+            FROM automations a
+            WHERE a.id = :automation_id
+            LIMIT 1
+            """
+        )
+        row = self.session.execute(stmt, {"automation_id": str(automation_id)}).mappings().first()
+        return self._build_automation_record(row, available_columns=automation_columns)
+
+    def list_automations(self) -> list[SharedAutomationRecord]:
+        automation_columns = self._get_table_columns("automations")
+        if "id" not in automation_columns:
+            return []
+
+        if "name" in automation_columns:
+            order_by = "a.name ASC, a.id ASC"
+        else:
+            order_by = "a.id ASC"
+
+        stmt = text(
+            f"""
+            SELECT {self._build_automation_select_sql(table_alias="a", available_columns=automation_columns)}
+            FROM automations a
+            ORDER BY {order_by}
+            """
+        )
+        rows = self.session.execute(stmt).mappings().all()
+        items: list[SharedAutomationRecord] = []
+        for row in rows:
+            item = self._build_automation_record(row, available_columns=automation_columns)
+            if item is not None:
+                items.append(item)
+        return items
 
     def find_automation_by_slug_or_name(
         self,
         *,
         slug: str | None,
         name: str | None,
-    ) -> Automation | None:
+    ) -> SharedAutomationRecord | None:
         automation_columns = self._get_table_columns("automations")
         normalized_slug = str(slug or "").strip().lower()
         normalized_name = str(name or "").strip().lower()
+        if "id" not in automation_columns:
+            return None
+
+        select_sql = self._build_automation_select_sql(
+            table_alias="a",
+            available_columns=automation_columns,
+        )
 
         if normalized_slug:
             slug_column = next(
@@ -63,36 +110,30 @@ class SharedAutomationRepository:
             if slug_column is not None:
                 stmt = text(
                     f"""
-                    SELECT id, name, is_active
-                    FROM automations
-                    WHERE lower({slug_column}) = :slug
+                    SELECT {select_sql}
+                    FROM automations a
+                    WHERE lower(a.{slug_column}) = :slug
                     LIMIT 1
                     """
                 )
                 row = self.session.execute(stmt, {"slug": normalized_slug}).mappings().first()
-                if row is not None:
-                    return Automation(
-                        id=uuid.UUID(str(row["id"])),
-                        name=str(row["name"] or "").strip() or str(row["id"]),
-                        is_active=bool(row["is_active"]),
-                    )
+                item = self._build_automation_record(row, available_columns=automation_columns)
+                if item is not None:
+                    return item
 
-        if normalized_name:
+        if normalized_name and "name" in automation_columns:
             stmt = text(
-                """
-                SELECT id, name, is_active
-                FROM automations
-                WHERE lower(name) = :name
+                f"""
+                SELECT {select_sql}
+                FROM automations a
+                WHERE lower(a.name) = :name
                 LIMIT 1
                 """
             )
             row = self.session.execute(stmt, {"name": normalized_name}).mappings().first()
-            if row is not None:
-                return Automation(
-                    id=uuid.UUID(str(row["id"])),
-                    name=str(row["name"] or "").strip() or str(row["id"]),
-                    is_active=bool(row["is_active"]),
-                )
+            item = self._build_automation_record(row, available_columns=automation_columns)
+            if item is not None:
+                return item
         return None
 
     def get_latest_prompt_for_automation(self, automation_id: uuid.UUID) -> AutomationPrompt | None:
@@ -283,6 +324,64 @@ class SharedAutomationRepository:
         )
         rows = self.session.execute(stmt, {"table_name": table_name}).scalars().all()
         return {str(column_name) for column_name in rows}
+
+    @staticmethod
+    def _build_automation_select_sql(*, table_alias: str, available_columns: set[str]) -> str:
+        name_expr = f"{table_alias}.name" if "name" in available_columns else f"{table_alias}.id::text"
+        active_expr = (
+            f"{table_alias}.is_active"
+            if "is_active" in available_columns
+            else "TRUE"
+        )
+        return (
+            f"{table_alias}.id AS id, "
+            f"{name_expr} AS name, "
+            f"{active_expr} AS is_active"
+        )
+
+    @staticmethod
+    def _merge_default_active_row(
+        row: object | None,
+        *,
+        available_columns: set[str],
+    ) -> dict[str, object] | None:
+        if row is None:
+            return None
+        payload = dict(row)
+        if "is_active" not in available_columns:
+            payload["is_active"] = True
+        return payload
+
+    def _build_automation_record(
+        self,
+        row: object | None,
+        *,
+        available_columns: set[str],
+    ) -> SharedAutomationRecord | None:
+        payload = self._merge_default_active_row(
+            row,
+            available_columns=available_columns,
+        )
+        if payload is None:
+            return None
+        automation_id = self._coerce_uuid(payload.get("id"))
+        if automation_id is None:
+            return None
+        return SharedAutomationRecord(
+            id=automation_id,
+            name=str(payload.get("name") or "").strip() or str(automation_id),
+            is_active=self._coerce_runtime_bool(payload.get("is_active")) is not False,
+        )
+
+    @staticmethod
+    def _coerce_uuid(value: object | None) -> uuid.UUID | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            return uuid.UUID(raw)
+        except ValueError:
+            return None
 
     @staticmethod
     def _build_runtime_expr(

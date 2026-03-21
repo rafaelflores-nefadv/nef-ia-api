@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,11 +15,17 @@ class SharedReadOnlyMixin:
 
 
 class Automation(SharedReadOnlyMixin, SharedBase):
+    """
+    Minimal shared mapping.
+
+    Access to `automations` must prefer repository-level SQL with column inspection,
+    because the shared schema can vary across environments.
+    """
+
     __tablename__ = "automations"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
 class AutomationPrompt(SharedReadOnlyMixin, SharedBase):

@@ -2,6 +2,7 @@
 
 from app.repositories.shared.analysis_repository import SharedAnalysisRepository
 from app.repositories.shared.automation_repository import (
+    SharedAutomationRecord,
     SharedAutomationRepository,
     SharedAutomationRuntimeRecord,
     SharedAutomationTargetRecord,
@@ -10,6 +11,7 @@ from app.repositories.shared.execution_repository import SharedExecutionReposito
 
 __all__ = [
     "SharedAutomationRepository",
+    "SharedAutomationRecord",
     "SharedAutomationRuntimeRecord",
     "SharedAutomationTargetRecord",
     "SharedAnalysisRepository",
