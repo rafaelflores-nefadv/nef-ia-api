@@ -96,11 +96,15 @@ class PromptTestRuntimeService:
                 is_active=True,
             )
             created_automation = True
-        elif not runtime_row.is_active or not runtime_row.is_technical_runtime:
+        if self._runtime_row_requires_normalization(
+            runtime_row=runtime_row,
+            expected_name=normalized_name,
+            expected_slug=normalized_slug,
+        ):
             runtime_row = self.test_automations.update(
                 automation_id=runtime_row.id,
                 name=normalized_name,
-                slug=runtime_row.slug or normalized_slug,
+                slug=normalized_slug,
                 provider_slug=None,
                 model_slug=None,
                 provider_id=None,
@@ -763,3 +767,25 @@ class PromptTestRuntimeService:
     def _build_manual_automation_slug(self, *, automation_name: str, automation_id: uuid.UUID) -> str:
         base_slug = self._slugify(automation_name)
         return f"test-prompt-{base_slug}-{str(automation_id)[:8]}"
+
+    @staticmethod
+    def _runtime_row_requires_normalization(
+        *,
+        runtime_row: PromptTestAutomationRecord,
+        expected_name: str,
+        expected_slug: str,
+    ) -> bool:
+        current_name = str(runtime_row.name or "").strip()
+        current_slug = str(runtime_row.slug or "").strip().lower()
+        return any(
+            [
+                not runtime_row.is_active,
+                not runtime_row.is_technical_runtime,
+                current_name != expected_name,
+                current_slug != expected_slug,
+                runtime_row.provider_slug is not None,
+                runtime_row.model_slug is not None,
+                runtime_row.provider_id is not None,
+                runtime_row.model_id is not None,
+            ]
+        )

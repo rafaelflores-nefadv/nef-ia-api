@@ -128,34 +128,14 @@ class PromptTestAutomationRepository:
     ) -> PromptTestAutomationRecord | None:
         if preferred_id is not None:
             record = self.get_by_id(preferred_id)
-            if record is not None and record.is_technical_runtime:
+            if record is not None:
                 return record
 
         normalized_slug = str(slug or "").strip().lower()
         if normalized_slug:
-            slug_stmt = text(
-                """
-                SELECT
-                    id,
-                    name,
-                    slug,
-                    provider_slug,
-                    model_slug,
-                    provider_id,
-                    model_id,
-                    is_technical_runtime,
-                    is_active,
-                    created_at,
-                    updated_at
-                FROM test_automations
-                WHERE lower(slug) = :slug
-                  AND is_technical_runtime = TRUE
-                LIMIT 1
-                """
-            )
-            row = self.session.execute(slug_stmt, {"slug": normalized_slug}).mappings().first()
-            if row is not None:
-                return self._map_row(row)
+            record = self.get_by_slug(normalized_slug)
+            if record is not None:
+                return record
 
         normalized_name = str(name or "").strip().lower()
         if normalized_name:
@@ -172,11 +152,10 @@ class PromptTestAutomationRepository:
                     is_technical_runtime,
                     is_active,
                     created_at,
-                    updated_at
+                updated_at
                 FROM test_automations
                 WHERE lower(name) = :name
-                  AND is_technical_runtime = TRUE
-                ORDER BY updated_at DESC, id DESC
+                ORDER BY is_technical_runtime DESC, updated_at DESC, id DESC
                 LIMIT 1
                 """
             )
@@ -266,10 +245,11 @@ class PromptTestAutomationRepository:
         is_active: bool = True,
     ) -> PromptTestAutomationRecord:
         now = datetime.now(timezone.utc)
+        normalized_slug = str(slug or "").strip().lower()
         values: dict[str, Any] = {
             "id": str(automation_id),
             "name": str(name or "").strip(),
-            "slug": str(slug or "").strip().lower(),
+            "slug": normalized_slug,
             "provider_slug": self._normalize_slug(provider_slug),
             "model_slug": self._normalize_slug(model_slug),
             "provider_id": str(provider_id) if provider_id is not None else None,
@@ -315,6 +295,8 @@ class PromptTestAutomationRepository:
             # Race-safe fallback in case another request creates the same row.
             self.session.rollback()
             existing = self.get_by_id(automation_id)
+            if existing is None and normalized_slug:
+                existing = self.get_by_slug(normalized_slug)
             if existing is not None:
                 return existing
             raise
