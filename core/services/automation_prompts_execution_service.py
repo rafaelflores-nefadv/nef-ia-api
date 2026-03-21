@@ -208,6 +208,7 @@ class AutomationPromptsExecutionService:
             latest_analysis_request_id=_to_uuid(row.get("latest_analysis_request_id")),
         )
 
+    @staticmethod
     def _normalize_provider(row: dict[str, Any]) -> ProviderReadItem | None:
         provider_id = _to_uuid(row.get("id"))
         if provider_id is None:
