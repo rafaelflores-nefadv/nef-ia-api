@@ -70,29 +70,6 @@ def create_prompt_test(
     )
 
 
-@router.get("/prompt-tests/{prompt_test_id}", response_model=PromptTestStatusResponse)
-def get_prompt_test_status(
-    prompt_test_id: UUID,
-    _: DjangoAiUser = Depends(get_current_admin_user),
-    session: Session = Depends(get_operational_session),
-) -> PromptTestStatusResponse:
-    record = PromptTestService(session).get_prompt_test(prompt_test_id=prompt_test_id)
-    return PromptTestStatusResponse(
-        id=record.id,
-        status=record.status,
-        prompt_title=record.prompt_title,
-        provider_slug=record.provider_slug,
-        model_slug=record.model_slug,
-        file_name=record.file_name,
-        file_size=record.file_size,
-        created_at=record.created_at,
-        started_at=record.started_at,
-        finished_at=record.finished_at,
-        error_message=record.error_message,
-        output_text=record.output_text,
-    )
-
-
 @router.get("/prompt-tests/runtime", response_model=PromptTestRuntimeResponse)
 def get_prompt_test_runtime(
     _: DjangoAiUser = Depends(get_current_admin_user),
@@ -128,3 +105,26 @@ def configure_prompt_test_runtime(
         model_id=payload.model_id,
     )
     return PromptTestRuntimeResponse(**result)
+
+
+@router.get("/prompt-tests/{prompt_test_id:uuid}", response_model=PromptTestStatusResponse)
+def get_prompt_test_status(
+    prompt_test_id: UUID,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    session: Session = Depends(get_operational_session),
+) -> PromptTestStatusResponse:
+    record = PromptTestService(session).get_prompt_test(prompt_test_id=prompt_test_id)
+    return PromptTestStatusResponse(
+        id=record.id,
+        status=record.status,
+        prompt_title=record.prompt_title,
+        provider_slug=record.provider_slug,
+        model_slug=record.model_slug,
+        file_name=record.file_name,
+        file_size=record.file_size,
+        created_at=record.created_at,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        error_message=record.error_message,
+        output_text=record.output_text,
+    )
