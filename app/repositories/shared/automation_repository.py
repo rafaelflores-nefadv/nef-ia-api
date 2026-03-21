@@ -1,10 +1,15 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import logging
 import uuid
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import AppException
 from app.models.shared import AutomationPrompt
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -135,6 +140,48 @@ class SharedAutomationRepository:
             if item is not None:
                 return item
         return None
+
+    def ensure_technical_automation(
+        self,
+        *,
+        preferred_id: uuid.UUID | None,
+        slug: str,
+        name: str,
+    ) -> SharedAutomationRecord:
+        metadata = self._get_table_columns_metadata("automations")
+        if "id" not in metadata:
+            raise AppException(
+                "Shared table 'automations' is unavailable for prompt-test runtime bootstrap.",
+                status_code=500,
+                code="test_prompt_runtime_shared_automation_schema_incompatible",
+            )
+
+        existing = self.get_automation_by_id(preferred_id) if preferred_id is not None else None
+        if existing is None:
+            existing = self.find_automation_by_slug_or_name(slug=slug, name=name)
+
+        if existing is None:
+            automation_id = preferred_id or uuid.uuid4()
+            try:
+                existing = self._create_technical_automation(
+                    automation_id=automation_id,
+                    slug=slug,
+                    name=name,
+                    metadata=metadata,
+                )
+            except AppException:
+                existing = self.get_automation_by_id(automation_id)
+                if existing is None:
+                    existing = self.find_automation_by_slug_or_name(slug=slug, name=name)
+                if existing is None:
+                    raise
+
+        return self._normalize_technical_automation(
+            automation_id=existing.id,
+            slug=slug,
+            name=name,
+            metadata=metadata,
+        )
 
     def get_latest_prompt_for_automation(self, automation_id: uuid.UUID) -> AutomationPrompt | None:
         stmt = (
@@ -324,6 +371,300 @@ class SharedAutomationRepository:
         )
         rows = self.session.execute(stmt, {"table_name": table_name}).scalars().all()
         return {str(column_name) for column_name in rows}
+
+    def _get_table_columns_metadata(self, table_name: str) -> dict[str, dict[str, object]]:
+        stmt = text(
+            """
+            SELECT
+                c.column_name,
+                c.is_nullable,
+                c.column_default,
+                c.data_type,
+                c.udt_name
+            FROM information_schema.columns c
+            WHERE c.table_schema = current_schema()
+              AND c.table_name = :table_name
+            ORDER BY c.ordinal_position
+            """
+        )
+        rows = self.session.execute(stmt, {"table_name": table_name}).mappings().all()
+        return {
+            str(row["column_name"]): {
+                "is_nullable": row.get("is_nullable"),
+                "column_default": row.get("column_default"),
+                "data_type": row.get("data_type"),
+                "udt_name": row.get("udt_name"),
+            }
+            for row in rows
+        }
+
+    def _create_technical_automation(
+        self,
+        *,
+        automation_id: uuid.UUID,
+        slug: str,
+        name: str,
+        metadata: dict[str, dict[str, object]],
+    ) -> SharedAutomationRecord:
+        now = datetime.now(timezone.utc)
+        values = self._build_technical_automation_values(
+            automation_id=automation_id,
+            slug=slug,
+            name=name,
+            metadata=metadata,
+            now=now,
+        )
+        column_names = list(values.keys())
+        insert_stmt = text(
+            f"""
+            INSERT INTO automations ({", ".join(column_names)})
+            VALUES ({", ".join(f":{column_name}" for column_name in column_names)})
+            """
+        )
+        try:
+            self.session.execute(insert_stmt, values)
+            self.session.commit()
+        except Exception as exc:
+            self.session.rollback()
+            logger.exception(
+                "Failed to create technical shared automation for prompt tests.",
+                extra={
+                    "automation_id": str(automation_id),
+                    "automation_slug": slug,
+                    "columns": sorted(column_names),
+                },
+                exc_info=exc,
+            )
+            raise AppException(
+                "Failed to auto-create technical shared automation for prompt tests.",
+                status_code=500,
+                code="test_prompt_runtime_shared_automation_create_failed",
+                details={"table": "automations", "error": str(exc)},
+            ) from exc
+
+        created = self.get_automation_by_id(automation_id)
+        if created is None:
+            raise AppException(
+                "Technical shared automation was created but could not be read back.",
+                status_code=500,
+                code="test_prompt_runtime_invalid",
+                details={"automation_id": str(automation_id)},
+            )
+        return created
+
+    def _normalize_technical_automation(
+        self,
+        *,
+        automation_id: uuid.UUID,
+        slug: str,
+        name: str,
+        metadata: dict[str, dict[str, object]],
+    ) -> SharedAutomationRecord:
+        values: dict[str, object] = {"automation_id": str(automation_id)}
+        assignments: list[str] = []
+        now = datetime.now(timezone.utc)
+
+        if "name" in metadata:
+            values["name"] = name
+            assignments.append("name = :name")
+
+        slug_column = self._find_slug_column(set(metadata.keys()))
+        if slug_column is not None:
+            values[slug_column] = slug
+            assignments.append(f"{slug_column} = :{slug_column}")
+
+        active_column = self._find_active_column(set(metadata.keys()))
+        if active_column is not None:
+            values[active_column] = True
+            assignments.append(f"{active_column} = :{active_column}")
+
+        test_marker_column = self._find_test_marker_column(set(metadata.keys()))
+        if test_marker_column is not None:
+            values[test_marker_column] = True
+            assignments.append(f"{test_marker_column} = :{test_marker_column}")
+
+        if "updated_at" in metadata:
+            values["updated_at"] = now
+            assignments.append("updated_at = :updated_at")
+
+        if assignments:
+            stmt = text(
+                f"""
+                UPDATE automations
+                SET {", ".join(assignments)}
+                WHERE id = :automation_id
+                """
+            )
+            try:
+                self.session.execute(stmt, values)
+                self.session.commit()
+            except Exception as exc:
+                self.session.rollback()
+                logger.exception(
+                    "Failed to normalize technical shared automation for prompt tests.",
+                    extra={
+                        "automation_id": str(automation_id),
+                        "automation_slug": slug,
+                        "columns": sorted(assignments),
+                    },
+                    exc_info=exc,
+                )
+                raise AppException(
+                    "Failed to normalize technical shared automation for prompt tests.",
+                    status_code=500,
+                    code="test_prompt_runtime_shared_automation_update_failed",
+                    details={"table": "automations", "error": str(exc)},
+                ) from exc
+
+        refreshed = self.get_automation_by_id(automation_id)
+        if refreshed is None:
+            raise AppException(
+                "Technical shared automation could not be confirmed after normalization.",
+                status_code=500,
+                code="test_prompt_runtime_invalid",
+                details={"automation_id": str(automation_id)},
+            )
+        return refreshed
+
+    def _build_technical_automation_values(
+        self,
+        *,
+        automation_id: uuid.UUID,
+        slug: str,
+        name: str,
+        metadata: dict[str, dict[str, object]],
+        now: datetime,
+    ) -> dict[str, object]:
+        values: dict[str, object] = {}
+        if "id" in metadata:
+            values["id"] = automation_id
+        if "name" in metadata:
+            values["name"] = name
+
+        slug_column = self._find_slug_column(set(metadata.keys()))
+        if slug_column is not None:
+            values[slug_column] = slug
+
+        active_column = self._find_active_column(set(metadata.keys()))
+        if active_column is not None:
+            values[active_column] = True
+
+        test_marker_column = self._find_test_marker_column(set(metadata.keys()))
+        if test_marker_column is not None:
+            values[test_marker_column] = True
+
+        if "created_at" in metadata:
+            values["created_at"] = now
+        if "updated_at" in metadata:
+            values["updated_at"] = now
+
+        required_columns = self._required_columns_without_default(metadata)
+        for column_name in sorted(required_columns):
+            if column_name in values:
+                continue
+            guessed = self._guess_required_automation_value(
+                column_name=column_name,
+                column_meta=metadata[column_name],
+                automation_id=automation_id,
+                name=name,
+                slug=slug,
+                now=now,
+            )
+            if guessed is None:
+                raise AppException(
+                    "Unable to auto-create technical shared automation due to shared schema requirements.",
+                    status_code=500,
+                    code="test_prompt_runtime_shared_automation_schema_incompatible",
+                    details={"missing_column": column_name},
+                )
+            values[column_name] = guessed
+        return values
+
+    @staticmethod
+    def _required_columns_without_default(columns: dict[str, dict[str, object]]) -> set[str]:
+        required: set[str] = set()
+        for column_name, meta in columns.items():
+            if str(meta.get("is_nullable") or "").upper() == "YES":
+                continue
+            if meta.get("column_default") is not None:
+                continue
+            required.add(column_name)
+        return required
+
+    @staticmethod
+    def _guess_required_automation_value(
+        *,
+        column_name: str,
+        column_meta: dict[str, object],
+        automation_id: uuid.UUID,
+        name: str,
+        slug: str,
+        now: datetime,
+    ) -> object | None:
+        lower_name = str(column_name or "").strip().lower()
+        data_type = str(column_meta.get("data_type") or "").strip().lower()
+        udt_name = str(column_meta.get("udt_name") or "").strip().lower()
+        merged_type = f"{data_type} {udt_name}".strip()
+
+        if lower_name == "id":
+            return automation_id
+        if lower_name == "name" or lower_name.endswith("_name"):
+            return name
+        if lower_name in {"slug", "automation_slug", "key", "code"} or lower_name.endswith("_slug"):
+            return slug
+        if "provider" in lower_name or "model" in lower_name:
+            return None
+        if lower_name == "description":
+            return "Automacao tecnica oficial para runtime de prompts de teste."
+        if lower_name in {"status", "state"}:
+            return "active"
+        if lower_name in {"source", "origin"}:
+            return "prompt_test_runtime"
+        if lower_name in {"type", "kind", "category"}:
+            return "prompt_test_runtime"
+        if lower_name in {"is_active", "active", "enabled", "is_test", "test_mode", "is_testing", "is_sandbox"}:
+            return True
+        if lower_name in {"created_at", "updated_at"} or lower_name.endswith("_at"):
+            return now
+
+        if "uuid" in merged_type:
+            return uuid.uuid4()
+        if "bool" in merged_type:
+            return True
+        if any(token in merged_type for token in ["int", "numeric", "decimal", "double", "real"]):
+            return 1
+        if "json" in merged_type:
+            return {}
+        if any(token in merged_type for token in ["char", "text", "varchar"]):
+            if "slug" in lower_name or lower_name in {"key", "code"}:
+                return slug
+            if "name" in lower_name:
+                return name
+            return "prompt_test_runtime"
+        if any(token in merged_type for token in ["timestamp", "date", "time"]):
+            return now
+        return None
+
+    @staticmethod
+    def _find_slug_column(available_columns: set[str]) -> str | None:
+        for candidate in ["slug", "automation_slug", "key", "code"]:
+            if candidate in available_columns:
+                return candidate
+        return None
+
+    @staticmethod
+    def _find_active_column(available_columns: set[str]) -> str | None:
+        for candidate in ["is_active", "active", "enabled"]:
+            if candidate in available_columns:
+                return candidate
+        return None
+
+    @staticmethod
+    def _find_test_marker_column(available_columns: set[str]) -> str | None:
+        for candidate in ["is_test", "test_mode", "is_testing", "is_sandbox"]:
+            if candidate in available_columns:
+                return candidate
+        return None
 
     @staticmethod
     def _build_automation_select_sql(*, table_alias: str, available_columns: set[str]) -> str:

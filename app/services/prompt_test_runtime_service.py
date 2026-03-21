@@ -61,7 +61,7 @@ class PromptTestRuntimeService:
     Regras de isolamento:
     - automacao de teste cadastravel persiste exclusivamente em `test_automations`;
     - runtime tecnico interno e separado das automacoes de teste cadastraveis;
-    - nenhuma escrita em `automations`;
+    - `automations` so recebe bootstrap idempotente da automacao oficial tecnica interna;
     - `analysis_requests` sempre usa uma automacao oficial tecnica valida do banco compartilhado.
     """
 
@@ -350,27 +350,11 @@ class PromptTestRuntimeService:
         slug: str,
         name: str,
     ):
-        configured_id = self._configured_automation_id()
-        if configured_id is not None:
-            configured = self.shared_automations.get_automation_by_id(configured_id)
-            if configured is None:
-                raise AppException(
-                    "Configured technical prompt-test automation was not found in shared automations.",
-                    status_code=500,
-                    code="test_prompt_runtime_shared_automation_not_found",
-                    details={"automation_id": str(configured_id)},
-                )
-            return configured
-
-        discovered = self.shared_automations.find_automation_by_slug_or_name(slug=slug, name=name)
-        if discovered is None:
-            raise AppException(
-                "Technical prompt-test automation was not found in shared automations.",
-                status_code=500,
-                code="test_prompt_runtime_shared_automation_not_found",
-                details={"automation_slug": slug, "automation_name": name},
-            )
-        return discovered
+        return self.shared_automations.ensure_technical_automation(
+            preferred_id=self._configured_automation_id(),
+            slug=slug,
+            name=name,
+        )
 
     def _find_latest_analysis_request(
         self,

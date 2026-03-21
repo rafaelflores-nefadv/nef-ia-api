@@ -149,3 +149,25 @@ def test_ensure_runtime_context_reuses_existing_runtime_and_normalizes_it() -> N
     assert update_calls[0]["slug"] == "system-test-automation"
     assert update_calls[0]["is_technical_runtime"] is True
     assert update_calls[0]["is_active"] is True
+
+
+def test_resolve_shared_technical_automation_auto_creates_official_shared_record() -> None:
+    shared_automation_id = uuid4()
+    captured: list[dict[str, object]] = []
+
+    service = _build_service()
+    service.shared_automations = SimpleNamespace(  # type: ignore[assignment]
+        ensure_technical_automation=lambda **kwargs: (
+            captured.append(kwargs) or SimpleNamespace(id=shared_automation_id, name=kwargs["name"], is_active=True)
+        )
+    )
+
+    record = service._resolve_shared_technical_automation(
+        slug="system-test-automation",
+        name="Automacao Tecnica de Teste",
+    )
+
+    assert record.id == shared_automation_id
+    assert captured
+    assert captured[0]["slug"] == "system-test-automation"
+    assert captured[0]["name"] == "Automacao Tecnica de Teste"
