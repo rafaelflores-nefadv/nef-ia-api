@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -104,6 +103,7 @@ class PromptTestRuntimeService:
             analysis_request_row = self._create_analysis_request_for_automation(
                 automation_id=automation_id,
                 analysis_columns=analysis_columns,
+                apply_file_defaults=True,
             )
             created_analysis_request = True
 
@@ -164,43 +164,67 @@ class PromptTestRuntimeService:
                 code="test_prompt_runtime_unavailable",
             )
 
-        created_row = self._create_manual_test_automation_row(
-            name=normalized_name,
+        technical_slug = str(settings.test_prompts_automation_slug or "").strip().lower() or "system-test-automation"
+        technical_name = str(settings.test_prompts_automation_name or "").strip() or "Automacao Tecnica de Teste"
+
+        automation_row = self._find_technical_automation(
+            slug=technical_slug,
+            name=technical_name,
+            automations_columns=automation_columns,
+        )
+        if automation_row is None:
+            automation_row = self._create_technical_automation(
+                slug=technical_slug,
+                name=technical_name,
+                provider_slug=normalized_provider,
+                model_slug=normalized_model,
+                provider_id=provider_id,
+                model_id=model_id,
+                automations_columns=automation_columns,
+            )
+
+        automation_id = self._coerce_uuid(automation_row.get("id"))
+        if automation_id is None:
+            raise AppException(
+                "Test automation has invalid identifier.",
+                status_code=500,
+                code="test_prompt_runtime_invalid",
+            )
+        self._update_automation_runtime_target(
+            automation_id=automation_id,
             provider_slug=normalized_provider,
             model_slug=normalized_model,
             provider_id=provider_id,
             model_id=model_id,
             automations_columns=automation_columns,
         )
-        automation_id = self._coerce_uuid(created_row.get("id"))
-        if automation_id is None:
-            raise AppException(
-                "Created test automation has invalid identifier.",
-                status_code=500,
-                code="test_prompt_runtime_invalid",
-            )
         self._ensure_automation_active(
             automation_id=automation_id,
             automations_columns=automation_columns,
         )
 
-        analysis_row = self._create_analysis_request_for_automation(
+        analysis_row = self._find_latest_analysis_request(
             automation_id=automation_id,
             analysis_columns=analysis_columns,
-            apply_file_defaults=True,
         )
+        if analysis_row is None:
+            analysis_row = self._create_analysis_request_for_automation(
+                automation_id=automation_id,
+                analysis_columns=analysis_columns,
+                apply_file_defaults=True,
+            )
         analysis_request_id = self._coerce_uuid(analysis_row.get("id"))
         if analysis_request_id is None:
             raise AppException(
-                "Created analysis_request has invalid identifier.",
+                "Test automation analysis_request has invalid identifier.",
                 status_code=500,
                 code="test_prompt_runtime_invalid",
             )
 
         return PromptTestManualAutomationContext(
             automation_id=automation_id,
-            automation_name=str(created_row.get("name") or normalized_name).strip() or normalized_name,
-            automation_slug=self._clean_text_value(created_row.get("slug")),
+            automation_name=str(automation_row.get("name") or technical_name).strip() or technical_name,
+            automation_slug=self._clean_text_value(automation_row.get("slug") or technical_slug),
             provider_slug=normalized_provider,
             model_slug=normalized_model,
             analysis_request_id=analysis_request_id,
@@ -245,6 +269,10 @@ class PromptTestRuntimeService:
         *,
         slug: str,
         name: str,
+        provider_slug: str | None = None,
+        model_slug: str | None = None,
+        provider_id: uuid.UUID | None = None,
+        model_id: uuid.UUID | None = None,
         automations_columns: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
@@ -259,6 +287,8 @@ class PromptTestRuntimeService:
             values["slug"] = slug
         if "is_active" in automations_columns:
             values["is_active"] = True
+        if "is_test" in automations_columns:
+            values["is_test"] = True
         if "created_at" in automations_columns:
             values["created_at"] = now
         if "updated_at" in automations_columns:
@@ -292,14 +322,30 @@ class PromptTestRuntimeService:
             ],
         )
         if provider_column and model_column:
-            default_runtime = self._resolve_default_provider_model(
-                automations_columns=automations_columns,
-                provider_column=provider_column,
-                model_column=model_column,
+            provider_value = self._resolve_runtime_value_for_column(
+                column_name=provider_column,
+                column_meta=automations_columns[provider_column],
+                slug_value=provider_slug,
+                id_value=provider_id,
             )
-            if default_runtime is not None:
-                values[provider_column] = default_runtime["provider_value"]
-                values[model_column] = default_runtime["model_value"]
+            model_value = self._resolve_runtime_value_for_column(
+                column_name=model_column,
+                column_meta=automations_columns[model_column],
+                slug_value=model_slug,
+                id_value=model_id,
+            )
+            if provider_value is not None and model_value is not None:
+                values[provider_column] = provider_value
+                values[model_column] = model_value
+            else:
+                default_runtime = self._resolve_default_provider_model(
+                    automations_columns=automations_columns,
+                    provider_column=provider_column,
+                    model_column=model_column,
+                )
+                if default_runtime is not None:
+                    values[provider_column] = default_runtime["provider_value"]
+                    values[model_column] = default_runtime["model_value"]
 
         required_columns = self._required_columns_without_default(automations_columns)
         for column_name in sorted(required_columns):
@@ -339,41 +385,16 @@ class PromptTestRuntimeService:
             )
         return inserted_row
 
-    def _create_manual_test_automation_row(
+    def _update_automation_runtime_target(
         self,
         *,
-        name: str,
+        automation_id: uuid.UUID,
         provider_slug: str,
         model_slug: str,
         provider_id: uuid.UUID | None,
         model_id: uuid.UUID | None,
         automations_columns: dict[str, dict[str, Any]],
-    ) -> dict[str, Any]:
-        now = datetime.now(timezone.utc)
-        automation_id = uuid.uuid4()
-        resolved_slug = self._build_test_automation_slug(
-            automation_name=name,
-            automations_columns=automations_columns,
-        )
-        values: dict[str, Any] = {}
-
-        if "id" in automations_columns:
-            values["id"] = automation_id
-        if "name" in automations_columns:
-            values["name"] = name
-        if "slug" in automations_columns and resolved_slug is not None:
-            values["slug"] = resolved_slug
-        if "is_active" in automations_columns:
-            values["is_active"] = True
-        if "is_test" in automations_columns:
-            values["is_test"] = True
-        if "created_at" in automations_columns:
-            values["created_at"] = now
-        if "updated_at" in automations_columns:
-            values["updated_at"] = now
-        if "description" in automations_columns:
-            values["description"] = "Automacao criada manualmente para execucao de prompt de teste."
-
+    ) -> None:
         provider_column = self._first_existing_column(
             automations_columns,
             [
@@ -400,62 +421,79 @@ class PromptTestRuntimeService:
                 "llm_model_id",
             ],
         )
-        if provider_column:
-            provider_value = self._resolve_runtime_value_for_column(
-                column_name=provider_column,
-                column_meta=automations_columns[provider_column],
-                slug_value=provider_slug,
-                id_value=provider_id,
-            )
-            if provider_value is not None:
-                values[provider_column] = provider_value
-        if model_column:
-            model_value = self._resolve_runtime_value_for_column(
-                column_name=model_column,
-                column_meta=automations_columns[model_column],
-                slug_value=model_slug,
-                id_value=model_id,
-            )
-            if model_value is not None:
-                values[model_column] = model_value
+        if not provider_column or not model_column:
+            return
 
-        required_columns = self._required_columns_without_default(automations_columns)
-        for column_name in sorted(required_columns):
-            if column_name in values:
-                continue
-            guessed = self._guess_value_for_required_column(
-                table_name="automations",
-                column_name=column_name,
-                column_meta=automations_columns[column_name],
-                now=now,
-                automation_id=automation_id,
-                automation_name=name,
-                automation_slug=resolved_slug or "",
-            )
-            if guessed is None:
-                raise AppException(
-                    "Unable to create test automation due to unsupported shared schema requirements.",
-                    status_code=500,
-                    code="test_prompt_runtime_schema_incompatible",
-                    details={"missing_column": column_name},
-                )
-            values[column_name] = guessed
-
-        inserted_row = self._insert_row(
-            table_name="automations",
-            values=values,
-            select_columns=self._automation_select_columns(automations_columns),
-            row_id_hint=automation_id,
-            error_code="test_prompt_runtime_autocreate_failed",
-            error_message="Failed to create test automation in shared database.",
+        provider_value = self._resolve_runtime_value_for_column(
+            column_name=provider_column,
+            column_meta=automations_columns[provider_column],
+            slug_value=provider_slug,
+            id_value=provider_id,
         )
-        if inserted_row is None:
+        model_value = self._resolve_runtime_value_for_column(
+            column_name=model_column,
+            column_meta=automations_columns[model_column],
+            slug_value=model_slug,
+            id_value=model_id,
+        )
+        if provider_value is None or model_value is None:
             raise AppException(
-                "Failed to read test automation after creation.",
+                "Unable to map provider/model runtime into shared automation schema.",
                 status_code=500,
-                code="test_prompt_runtime_invalid",
+                code="test_prompt_runtime_schema_incompatible",
+                details={
+                    "provider_column": provider_column,
+                    "model_column": model_column,
+                },
             )
-        return inserted_row
+
+        assignments = [
+            f"{provider_column} = :provider_value",
+            f"{model_column} = :model_value",
+        ]
+        params: dict[str, Any] = {
+            "automation_id": str(automation_id),
+            "provider_value": provider_value,
+            "model_value": model_value,
+        }
+        if "is_test" in automations_columns:
+            assignments.append("is_test = true")
+        if "updated_at" in automations_columns:
+            assignments.append("updated_at = :updated_at")
+            params["updated_at"] = datetime.now(timezone.utc)
+
+        stmt = text(
+            f"""
+            UPDATE automations
+            SET {", ".join(assignments)}
+            WHERE id = :automation_id
+            """
+        )
+        try:
+            self.shared_session.execute(stmt, params)
+            self.shared_session.commit()
+        except Exception as exc:
+            self.shared_session.rollback()
+            logger.exception(
+                "Failed to update technical prompt-test runtime automation.",
+                extra={
+                    "automation_id": str(automation_id),
+                    "provider_column": provider_column,
+                    "model_column": model_column,
+                },
+                exc_info=exc,
+            )
+            raise AppException(
+                "Failed to update test automation runtime configuration.",
+                status_code=500,
+                code="test_prompt_runtime_autocreate_failed",
+                details={
+                    "table": "automations",
+                    "error": str(exc),
+                    "provider_column": provider_column,
+                    "model_column": model_column,
+                },
+            ) from exc
 
     def _ensure_automation_active(
         self,
@@ -783,44 +821,6 @@ class PromptTestRuntimeService:
             return True
         return False
 
-    def _build_test_automation_slug(
-        self,
-        *,
-        automation_name: str,
-        automations_columns: dict[str, dict[str, Any]],
-    ) -> str | None:
-        if "slug" not in automations_columns:
-            return None
-        base_slug = self._slugify_text(automation_name)
-        if not base_slug:
-            base_slug = "prompt-teste"
-        prefix = "test-prompt-"
-        candidate = f"{prefix}{base_slug}".strip("-")
-        candidate = candidate[:100].strip("-")
-        if not candidate:
-            candidate = "test-prompt-automation"
-        if not self._automation_slug_exists(candidate):
-            return candidate
-        for idx in range(2, 500):
-            suffix = f"-{idx}"
-            shortened = candidate[: max(1, 100 - len(suffix))].rstrip("-")
-            current = f"{shortened}{suffix}"
-            if not self._automation_slug_exists(current):
-                return current
-        return f"test-prompt-{uuid.uuid4().hex[:12]}"
-
-    def _automation_slug_exists(self, slug: str) -> bool:
-        stmt = text(
-            """
-            SELECT 1
-            FROM automations
-            WHERE lower(slug) = :slug
-            LIMIT 1
-            """
-        )
-        row = self.shared_session.execute(stmt, {"slug": str(slug or "").strip().lower()}).first()
-        return row is not None
-
     def _apply_analysis_request_file_defaults(
         self,
         *,
@@ -960,8 +960,3 @@ class PromptTestRuntimeService:
                 return candidate
         return None
 
-    @staticmethod
-    def _slugify_text(value: str) -> str:
-        normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower())
-        normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
-        return normalized

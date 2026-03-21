@@ -27,6 +27,9 @@ class FakeSharedAutomations:
     def get_runtime_config_for_automation(self, automation_id):  # type: ignore[no-untyped-def]
         return self.runtime
 
+    def get_runtime_target_for_automation(self, automation_id):  # type: ignore[no-untyped-def]
+        return self.runtime
+
 
 class FakeSharedAnalysis:
     def __init__(self, *, automation_id) -> None:  # type: ignore[no-untyped-def]
@@ -162,3 +165,26 @@ def test_admin_create_test_automation_uses_selected_provider_model() -> None:
     assert result["analysis_request_id"] == analysis_request_id
     assert result["provider_slug"] == "openai"
     assert result["model_slug"] == "gpt-4.1-mini"
+
+
+def test_admin_get_prompt_test_runtime_reads_technical_context() -> None:
+    automation_id = uuid4()
+    analysis_request_id = uuid4()
+    runtime = SimpleNamespace(provider_slug="openai", model_slug="gpt-4.1-mini")
+    service = _build_service(automation_id=automation_id, runtime=runtime)
+    service.test_prompt_runtime = SimpleNamespace(  # type: ignore[assignment]
+        ensure_runtime_context=lambda: SimpleNamespace(
+            automation_id=automation_id,
+            automation_name="Automacao Tecnica de Teste",
+            automation_slug="system-test-automation",
+            analysis_request_id=analysis_request_id,
+        )
+    )
+
+    payload = service.get_prompt_test_runtime()
+
+    assert payload["automation_id"] == automation_id
+    assert payload["analysis_request_id"] == analysis_request_id
+    assert payload["provider_slug"] == "openai"
+    assert payload["model_slug"] == "gpt-4.1-mini"
+    assert payload["is_test_automation"] is True

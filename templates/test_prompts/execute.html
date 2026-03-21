@@ -12,7 +12,7 @@
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Selecione uma automacao de teste ou crie uma nova na hora.</span>
+    <span class="admin-note">Fluxo isolado: runtime tecnico interno para testes de prompt.</span>
 </div>
 
 {% if integration_warnings %}
@@ -32,15 +32,15 @@
             <strong>{{ test_prompt.name }}</strong>
             <div class="admin-note"><code>ID local {{ test_prompt.pk }}</code></div>
         </div>
-        <div class="col-12 col-lg-6">
-            <small class="text-secondary d-block">Automacao selecionada</small>
-            {% if selected_automation %}
-                <div>{{ selected_automation.automation_name }}</div>
-                <div class="admin-note"><code>{{ selected_automation.automation_id }}</code></div>
-            {% else %}
-                <div class="admin-note">Nenhuma automacao de teste selecionada ainda.</div>
-            {% endif %}
-        </div>
+            <div class="col-12 col-lg-6">
+                <small class="text-secondary d-block">Automacao tecnica de teste</small>
+                {% if selected_automation %}
+                    <div>{{ selected_automation.automation_name }}</div>
+                    <div class="admin-note"><code>{{ selected_automation.automation_id }}</code></div>
+                {% else %}
+                    <div class="admin-note">Runtime tecnico ainda nao configurado.</div>
+                {% endif %}
+            </div>
         <div class="col-12">
             <small class="text-secondary d-block">Resumo do override</small>
             <span class="admin-note">{{ test_prompt.prompt_text|truncatechars:260 }}</span>
@@ -67,13 +67,13 @@
                         {{ form.automation }}
                     </div>
                     <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#testAutomationModal">
-                        + Criar automacao de teste
+                        Configurar runtime tecnico
                     </button>
                 </div>
                 {% for error in form.automation.errors %}
                     <div class="invalid-feedback d-block">{{ error }}</div>
                 {% endfor %}
-                <div class="form-text">Apenas automacoes de teste sao exibidas aqui.</div>
+                <div class="form-text">Runtime tecnico interno (nao usa cadastro de automacoes oficiais).</div>
             </div>
             <div class="col-12 col-lg-8">
                 <label for="{{ form.request_file.id_for_label }}" class="form-label fw-semibold">{{ form.request_file.label }}</label>
@@ -95,13 +95,13 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Criar automacao de teste</h5>
+                <h5 class="modal-title">Configurar runtime tecnico de teste</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
             <div class="modal-body">
                 <div id="test-automation-modal-feedback" class="alert d-none" role="alert"></div>
                 <div class="mb-3">
-                    <label for="new-automation-name" class="form-label">Nome</label>
+                    <label for="new-automation-name" class="form-label">Nome de referencia</label>
                     <input id="new-automation-name" type="text" class="form-control" maxlength="180" placeholder="Ex.: Teste OCR financeiro">
                 </div>
                 <div class="mb-3">
@@ -123,12 +123,12 @@
                     </select>
                 </div>
                 <small class="text-secondary d-block">
-                    A automacao sera criada com <code>analysis_request</code> padrao para arquivo (<code>xlsx</code>, <code>csv</code>, <code>txt</code>, <code>pdf</code>).
+                    O sistema cria/reutiliza automaticamente a automacao tecnica interna e o <code>analysis_request</code> padrao para arquivo (<code>xlsx</code>, <code>csv</code>, <code>txt</code>, <code>pdf</code>).
                 </small>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-                <button type="button" id="create-test-automation-btn" class="btn btn-dark">Criar automacao</button>
+                <button type="button" id="create-test-automation-btn" class="btn btn-dark">Salvar configuracao</button>
             </div>
         </div>
     </div>
@@ -251,14 +251,20 @@
                     }
 
                     const automation = payload.automation;
-                    const option = document.createElement("option");
-                    option.value = automation.automation_id;
                     const slugPart = automation.automation_slug ? " [" + automation.automation_slug + "]" : "";
-                    option.textContent = automation.automation_name + slugPart;
-                    executionAutomationSelect.appendChild(option);
+                    const optionLabel = automation.automation_name + slugPart;
+                    const existingOption = Array.from(executionAutomationSelect.options).find((opt) => opt.value === automation.automation_id);
+                    if (existingOption) {
+                        existingOption.textContent = optionLabel;
+                    } else {
+                        const option = document.createElement("option");
+                        option.value = automation.automation_id;
+                        option.textContent = optionLabel;
+                        executionAutomationSelect.appendChild(option);
+                    }
                     executionAutomationSelect.value = automation.automation_id;
 
-                    showFeedback("Automacao criada com sucesso e selecionada para esta execucao.", "success");
+                    showFeedback("Runtime tecnico configurado com sucesso para esta execucao.", "success");
                     setTimeout(function () {
                         const modalInstance = bootstrap.Modal.getOrCreateInstance(modalElement);
                         modalInstance.hide();

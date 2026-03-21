@@ -269,6 +269,32 @@ class AdminAutomationExecutionService:
             "is_test_automation": True,
         }
 
+    def get_prompt_test_runtime(self) -> dict[str, Any]:
+        context = self.test_prompt_runtime.ensure_runtime_context()
+        runtime = self.shared_automations.get_runtime_config_for_automation(context.automation_id)
+        runtime_target = self.shared_automations.get_runtime_target_for_automation(context.automation_id)
+
+        provider_slug = (
+            runtime.provider_slug
+            if runtime is not None and runtime.provider_slug is not None
+            else runtime_target.provider_slug if runtime_target is not None else None
+        )
+        model_slug = (
+            runtime.model_slug
+            if runtime is not None and runtime.model_slug is not None
+            else runtime_target.model_slug if runtime_target is not None else None
+        )
+
+        return {
+            "automation_id": context.automation_id,
+            "automation_name": context.automation_name,
+            "automation_slug": context.automation_slug,
+            "analysis_request_id": context.analysis_request_id,
+            "provider_slug": str(provider_slug or "").strip().lower(),
+            "model_slug": str(model_slug or "").strip().lower(),
+            "is_test_automation": True,
+        }
+
     @staticmethod
     def _build_admin_token_and_permissions(
         *,

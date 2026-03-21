@@ -61,7 +61,7 @@ class TestPromptForm(forms.Form):
 
 class TestPromptExecutionForm(forms.Form):
     automation = forms.ChoiceField(
-        label="Automacao de teste",
+        label="Runtime tecnico de teste",
         required=True,
         widget=forms.Select(attrs={"class": "form-select"}),
     )
@@ -86,7 +86,7 @@ class TestPromptExecutionForm(forms.Form):
     def clean_automation(self) -> str:
         value = str(self.cleaned_data.get("automation") or "").strip()
         if not value:
-            raise ValidationError("Selecione uma automacao de teste.")
+            raise ValidationError("Configure o runtime tecnico de teste antes de executar.")
         return value
 
     def clean_request_file(self):

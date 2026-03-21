@@ -5,8 +5,15 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import get_current_admin_user
 from app.db.session import SessionLocal, get_operational_session
+from app.db.shared_session import get_shared_session
 from app.models.operational import DjangoAiUser
-from app.schemas.admin_prompt_tests import PromptTestCreateResponse, PromptTestStatusResponse
+from app.schemas.admin_prompt_tests import (
+    PromptTestCreateResponse,
+    PromptTestRuntimeConfigureRequest,
+    PromptTestRuntimeResponse,
+    PromptTestStatusResponse,
+)
+from app.services.admin_automation_execution_service import AdminAutomationExecutionService
 from app.services.prompt_test_service import PromptTestService
 
 router = APIRouter(tags=["admin-prompt-tests"])
@@ -84,3 +91,40 @@ def get_prompt_test_status(
         error_message=record.error_message,
         output_text=record.output_text,
     )
+
+
+@router.get("/prompt-tests/runtime", response_model=PromptTestRuntimeResponse)
+def get_prompt_test_runtime(
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> PromptTestRuntimeResponse:
+    service = AdminAutomationExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    payload = service.get_prompt_test_runtime()
+    return PromptTestRuntimeResponse(**payload)
+
+
+@router.post(
+    "/prompt-tests/runtime",
+    response_model=PromptTestRuntimeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def configure_prompt_test_runtime(
+    payload: PromptTestRuntimeConfigureRequest,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> PromptTestRuntimeResponse:
+    service = AdminAutomationExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    result = service.create_test_automation(
+        name=payload.name,
+        provider_id=payload.provider_id,
+        model_id=payload.model_id,
+    )
+    return PromptTestRuntimeResponse(**result)

@@ -191,6 +191,10 @@ class AutomationPromptsExecutionService:
             return "Modelo nao encontrado na FastAPI."
         if code == "provider_model_mismatch":
             return "Modelo selecionado nao pertence ao provider informado."
+        if code == "invalid_test_automation_name":
+            return "Nome de referencia invalido para configurar o runtime tecnico."
+        if code == "invalid_test_automation_runtime":
+            return "Provider/model sao obrigatorios para configurar o runtime tecnico."
         if code == "test_prompt_runtime_schema_incompatible":
             return "Schema de automacoes no banco compartilhado nao e compativel com criacao automatica."
         if code == "test_prompt_analysis_request_schema_incompatible":
@@ -474,7 +478,7 @@ class AutomationPromptsExecutionService:
         model_id: UUID,
     ) -> TestAutomationCreateReadItem:
         result = self.client.post(
-            "/api/v1/admin/automations",
+            "/api/v1/admin/prompt-tests/runtime",
             json_body={
                 "name": str(name or "").strip(),
                 "provider_id": str(provider_id),
@@ -509,6 +513,33 @@ class AutomationPromptsExecutionService:
         if item is None:
             raise AutomationPromptsExecutionServiceError(
                 "Resposta invalida da FastAPI ao criar automacao de teste.",
+                code="fastapi_invalid_response",
+                status_code=result.status_code,
+            )
+        return item
+
+    def get_test_automation_runtime(self) -> TestAutomationCreateReadItem:
+        result = self.client.get(
+            "/api/v1/admin/prompt-tests/runtime",
+            headers=self.client.get_admin_headers(),
+            expect_dict=True,
+        )
+        if not result.is_success or not isinstance(result.data, dict):
+            code, message = self._extract_error_meta(result)
+            raise AutomationPromptsExecutionServiceError(
+                self._friendly_error(
+                    code=code,
+                    status_code=result.status_code,
+                    fallback_message=message,
+                    action="consultar runtime tecnico de teste",
+                ),
+                code=code,
+                status_code=result.status_code,
+            )
+        item = self._normalize_test_automation_create(result.data)
+        if item is None:
+            raise AutomationPromptsExecutionServiceError(
+                "Resposta invalida da FastAPI ao consultar runtime tecnico de teste.",
                 code="fastapi_invalid_response",
                 status_code=result.status_code,
             )

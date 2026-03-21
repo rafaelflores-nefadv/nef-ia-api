@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import get_current_admin_user
+from app.core.exceptions import AppException
 from app.db.session import get_operational_session
 from app.db.shared_session import get_shared_session
 from app.models.operational import DjangoAiUser
@@ -31,19 +32,18 @@ router = APIRouter(tags=["admin-automation-execution"])
 def create_test_automation(
     payload: TestAutomationCreateRequest,
     _: DjangoAiUser = Depends(get_current_admin_user),
-    operational_session: Session = Depends(get_operational_session),
-    shared_session: Session = Depends(get_shared_session),
 ) -> TestAutomationCreateResponse:
-    service = AdminAutomationExecutionService(
-        operational_session=operational_session,
-        shared_session=shared_session,
+    raise AppException(
+        "Endpoint deprecated for prompt-test runtime configuration. Use /api/v1/admin/prompt-tests/runtime.",
+        status_code=status.HTTP_410_GONE,
+        code="test_prompt_runtime_endpoint_deprecated",
+        details={
+            "replacement_endpoint": "/api/v1/admin/prompt-tests/runtime",
+            "received_name": payload.name,
+            "received_provider_id": str(payload.provider_id),
+            "received_model_id": str(payload.model_id),
+        },
     )
-    result = service.create_test_automation(
-        name=payload.name,
-        provider_id=payload.provider_id,
-        model_id=payload.model_id,
-    )
-    return TestAutomationCreateResponse(**result)
 
 
 @router.get(
