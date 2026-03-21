@@ -22,6 +22,11 @@ class FakeProviderRepository:
             return None
         return self.provider
 
+    def get_by_id(self, provider_id):  # type: ignore[no-untyped-def]
+        if provider_id != self.provider.id:
+            return None
+        return self.provider
+
     def get_active_credential(self, provider_id):  # type: ignore[no-untyped-def]
         if provider_id != self.provider.id:
             return None
@@ -46,6 +51,11 @@ class FakeProviderModelRepository:
 
     def get_by_model_slug(self, model_slug):  # type: ignore[no-untyped-def]
         if model_slug == self.model.model_slug:
+            return self.model
+        return None
+
+    def get_by_id(self, model_id):  # type: ignore[no-untyped-def]
+        if model_id == self.model.id:
             return self.model
         return None
 
@@ -130,3 +140,20 @@ def test_provider_service_resolves_gemini_alias_to_canonical_provider() -> None:
     assert runtime.model.model_slug == "gemini-2.5-pro"
     assert registry.calls
     assert registry.calls[0]["provider_slug"] == "gemini"
+
+
+def test_provider_service_resolves_runtime_by_uuid_identifiers() -> None:
+    raw_secret = "sk-live-provider-id"
+    encrypted = encrypt_secret(raw_secret)
+    service, registry = _build_service(encrypted)
+    provider_id = service.providers.provider.id  # type: ignore[attr-defined]
+    model_id = service.models.model.id  # type: ignore[attr-defined]
+
+    runtime = service.resolve_runtime(
+        provider_slug=str(provider_id),
+        model_slug=str(model_id),
+    )
+
+    assert runtime.provider.id == provider_id
+    assert runtime.model.id == model_id
+    assert registry.calls

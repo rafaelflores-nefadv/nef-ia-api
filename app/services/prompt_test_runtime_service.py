@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from app.core.config import get_settings
 from app.core.exceptions import AppException
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True, frozen=True)
@@ -128,6 +130,8 @@ class PromptTestRuntimeService:
         automation_name: str,
         provider_slug: str,
         model_slug: str,
+        provider_id: uuid.UUID | None = None,
+        model_id: uuid.UUID | None = None,
     ) -> PromptTestManualAutomationContext:
         normalized_name = str(automation_name or "").strip()
         if not normalized_name:
@@ -164,6 +168,8 @@ class PromptTestRuntimeService:
             name=normalized_name,
             provider_slug=normalized_provider,
             model_slug=normalized_model,
+            provider_id=provider_id,
+            model_id=model_id,
             automations_columns=automation_columns,
         )
         automation_id = self._coerce_uuid(created_row.get("id"))
@@ -261,11 +267,29 @@ class PromptTestRuntimeService:
             values["description"] = "Automacao tecnica interna para prompts de teste."
         provider_column = self._first_existing_column(
             automations_columns,
-            ["provider_slug", "provider", "ai_provider_slug", "ai_provider", "llm_provider"],
+            [
+                "provider_slug",
+                "provider",
+                "ai_provider_slug",
+                "ai_provider",
+                "llm_provider",
+                "provider_id",
+                "ai_provider_id",
+                "llm_provider_id",
+            ],
         )
         model_column = self._first_existing_column(
             automations_columns,
-            ["model_slug", "model", "ai_model_slug", "ai_model", "llm_model"],
+            [
+                "model_slug",
+                "model",
+                "ai_model_slug",
+                "ai_model",
+                "llm_model",
+                "model_id",
+                "ai_model_id",
+                "llm_model_id",
+            ],
         )
         if provider_column and model_column:
             default_runtime = self._resolve_default_provider_model(
@@ -274,8 +298,8 @@ class PromptTestRuntimeService:
                 model_column=model_column,
             )
             if default_runtime is not None:
-                values[provider_column] = default_runtime["provider_slug"]
-                values[model_column] = default_runtime["model_slug"]
+                values[provider_column] = default_runtime["provider_value"]
+                values[model_column] = default_runtime["model_value"]
 
         required_columns = self._required_columns_without_default(automations_columns)
         for column_name in sorted(required_columns):
@@ -321,6 +345,8 @@ class PromptTestRuntimeService:
         name: str,
         provider_slug: str,
         model_slug: str,
+        provider_id: uuid.UUID | None,
+        model_id: uuid.UUID | None,
         automations_columns: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
@@ -350,16 +376,48 @@ class PromptTestRuntimeService:
 
         provider_column = self._first_existing_column(
             automations_columns,
-            ["provider_slug", "provider", "ai_provider_slug", "ai_provider", "llm_provider"],
+            [
+                "provider_slug",
+                "provider",
+                "ai_provider_slug",
+                "ai_provider",
+                "llm_provider",
+                "provider_id",
+                "ai_provider_id",
+                "llm_provider_id",
+            ],
         )
         model_column = self._first_existing_column(
             automations_columns,
-            ["model_slug", "model", "ai_model_slug", "ai_model", "llm_model"],
+            [
+                "model_slug",
+                "model",
+                "ai_model_slug",
+                "ai_model",
+                "llm_model",
+                "model_id",
+                "ai_model_id",
+                "llm_model_id",
+            ],
         )
         if provider_column:
-            values[provider_column] = provider_slug
+            provider_value = self._resolve_runtime_value_for_column(
+                column_name=provider_column,
+                column_meta=automations_columns[provider_column],
+                slug_value=provider_slug,
+                id_value=provider_id,
+            )
+            if provider_value is not None:
+                values[provider_column] = provider_value
         if model_column:
-            values[model_column] = model_slug
+            model_value = self._resolve_runtime_value_for_column(
+                column_name=model_column,
+                column_meta=automations_columns[model_column],
+                slug_value=model_slug,
+                id_value=model_id,
+            )
+            if model_value is not None:
+                values[model_column] = model_value
 
         required_columns = self._required_columns_without_default(automations_columns)
         for column_name in sorted(required_columns):
@@ -538,6 +596,15 @@ class PromptTestRuntimeService:
             self.shared_session.commit()
         except Exception as exc:
             self.shared_session.rollback()
+            logger.exception(
+                "Failed to insert row into shared table for prompt test runtime.",
+                extra={
+                    "table": table_name,
+                    "columns": sorted(column_names),
+                    "row_id_hint": str(row_id_hint) if row_id_hint is not None else None,
+                },
+                exc_info=exc,
+            )
             raise AppException(
                 error_message,
                 status_code=500,
@@ -636,15 +703,15 @@ class PromptTestRuntimeService:
         automations_columns: dict[str, dict[str, Any]],
         provider_column: str,
         model_column: str,
-    ) -> dict[str, str] | None:
+    ) -> dict[str, Any] | None:
         active_filter = ""
         if "is_active" in automations_columns:
             active_filter = "AND coalesce(a.is_active, true) = true"
         stmt = text(
             f"""
             SELECT
-                a.{provider_column} AS provider_slug,
-                a.{model_column} AS model_slug
+                a.{provider_column} AS provider_value,
+                a.{model_column} AS model_value
             FROM automations a
             WHERE a.{provider_column} IS NOT NULL
               AND a.{model_column} IS NOT NULL
@@ -656,11 +723,65 @@ class PromptTestRuntimeService:
         row = self.shared_session.execute(stmt).mappings().first()
         if row is None:
             return None
-        provider_slug = str(row.get("provider_slug") or "").strip()
-        model_slug = str(row.get("model_slug") or "").strip()
-        if not provider_slug or not model_slug:
+        provider_value = row.get("provider_value")
+        model_value = row.get("model_value")
+        if provider_value is None or model_value is None:
             return None
-        return {"provider_slug": provider_slug, "model_slug": model_slug}
+        if not str(provider_value).strip() or not str(model_value).strip():
+            return None
+        return {"provider_value": provider_value, "model_value": model_value}
+
+    def _resolve_runtime_value_for_column(
+        self,
+        *,
+        column_name: str,
+        column_meta: dict[str, Any],
+        slug_value: str | None,
+        id_value: uuid.UUID | None,
+    ) -> Any | None:
+        data_type = str(column_meta.get("data_type") or "").strip().lower()
+        udt_name = str(column_meta.get("udt_name") or "").strip().lower()
+        merged_type = f"{data_type} {udt_name}".strip()
+        expects_uuid = "uuid" in merged_type
+        expects_integer = any(token in merged_type for token in ["bigint", "smallint", "integer"])
+
+        if self._column_prefers_identifier(column_name=column_name, column_meta=column_meta):
+            if expects_integer:
+                raw = str(slug_value or "").strip()
+                if raw.isdigit():
+                    try:
+                        return int(raw)
+                    except ValueError:
+                        return None
+                return None
+            if id_value is not None:
+                return id_value if expects_uuid else str(id_value)
+            parsed_uuid = self._coerce_uuid(slug_value)
+            if parsed_uuid is not None:
+                return parsed_uuid if expects_uuid else str(parsed_uuid)
+            return None
+        normalized_slug = str(slug_value or "").strip()
+        if normalized_slug:
+            return normalized_slug
+        if id_value is not None:
+            return str(id_value)
+        return None
+
+    @staticmethod
+    def _column_prefers_identifier(
+        *,
+        column_name: str,
+        column_meta: dict[str, Any],
+    ) -> bool:
+        lower_name = str(column_name or "").strip().lower()
+        data_type = str(column_meta.get("data_type") or "").strip().lower()
+        udt_name = str(column_meta.get("udt_name") or "").strip().lower()
+        merged_type = f"{data_type} {udt_name}".strip()
+        if lower_name.endswith("_id"):
+            return True
+        if "uuid" in merged_type:
+            return True
+        return False
 
     def _build_test_automation_slug(
         self,

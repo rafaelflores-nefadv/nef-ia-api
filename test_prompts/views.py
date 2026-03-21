@@ -544,7 +544,12 @@ class TestAutomationCreateView(LoginRequiredMixin, View):
                 model_id=model_id,
             )
         except AutomationPromptsExecutionServiceError as exc:
-            return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+            status_code = int(exc.status_code or 400)
+            if status_code < 400 or status_code > 599:
+                status_code = 400
+            if status_code >= 500:
+                status_code = 502
+            return JsonResponse({"ok": False, "error": str(exc)}, status=status_code)
 
         return JsonResponse(
             {

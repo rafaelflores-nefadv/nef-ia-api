@@ -1,3 +1,4 @@
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -35,10 +36,14 @@ class ProviderService:
         provider_slug: str,
         model_slug: str,
     ) -> ProviderRuntimeSelection:
-        requested_provider_slug = str(provider_slug or "").strip().lower()
+        requested_provider_raw = str(provider_slug or "").strip()
+        requested_provider_slug = requested_provider_raw.lower()
         canonical_provider_slug = resolve_discovery_provider_slug(requested_provider_slug)
 
-        provider = self.providers.get_by_slug(requested_provider_slug)
+        provider_id = self._coerce_uuid(requested_provider_raw)
+        provider = self.providers.get_by_id(provider_id) if provider_id is not None else None
+        if provider is None:
+            provider = self.providers.get_by_slug(requested_provider_slug)
         if provider is None and canonical_provider_slug and canonical_provider_slug != requested_provider_slug:
             provider = self.providers.get_by_slug(canonical_provider_slug)
         if provider is None:
@@ -49,6 +54,7 @@ class ProviderService:
                 details={
                     "provider_slug": requested_provider_slug,
                     "canonical_provider_slug": canonical_provider_slug,
+                    "provider_id": str(provider_id) if provider_id is not None else None,
                 },
             )
 
@@ -73,9 +79,20 @@ class ProviderService:
                 },
             )
 
-        model_for_provider = self.models.get_by_slug(provider.id, model_slug)
+        requested_model_raw = str(model_slug or "").strip()
+        requested_model_slug = requested_model_raw.lower()
+        requested_model_id = self._coerce_uuid(requested_model_raw)
+
+        model_for_provider = self.models.get_by_slug(provider.id, requested_model_slug)
+        if model_for_provider is None and requested_model_id is not None:
+            model_by_id = self.models.get_by_id(requested_model_id)
+            if model_by_id is not None and model_by_id.provider_id == provider.id:
+                model_for_provider = model_by_id
+
         if model_for_provider is None:
-            model = self.models.get_by_model_slug(model_slug)
+            model = self.models.get_by_model_slug(requested_model_slug)
+            if model is None and requested_model_id is not None:
+                model = self.models.get_by_id(requested_model_id)
             if model is None:
                 raise AppException(
                     "Configured model does not exist in the operational catalog.",
@@ -84,7 +101,8 @@ class ProviderService:
                     details={
                         "provider_slug": requested_provider_slug,
                         "catalog_provider_slug": provider.slug,
-                        "model_slug": model_slug,
+                        "model_slug": requested_model_slug,
+                        "model_id": str(requested_model_id) if requested_model_id is not None else None,
                     },
                 )
             raise AppException(
@@ -94,7 +112,8 @@ class ProviderService:
                 details={
                     "provider_slug": requested_provider_slug,
                     "catalog_provider_slug": provider.slug,
-                    "model_slug": model_slug,
+                    "model_slug": requested_model_slug,
+                    "model_id": str(requested_model_id) if requested_model_id is not None else None,
                 },
             )
 
@@ -106,7 +125,8 @@ class ProviderService:
                 details={
                     "provider_slug": requested_provider_slug,
                     "catalog_provider_slug": provider.slug,
-                    "model_slug": model_slug,
+                    "model_slug": requested_model_slug,
+                    "model_id": str(requested_model_id) if requested_model_id is not None else None,
                 },
             )
 
@@ -134,3 +154,13 @@ class ProviderService:
     @staticmethod
     def _decrypt_api_key(encrypted_api_key: str) -> str:
         return decrypt_secret(encrypted_api_key)
+
+    @staticmethod
+    def _coerce_uuid(value: str | None) -> uuid.UUID | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            return uuid.UUID(raw)
+        except ValueError:
+            return None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -9,6 +10,8 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from .api_client import ApiResponse, FastAPIClient
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -156,6 +159,18 @@ class AutomationPromptsExecutionService:
                     message = payload_message
         return code, message
 
+    @staticmethod
+    def _extract_error_details(result: ApiResponse) -> dict[str, Any] | None:
+        if not isinstance(result.data, dict):
+            return None
+        error_payload = result.data.get("error")
+        if not isinstance(error_payload, dict):
+            return None
+        details = error_payload.get("details")
+        if isinstance(details, dict):
+            return details
+        return None
+
     def _friendly_error(
         self,
         *,
@@ -176,6 +191,14 @@ class AutomationPromptsExecutionService:
             return "Modelo nao encontrado na FastAPI."
         if code == "provider_model_mismatch":
             return "Modelo selecionado nao pertence ao provider informado."
+        if code == "test_prompt_runtime_schema_incompatible":
+            return "Schema de automacoes no banco compartilhado nao e compativel com criacao automatica."
+        if code == "test_prompt_analysis_request_schema_incompatible":
+            return "Schema de analysis_requests no banco compartilhado nao e compativel com criacao automatica."
+        if code == "test_prompt_runtime_autocreate_failed":
+            return "Falha ao criar automacao de teste no banco compartilhado."
+        if code == "test_prompt_analysis_request_autocreate_failed":
+            return "Falha ao preparar analysis_request padrao da automacao de teste."
         if code == "invalid_integration_token":
             return "Token de integracao FastAPI invalido."
         if code == "deactivated_integration_token":
@@ -462,6 +485,16 @@ class AutomationPromptsExecutionService:
         )
         if not result.is_success or not isinstance(result.data, dict):
             code, message = self._extract_error_meta(result)
+            details = self._extract_error_details(result)
+            logger.warning(
+                "Falha ao criar automacao de teste via FastAPI.",
+                extra={
+                    "status_code": result.status_code,
+                    "error_code": code,
+                    "error_message": message,
+                    "error_details": details,
+                },
+            )
             raise AutomationPromptsExecutionServiceError(
                 self._friendly_error(
                     code=code,

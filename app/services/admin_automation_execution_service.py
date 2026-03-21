@@ -256,6 +256,8 @@ class AdminAutomationExecutionService:
             automation_name=name,
             provider_slug=str(provider.slug or "").strip().lower(),
             model_slug=str(model.model_slug or "").strip().lower(),
+            provider_id=provider.id,
+            model_id=model.id,
         )
         return {
             "automation_id": context.automation_id,

@@ -57,22 +57,58 @@ class SharedAutomationRepository:
         prompt_provider_expr, _ = self._build_runtime_expr(
             table_alias="ap",
             available_columns=prompt_columns,
-            candidates=["provider_slug", "provider", "ai_provider_slug", "ai_provider", "llm_provider"],
+            candidates=[
+                "provider_slug",
+                "provider",
+                "ai_provider_slug",
+                "ai_provider",
+                "llm_provider",
+                "provider_id",
+                "ai_provider_id",
+                "llm_provider_id",
+            ],
         )
         prompt_model_expr, _ = self._build_runtime_expr(
             table_alias="ap",
             available_columns=prompt_columns,
-            candidates=["model_slug", "model", "ai_model_slug", "ai_model", "llm_model"],
+            candidates=[
+                "model_slug",
+                "model",
+                "ai_model_slug",
+                "ai_model",
+                "llm_model",
+                "model_id",
+                "ai_model_id",
+                "llm_model_id",
+            ],
         )
         automation_provider_expr, _ = self._build_runtime_expr(
             table_alias="a",
             available_columns=automation_columns,
-            candidates=["provider_slug", "provider", "ai_provider_slug", "ai_provider", "llm_provider"],
+            candidates=[
+                "provider_slug",
+                "provider",
+                "ai_provider_slug",
+                "ai_provider",
+                "llm_provider",
+                "provider_id",
+                "ai_provider_id",
+                "llm_provider_id",
+            ],
         )
         automation_model_expr, _ = self._build_runtime_expr(
             table_alias="a",
             available_columns=automation_columns,
-            candidates=["model_slug", "model", "ai_model_slug", "ai_model", "llm_model"],
+            candidates=[
+                "model_slug",
+                "model",
+                "ai_model_slug",
+                "ai_model",
+                "llm_model",
+                "model_id",
+                "ai_model_id",
+                "llm_model_id",
+            ],
         )
         automation_slug_expr, _ = self._build_runtime_expr(
             table_alias="a",
@@ -133,12 +169,30 @@ class SharedAutomationRepository:
         provider_expr, _ = self._build_runtime_expr(
             table_alias="a",
             available_columns=automation_columns,
-            candidates=["provider_slug", "provider", "ai_provider_slug", "ai_provider", "llm_provider"],
+            candidates=[
+                "provider_slug",
+                "provider",
+                "ai_provider_slug",
+                "ai_provider",
+                "llm_provider",
+                "provider_id",
+                "ai_provider_id",
+                "llm_provider_id",
+            ],
         )
         model_expr, _ = self._build_runtime_expr(
             table_alias="a",
             available_columns=automation_columns,
-            candidates=["model_slug", "model", "ai_model_slug", "ai_model", "llm_model"],
+            candidates=[
+                "model_slug",
+                "model",
+                "ai_model_slug",
+                "ai_model",
+                "llm_model",
+                "model_id",
+                "ai_model_id",
+                "llm_model_id",
+            ],
         )
         stmt = text(
             f"""
