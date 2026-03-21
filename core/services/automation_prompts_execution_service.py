@@ -197,6 +197,8 @@ class AutomationPromptsExecutionService:
             return "Provider/model sao obrigatorios para configurar o runtime tecnico."
         if code == "test_prompt_runtime_schema_incompatible":
             return "Schema de automacoes no banco compartilhado nao e compativel com criacao automatica."
+        if code == "test_prompt_runtime_schema_init_failed":
+            return "Falha ao inicializar tabela isolada de automacoes de teste no banco compartilhado."
         if code == "test_prompt_analysis_request_schema_incompatible":
             return "Schema de analysis_requests no banco compartilhado nao e compativel com criacao automatica."
         if code == "test_prompt_runtime_autocreate_failed":

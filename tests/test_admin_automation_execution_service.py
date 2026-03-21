@@ -170,13 +170,14 @@ def test_admin_create_test_automation_uses_selected_provider_model() -> None:
 def test_admin_get_prompt_test_runtime_reads_technical_context() -> None:
     automation_id = uuid4()
     analysis_request_id = uuid4()
-    runtime = SimpleNamespace(provider_slug="openai", model_slug="gpt-4.1-mini")
-    service = _build_service(automation_id=automation_id, runtime=runtime)
+    service = _build_service(automation_id=automation_id, runtime=None)
     service.test_prompt_runtime = SimpleNamespace(  # type: ignore[assignment]
         ensure_runtime_context=lambda: SimpleNamespace(
             automation_id=automation_id,
             automation_name="Automacao Tecnica de Teste",
             automation_slug="system-test-automation",
+            provider_slug="openai",
+            model_slug="gpt-4.1-mini",
             analysis_request_id=analysis_request_id,
         )
     )

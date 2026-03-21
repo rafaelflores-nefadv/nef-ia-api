@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -40,3 +41,17 @@ def test_runtime_value_returns_none_for_integer_identifier_without_numeric_sourc
         id_value=uuid4(),
     )
     assert value is None
+
+
+def test_guess_value_uses_prompt_test_runtime_marker() -> None:
+    service = _build_service()
+    value = service._guess_value_for_required_column(
+        table_name="analysis_requests",
+        column_name="type",
+        column_meta={"data_type": "character varying", "udt_name": "varchar"},
+        now=datetime.now(timezone.utc),
+        automation_id=uuid4(),
+        automation_name="",
+        automation_slug="",
+    )
+    assert value == "prompt_test_runtime"

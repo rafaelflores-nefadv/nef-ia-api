@@ -4,6 +4,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppException
+from app.repositories.prompt_tests import PromptTestAutomationRepository
 from app.repositories.shared.automation_repository import SharedAutomationRepository
 
 
@@ -26,6 +27,7 @@ class AutomationRuntimeResolverService:
 
     def __init__(self, shared_session: Session) -> None:
         self.repository = SharedAutomationRepository(shared_session)
+        self.test_automations = PromptTestAutomationRepository(shared_session)
 
     def resolve(
         self,
@@ -45,11 +47,48 @@ class AutomationRuntimeResolverService:
 
         automation = self.repository.get_automation_by_id(automation_uuid)
         if automation is None:
-            raise AppException(
-                "Automation not found in general system.",
-                status_code=404,
-                code="automation_not_found",
-                details={"automation_id": str(automation_uuid)},
+            try:
+                test_automation = self.test_automations.get_by_id(automation_uuid)
+            except Exception:
+                test_automation = None
+            if test_automation is None:
+                raise AppException(
+                    "Automation not found in general system.",
+                    status_code=404,
+                    code="automation_not_found",
+                    details={"automation_id": str(automation_uuid)},
+                )
+
+            provider_slug = str(test_automation.provider_slug or "").strip().lower()
+            model_slug = str(test_automation.model_slug or "").strip().lower()
+            missing_fields: list[str] = []
+            if not provider_slug:
+                missing_fields.append("provider")
+            if not model_slug:
+                missing_fields.append("model")
+            if missing_fields:
+                raise AppException(
+                    "Automation runtime configuration is incomplete in general system.",
+                    status_code=422,
+                    code="automation_runtime_configuration_missing",
+                    details={
+                        "automation_id": str(automation_uuid),
+                        "missing_fields": missing_fields,
+                    },
+                )
+            if require_prompt:
+                raise AppException(
+                    "Official prompt not found for automation.",
+                    status_code=404,
+                    code="prompt_not_found",
+                    details={"automation_id": str(automation_uuid)},
+                )
+            return AutomationRuntimeResolution(
+                automation_id=automation_uuid,
+                prompt_text="",
+                prompt_version=0,
+                provider_slug=provider_slug,
+                model_slug=model_slug,
             )
 
         runtime_record = self.repository.get_runtime_config_for_automation(automation_uuid)

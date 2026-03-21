@@ -19,6 +19,7 @@ from app.services.execution_service import ExecutionService
 from app.services.file_service import DownloadableFile, FileService
 from app.services.prompt_test_runtime_service import (
     PromptTestManualAutomationContext,
+    PromptTestRuntimeContext,
     PromptTestRuntimeService,
 )
 
@@ -270,29 +271,51 @@ class AdminAutomationExecutionService:
         }
 
     def get_prompt_test_runtime(self) -> dict[str, Any]:
-        context = self.test_prompt_runtime.ensure_runtime_context()
-        runtime = self.shared_automations.get_runtime_config_for_automation(context.automation_id)
-        runtime_target = self.shared_automations.get_runtime_target_for_automation(context.automation_id)
+        context: PromptTestRuntimeContext = self.test_prompt_runtime.ensure_runtime_context()
+        provider_slug = context.provider_slug
+        model_slug = context.model_slug
+        automation_name = context.automation_name
+        automation_slug = context.automation_slug
+        automation_id = context.automation_id
+        analysis_request_id = context.analysis_request_id
 
-        provider_slug = (
-            runtime.provider_slug
-            if runtime is not None and runtime.provider_slug is not None
-            else runtime_target.provider_slug if runtime_target is not None else None
-        )
-        model_slug = (
-            runtime.model_slug
-            if runtime is not None and runtime.model_slug is not None
-            else runtime_target.model_slug if runtime_target is not None else None
-        )
+        if not provider_slug or not model_slug:
+            default_runtime = self._resolve_default_provider_model_for_tests()
+            if default_runtime is not None:
+                configured = self.test_prompt_runtime.create_manual_test_automation(
+                    automation_name=automation_name,
+                    provider_slug=default_runtime["provider_slug"],
+                    model_slug=default_runtime["model_slug"],
+                    provider_id=default_runtime["provider_id"],
+                    model_id=default_runtime["model_id"],
+                )
+                provider_slug = configured.provider_slug
+                model_slug = configured.model_slug
+                automation_name = configured.automation_name
+                automation_slug = configured.automation_slug
+                automation_id = configured.automation_id
+                analysis_request_id = configured.analysis_request_id
 
         return {
-            "automation_id": context.automation_id,
-            "automation_name": context.automation_name,
-            "automation_slug": context.automation_slug,
-            "analysis_request_id": context.analysis_request_id,
+            "automation_id": automation_id,
+            "automation_name": automation_name,
+            "automation_slug": automation_slug,
+            "analysis_request_id": analysis_request_id,
             "provider_slug": str(provider_slug or "").strip().lower(),
             "model_slug": str(model_slug or "").strip().lower(),
             "is_test_automation": True,
+        }
+
+    def _resolve_default_provider_model_for_tests(self) -> dict[str, Any] | None:
+        available = self.list_active_provider_models()
+        if not available:
+            return None
+        selected = available[0]
+        return {
+            "provider_id": selected["provider_id"],
+            "model_id": selected["model_id"],
+            "provider_slug": str(selected["provider_slug"] or "").strip().lower(),
+            "model_slug": str(selected["model_slug"] or "").strip().lower(),
         }
 
     @staticmethod
@@ -331,7 +354,10 @@ class AdminAutomationExecutionService:
         correlation_id: str | None = None,
     ) -> AdminAutomationExecutionStartResult:
         automation = self.shared_automations.get_automation_by_id(automation_id)
+        test_automation = None
         if automation is None:
+            test_automation = self.test_prompt_runtime.get_test_automation_by_id(automation_id)
+        if automation is None and test_automation is None:
             raise AppException(
                 "Automation not found.",
                 status_code=404,
@@ -340,10 +366,10 @@ class AdminAutomationExecutionService:
             )
 
         normalized_prompt_override = str(prompt_override or "").strip() or None
-        runtime = self.shared_automations.get_runtime_config_for_automation(automation_id)
+        runtime = self.shared_automations.get_runtime_config_for_automation(automation_id) if automation is not None else None
         if runtime is None and not normalized_prompt_override:
             raise AppException(
-                "Official automation prompt not found.",
+                "Prompt not found for execution and no prompt_override was provided.",
                 status_code=404,
                 code="prompt_not_found",
                 details={"automation_id": str(automation_id)},

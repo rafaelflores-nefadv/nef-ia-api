@@ -24,6 +24,22 @@ class FakeRepository:
         return self.runtime_target
 
 
+class FakeTestAutomationRepository:
+    def __init__(self, *, record: object | None) -> None:
+        self.record = record
+        self.schema_ensured = False
+
+    def ensure_schema(self) -> None:
+        self.schema_ensured = True
+
+    def get_by_id(self, automation_id):  # type: ignore[no-untyped-def]
+        if self.record is None:
+            return None
+        if getattr(self.record, "id", None) != automation_id:
+            return None
+        return self.record
+
+
 def test_runtime_resolver_requires_prompt_by_default() -> None:
     automation_id = uuid4()
     resolver = AutomationRuntimeResolverService(shared_session=SimpleNamespace())  # type: ignore[arg-type]
@@ -44,6 +60,31 @@ def test_runtime_resolver_uses_runtime_target_when_prompt_is_not_required() -> N
     )
     resolver = AutomationRuntimeResolverService(shared_session=SimpleNamespace())  # type: ignore[arg-type]
     resolver.repository = FakeRepository(runtime_record=None, runtime_target=runtime_target)  # type: ignore[assignment]
+
+    result = resolver.resolve(automation_id, require_prompt=False)
+
+    assert result.automation_id == automation_id
+    assert result.prompt_text == ""
+    assert result.prompt_version == 0
+    assert result.provider_slug == "openai"
+    assert result.model_slug == "gpt-5"
+
+
+def test_runtime_resolver_supports_isolated_test_automation_without_official_automation() -> None:
+    automation_id = uuid4()
+    resolver = AutomationRuntimeResolverService(shared_session=SimpleNamespace())  # type: ignore[arg-type]
+    resolver.repository = SimpleNamespace(  # type: ignore[assignment]
+        get_automation_by_id=lambda _: None,
+        get_runtime_config_for_automation=lambda _: None,
+        get_runtime_target_for_automation=lambda _: None,
+    )
+    resolver.test_automations = FakeTestAutomationRepository(  # type: ignore[assignment]
+        record=SimpleNamespace(
+            id=automation_id,
+            provider_slug="openai",
+            model_slug="gpt-5",
+        )
+    )
 
     result = resolver.resolve(automation_id, require_prompt=False)
 
