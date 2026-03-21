@@ -2,6 +2,8 @@
     <span class="status-pill status-success">Dados reais da API</span>
 {% elif source == "api_hibrido" or source == "api_catalog" %}
     <span class="status-pill status-warning">Integracao parcial</span>
+{% elif source == "local" %}
+    <span class="status-pill status-neutral">Dados locais da interface</span>
 {% elif source == "unavailable" %}
     <span class="status-pill status-neutral">Integracao indisponivel</span>
 {% else %}

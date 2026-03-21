@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
-from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
@@ -26,14 +25,12 @@ from app.models.operational import (
     DjangoAiAutomationExecutionSetting,
     DjangoAiAuditLog,
     DjangoAiExecutionInputFile,
-    DjangoAiPromptTestExecutionContext,
     DjangoAiQueueJob,
 )
 from app.repositories.operational import (
     AuditLogRepository,
     AutomationExecutionSettingsRepository,
     ExecutionInputFileRepository,
-    PromptTestExecutionContextRepository,
     QueueJobRepository,
     RequestFileRepository,
 )
@@ -224,14 +221,6 @@ class ExecutionInputResult:
     source: str
 
 
-@dataclass(slots=True, frozen=True)
-class PromptTestExecutionContextInput:
-    test_automation_id: UUID
-    test_automation_name: str
-    provider_slug: str
-    model_slug: str
-
-
 @dataclass(slots=True)
 class ProcessedOutput:
     content: bytes
@@ -291,7 +280,6 @@ class ExecutionService:
         self.request_files = RequestFileRepository(operational_session)
         self.execution_inputs = ExecutionInputFileRepository(operational_session)
         self.execution_profile_settings = AutomationExecutionSettingsRepository(operational_session)
-        self.prompt_test_execution_contexts = PromptTestExecutionContextRepository(operational_session)
         self.queue_jobs = QueueJobRepository(operational_session)
         self.audit_logs = AuditLogRepository(operational_session)
         self.shared_analysis = SharedAnalysisRepository(shared_session)
@@ -503,6 +491,44 @@ class ExecutionService:
             source=source,
             source_details=source_details,
             persisted_overrides=persisted_overrides,
+            max_execution_rows=effective_limits[LIMIT_KEY_MAX_EXECUTION_ROWS],
+            max_provider_calls=effective_limits[LIMIT_KEY_MAX_PROVIDER_CALLS],
+            max_text_chunks=effective_limits[LIMIT_KEY_MAX_TEXT_CHUNKS],
+            max_tabular_row_characters=effective_limits[LIMIT_KEY_MAX_TABULAR_ROW_CHARACTERS],
+            max_execution_seconds=effective_limits[LIMIT_KEY_MAX_EXECUTION_SECONDS],
+            max_context_characters=effective_limits[LIMIT_KEY_MAX_CONTEXT_CHARACTERS],
+            max_context_file_characters=effective_limits[LIMIT_KEY_MAX_CONTEXT_FILE_CHARACTERS],
+            max_prompt_characters=effective_limits[LIMIT_KEY_MAX_PROMPT_CHARACTERS],
+            hard_clamped_fields=hard_clamped_fields,
+            hard_clamp_details=hard_clamp_details,
+        )
+
+    def build_direct_execution_profile(self, *, source_label: str = "direct_prompt_test") -> ExecutionOperationalProfile:
+        candidate_profile = self._normalize_profile_name(getattr(settings, "execution_profile_default", PROFILE_STANDARD))
+        if candidate_profile not in KNOWN_EXECUTION_PROFILES:
+            logger.warning(
+                "Invalid default execution profile configured for direct execution; falling back to standard profile.",
+                extra={
+                    "event": "execution_profile_fallback",
+                    "requested_profile": candidate_profile or "(empty)",
+                    "source": source_label,
+                    "fallback_profile": PROFILE_STANDARD,
+                },
+            )
+            candidate_profile = PROFILE_STANDARD
+
+        configured_limits = self._profile_limits_from_settings(profile_name=candidate_profile)
+        hard_ceilings = self._hard_limit_ceilings()
+        effective_limits, hard_clamped_fields, hard_clamp_details = self._apply_hard_limit_ceilings(
+            configured_limits=configured_limits,
+            hard_ceilings=hard_ceilings,
+        )
+
+        return ExecutionOperationalProfile(
+            name=candidate_profile,
+            source=source_label,
+            source_details={"origin": source_label},
+            persisted_overrides={},
             max_execution_rows=effective_limits[LIMIT_KEY_MAX_EXECUTION_ROWS],
             max_provider_calls=effective_limits[LIMIT_KEY_MAX_PROVIDER_CALLS],
             max_text_chunks=effective_limits[LIMIT_KEY_MAX_TEXT_CHUNKS],
@@ -795,7 +821,6 @@ class ExecutionService:
         request_file_ids: list[UUID] | None = None,
         input_files: list[Any] | None = None,
         prompt_override: str | None = None,
-        prompt_test_context: PromptTestExecutionContextInput | None = None,
         api_token: DjangoAiApiToken,
         token_permissions: list[DjangoAiApiTokenPermission],
         ip_address: str | None = None,
@@ -877,16 +902,6 @@ class ExecutionService:
             prompt_override_text=normalized_prompt_override,
         )
         self.queue_jobs.add(queue_job)
-        if prompt_test_context is not None:
-            self.prompt_test_execution_contexts.add(
-                DjangoAiPromptTestExecutionContext(
-                    execution_id=execution.id,
-                    test_automation_id=prompt_test_context.test_automation_id,
-                    test_automation_name=prompt_test_context.test_automation_name,
-                    provider_slug=prompt_test_context.provider_slug,
-                    model_slug=prompt_test_context.model_slug,
-                )
-            )
         for selection in resolved_inputs:
             self.execution_inputs.add(
                 DjangoAiExecutionInputFile(
@@ -918,16 +933,6 @@ class ExecutionService:
                     "input_files": serialized_inputs,
                     "prompt_override_applied": bool(normalized_prompt_override),
                     "prompt_override_characters": len(normalized_prompt_override or ""),
-                    "prompt_test_context": (
-                        {
-                            "test_automation_id": str(prompt_test_context.test_automation_id),
-                            "test_automation_name": prompt_test_context.test_automation_name,
-                            "provider_slug": prompt_test_context.provider_slug,
-                            "model_slug": prompt_test_context.model_slug,
-                        }
-                        if prompt_test_context is not None
-                        else None
-                    ),
                     "token_id": str(api_token.id),
                     "queue_job_id": str(queue_job.id),
                 },
@@ -979,9 +984,6 @@ class ExecutionService:
                 "request_file_ids": [str(item.request_file_id) for item in resolved_inputs],
                 "queue_job_id": str(queue_job.id),
                 "prompt_override_applied": bool(normalized_prompt_override),
-                "prompt_test_automation_id": (
-                    str(prompt_test_context.test_automation_id) if prompt_test_context is not None else None
-                ),
                 "phase": "execution_create.enqueued",
                 "event": "execution_create_completed",
             },
@@ -1432,14 +1434,8 @@ class ExecutionService:
             if shared_request is None:
                 raise AppException("Related analysis request not found.", status_code=404, code="analysis_request_not_found")
 
-            prompt_test_context = self.prompt_test_execution_contexts.get_by_execution_id(execution_id)
-
             failure_phase = "execution.process.profile_resolution"
-            profile_automation_id = (
-                prompt_test_context.test_automation_id
-                if prompt_test_context is not None
-                else shared_request.automation_id
-            )
+            profile_automation_id = shared_request.automation_id
             execution_profile = self._resolve_execution_profile(automation_id=profile_automation_id)
             self._log_execution_phase(
                 phase=f"{failure_phase}.completed",
@@ -1454,33 +1450,14 @@ class ExecutionService:
                 execution_profile_persisted_overrides=execution_profile.persisted_overrides,
                 hard_clamped_fields=list(execution_profile.hard_clamped_fields),
                 hard_clamp_details=execution_profile.hard_clamp_details,
-                prompt_test_automation_id=(
-                    str(prompt_test_context.test_automation_id) if prompt_test_context is not None else None
-                ),
             )
 
             failure_phase = "execution.process.runtime_resolution"
             prompt_override = self._normalize_prompt_override(queue_job.prompt_override_text)
-            if prompt_test_context is not None:
-                if not prompt_override:
-                    raise AppException(
-                        "Prompt not found for test automation execution and no prompt_override was provided.",
-                        status_code=404,
-                        code="prompt_not_found",
-                        details={"automation_id": str(prompt_test_context.test_automation_id)},
-                    )
-                resolved_runtime = SimpleNamespace(
-                    automation_id=prompt_test_context.test_automation_id,
-                    prompt_text="",
-                    prompt_version=0,
-                    provider_slug=prompt_test_context.provider_slug,
-                    model_slug=prompt_test_context.model_slug,
-                )
-            else:
-                resolved_runtime = self.runtime_resolver.resolve(
-                    shared_request.automation_id,
-                    require_prompt=not bool(prompt_override),
-                )
+            resolved_runtime = self.runtime_resolver.resolve(
+                shared_request.automation_id,
+                require_prompt=not bool(prompt_override),
+            )
             effective_prompt = prompt_override or resolved_runtime.prompt_text
             logger.info(
                 "Execution runtime resolved from shared system.",

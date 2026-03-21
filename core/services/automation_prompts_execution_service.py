@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-import logging
 from typing import Any
 from uuid import UUID
 
@@ -10,8 +9,6 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from .api_client import ApiResponse, FastAPIClient
-
-logger = logging.getLogger(__name__)
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -87,26 +84,11 @@ class ProviderModelReadItem:
 
 
 @dataclass
-class PromptTestTechnicalRuntimeReadItem:
-    technical_automation_id: UUID
-    technical_automation_name: str
-    technical_automation_slug: str | None
-    shared_automation_id: UUID
-    analysis_request_id: UUID
-    is_test_automation: bool
-
-
-@dataclass
-class TestAutomationReadItem:
-    automation_id: UUID
-    automation_name: str
-    automation_slug: str | None
-    provider_id: UUID | None
-    model_id: UUID | None
-    provider_slug: str
-    model_slug: str
+class ProviderCredentialReadItem:
+    id: UUID
+    provider_id: UUID
+    credential_name: str
     is_active: bool
-    is_test_automation: bool
 
 
 @dataclass
@@ -137,6 +119,31 @@ class AutomationExecutionFileItem:
     mime_type: str | None
     checksum: str | None
     created_at: datetime | None
+
+
+@dataclass
+class PromptTestExecutionResultItem:
+    status: str
+    provider_id: UUID
+    provider_slug: str
+    model_id: UUID
+    model_slug: str
+    credential_id: UUID | None
+    credential_name: str
+    prompt_override_applied: bool
+    result_type: str
+    output_text: str | None
+    output_file_name: str | None
+    output_file_mime_type: str | None
+    output_file_base64: str | None
+    output_file_checksum: str | None
+    output_file_size: int
+    provider_calls: int
+    input_tokens: int
+    output_tokens: int
+    estimated_cost: str
+    duration_ms: int
+    processing_summary: dict[str, Any]
 
 
 class AutomationPromptsExecutionServiceError(Exception):
@@ -203,6 +210,12 @@ class AutomationPromptsExecutionService:
             return "Modelo nao encontrado na FastAPI."
         if code == "provider_model_mismatch":
             return "Modelo selecionado nao pertence ao provider informado."
+        if code == "provider_credential_not_found":
+            return "Credencial nao encontrada na FastAPI."
+        if code == "provider_credential_mismatch":
+            return "Credencial selecionada nao pertence ao provider informado."
+        if code == "provider_credential_inactive":
+            return "Credencial selecionada esta inativa na FastAPI."
         if code == "invalid_test_automation_name":
             return "Nome invalido para criar a automacao de teste."
         if code == "invalid_test_automation_runtime":
@@ -225,6 +238,18 @@ class AutomationPromptsExecutionService:
             return "Automacao de teste selecionada esta inativa."
         if code == "test_automation_delete_failed":
             return "Falha ao excluir a automacao de teste na FastAPI."
+        if code == "invalid_prompt_override":
+            return "O prompt de teste enviado para execucao e invalido."
+        if code == "missing_file_name":
+            return "O arquivo de teste precisa ter nome."
+        if code == "empty_uploaded_file":
+            return "Arquivo vazio nao e permitido para execucao."
+        if code == "invalid_file_extension":
+            return "Extensao de arquivo nao suportada para execucao."
+        if code == "invalid_mime_type":
+            return "Tipo de arquivo nao suportado para execucao."
+        if code == "xls_legacy_not_supported":
+            return "Arquivos .xls legados nao sao suportados. Converta para .xlsx."
         if code == "invalid_integration_token":
             return "Token de integracao FastAPI invalido."
         if code == "deactivated_integration_token":
@@ -284,38 +309,16 @@ class AutomationPromptsExecutionService:
         )
 
     @staticmethod
-    def _normalize_test_automation(payload: dict[str, Any]) -> TestAutomationReadItem | None:
-        automation_id = _to_uuid(payload.get("automation_id"))
-        if automation_id is None:
+    def _normalize_provider_credential(row: dict[str, Any]) -> ProviderCredentialReadItem | None:
+        credential_id = _to_uuid(row.get("id"))
+        provider_id = _to_uuid(row.get("provider_id"))
+        if credential_id is None or provider_id is None:
             return None
-        return TestAutomationReadItem(
-            automation_id=automation_id,
-            automation_name=str(payload.get("automation_name") or "").strip() or str(automation_id),
-            automation_slug=str(payload.get("automation_slug") or "").strip() or None,
-            provider_id=_to_uuid(payload.get("provider_id")),
-            model_id=_to_uuid(payload.get("model_id")),
-            provider_slug=str(payload.get("provider_slug") or "").strip().lower(),
-            model_slug=str(payload.get("model_slug") or "").strip().lower(),
-            is_active=bool(payload.get("is_active", True)),
-            is_test_automation=bool(payload.get("is_test_automation", False)),
-        )
-
-    @staticmethod
-    def _normalize_prompt_test_runtime(payload: dict[str, Any]) -> PromptTestTechnicalRuntimeReadItem | None:
-        technical_automation_id = _to_uuid(payload.get("technical_automation_id"))
-        shared_automation_id = _to_uuid(payload.get("shared_automation_id"))
-        analysis_request_id = _to_uuid(payload.get("analysis_request_id"))
-        if technical_automation_id is None or shared_automation_id is None or analysis_request_id is None:
-            return None
-        return PromptTestTechnicalRuntimeReadItem(
-            technical_automation_id=technical_automation_id,
-            technical_automation_name=(
-                str(payload.get("technical_automation_name") or "").strip() or str(technical_automation_id)
-            ),
-            technical_automation_slug=str(payload.get("technical_automation_slug") or "").strip() or None,
-            shared_automation_id=shared_automation_id,
-            analysis_request_id=analysis_request_id,
-            is_test_automation=bool(payload.get("is_test_automation", False)),
+        return ProviderCredentialReadItem(
+            id=credential_id,
+            provider_id=provider_id,
+            credential_name=str(row.get("credential_name") or "").strip() or str(credential_id),
+            is_active=bool(row.get("is_active", False)),
         )
 
     @staticmethod
@@ -395,6 +398,59 @@ class AutomationPromptsExecutionService:
             mime_type=str(row.get("mime_type") or "").strip() or None,
             checksum=str(row.get("checksum") or "").strip() or None,
             created_at=_parse_dt(row.get("created_at")),
+        )
+
+    @staticmethod
+    def _normalize_prompt_test_execution(payload: dict[str, Any]) -> PromptTestExecutionResultItem | None:
+        provider_id = _to_uuid(payload.get("provider_id"))
+        model_id = _to_uuid(payload.get("model_id"))
+        if provider_id is None or model_id is None:
+            return None
+        try:
+            output_file_size = int(payload.get("output_file_size") or 0)
+        except (TypeError, ValueError):
+            output_file_size = 0
+        try:
+            provider_calls = int(payload.get("provider_calls") or 0)
+        except (TypeError, ValueError):
+            provider_calls = 0
+        try:
+            input_tokens = int(payload.get("input_tokens") or 0)
+        except (TypeError, ValueError):
+            input_tokens = 0
+        try:
+            output_tokens = int(payload.get("output_tokens") or 0)
+        except (TypeError, ValueError):
+            output_tokens = 0
+        try:
+            duration_ms = int(payload.get("duration_ms") or 0)
+        except (TypeError, ValueError):
+            duration_ms = 0
+        processing_summary = payload.get("processing_summary")
+        if not isinstance(processing_summary, dict):
+            processing_summary = {}
+        return PromptTestExecutionResultItem(
+            status=str(payload.get("status") or "").strip().lower() or "completed",
+            provider_id=provider_id,
+            provider_slug=str(payload.get("provider_slug") or "").strip().lower(),
+            model_id=model_id,
+            model_slug=str(payload.get("model_slug") or "").strip().lower(),
+            credential_id=_to_uuid(payload.get("credential_id")),
+            credential_name=str(payload.get("credential_name") or "").strip(),
+            prompt_override_applied=bool(payload.get("prompt_override_applied", False)),
+            result_type=str(payload.get("result_type") or "").strip().lower() or "text",
+            output_text=str(payload.get("output_text") or "").strip() or None,
+            output_file_name=str(payload.get("output_file_name") or "").strip() or None,
+            output_file_mime_type=str(payload.get("output_file_mime_type") or "").strip() or None,
+            output_file_base64=str(payload.get("output_file_base64") or "").strip() or None,
+            output_file_checksum=str(payload.get("output_file_checksum") or "").strip() or None,
+            output_file_size=output_file_size,
+            provider_calls=provider_calls,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost=str(payload.get("estimated_cost") or "0"),
+            duration_ms=duration_ms,
+            processing_summary=processing_summary,
         )
 
     def list_automations_runtime(self) -> dict[str, Any]:
@@ -511,197 +567,33 @@ class AutomationPromptsExecutionService:
         items.sort(key=lambda item: item.model_name.lower())
         return items
 
-    def list_test_automations(self, *, active_only: bool = True) -> list[TestAutomationReadItem]:
+    def list_provider_credentials(self, *, provider_id: UUID) -> list[ProviderCredentialReadItem]:
         result = self.client.get(
-            f"/api/v1/admin/prompt-tests/automations?active_only={'true' if active_only else 'false'}",
-            headers=self.client.get_admin_headers(),
-            expect_dict=True,
-        )
-        if not result.is_success or not isinstance(result.data, dict):
-            code, message = self._extract_error_meta(result)
-            raise AutomationPromptsExecutionServiceError(
-                self._friendly_error(
-                    code=code,
-                    status_code=result.status_code,
-                    fallback_message=message,
-                    action="listar automacoes de teste",
-                ),
-                code=code,
-                status_code=result.status_code,
-            )
-        raw_items = result.data.get("items")
-        items: list[TestAutomationReadItem] = []
-        if isinstance(raw_items, list):
-            for row in raw_items:
-                if not isinstance(row, dict):
-                    continue
-                normalized = self._normalize_test_automation(row)
-                if normalized is not None:
-                    items.append(normalized)
-        return items
-
-    def create_test_automation(
-        self,
-        *,
-        name: str,
-        provider_id: UUID,
-        model_id: UUID,
-    ) -> TestAutomationReadItem:
-        result = self.client.post(
-            "/api/v1/admin/prompt-tests/automations",
-            json_body={
-                "name": str(name or "").strip(),
-                "provider_id": str(provider_id),
-                "model_id": str(model_id),
-            },
-            headers=self.client.get_admin_headers(),
-            expect_dict=True,
-        )
-        if not result.is_success or not isinstance(result.data, dict):
-            code, message = self._extract_error_meta(result)
-            details = self._extract_error_details(result)
-            logger.warning(
-                "Falha ao criar automacao de teste via FastAPI.",
-                extra={
-                    "status_code": result.status_code,
-                    "error_code": code,
-                    "error_message": message,
-                    "error_details": details,
-                },
-            )
-            raise AutomationPromptsExecutionServiceError(
-                self._friendly_error(
-                    code=code,
-                    status_code=result.status_code,
-                    fallback_message=message,
-                    action="criar automacao de teste",
-                ),
-                code=code,
-                status_code=result.status_code,
-            )
-        item = self._normalize_test_automation(result.data)
-        if item is None:
-            raise AutomationPromptsExecutionServiceError(
-                "Resposta invalida da FastAPI ao criar automacao de teste.",
-                code="fastapi_invalid_response",
-                status_code=result.status_code,
-            )
-        return item
-
-    def get_test_automation(self, *, automation_id: UUID) -> TestAutomationReadItem:
-        result = self.client.get(
-            f"/api/v1/admin/prompt-tests/automations/{automation_id}",
-            headers=self.client.get_admin_headers(),
-            expect_dict=True,
-        )
-        if not result.is_success or not isinstance(result.data, dict):
-            code, message = self._extract_error_meta(result)
-            raise AutomationPromptsExecutionServiceError(
-                self._friendly_error(
-                    code=code,
-                    status_code=result.status_code,
-                    fallback_message=message,
-                    action="consultar automacao de teste",
-                ),
-                code=code,
-                status_code=result.status_code,
-            )
-        item = self._normalize_test_automation(result.data)
-        if item is None:
-            raise AutomationPromptsExecutionServiceError(
-                "Resposta invalida da FastAPI ao consultar automacao de teste.",
-                code="fastapi_invalid_response",
-                status_code=result.status_code,
-            )
-        return item
-
-    def update_test_automation(
-        self,
-        *,
-        automation_id: UUID,
-        name: str,
-        provider_id: UUID,
-        model_id: UUID,
-        is_active: bool,
-    ) -> TestAutomationReadItem:
-        result = self.client.put(
-            f"/api/v1/admin/prompt-tests/automations/{automation_id}",
-            json_body={
-                "name": str(name or "").strip(),
-                "provider_id": str(provider_id),
-                "model_id": str(model_id),
-                "is_active": bool(is_active),
-            },
-            headers=self.client.get_admin_headers(),
-            expect_dict=True,
-        )
-        if not result.is_success or not isinstance(result.data, dict):
-            code, message = self._extract_error_meta(result)
-            raise AutomationPromptsExecutionServiceError(
-                self._friendly_error(
-                    code=code,
-                    status_code=result.status_code,
-                    fallback_message=message,
-                    action="atualizar automacao de teste",
-                ),
-                code=code,
-                status_code=result.status_code,
-            )
-        item = self._normalize_test_automation(result.data)
-        if item is None:
-            raise AutomationPromptsExecutionServiceError(
-                "Resposta invalida da FastAPI ao atualizar automacao de teste.",
-                code="fastapi_invalid_response",
-                status_code=result.status_code,
-            )
-        return item
-
-    def delete_test_automation(self, *, automation_id: UUID) -> None:
-        result = self.client.delete(
-            f"/api/v1/admin/prompt-tests/automations/{automation_id}",
+            f"/api/v1/admin/providers/{provider_id}/credentials",
             headers=self.client.get_admin_headers(),
             expect_dict=False,
         )
-        if result.is_success:
-            return
-        code, message = self._extract_error_meta(result)
-        raise AutomationPromptsExecutionServiceError(
-            self._friendly_error(
-                code=code,
-                status_code=result.status_code,
-                fallback_message=message,
-                action="excluir automacao de teste",
-            ),
-            code=code,
-            status_code=result.status_code,
-        )
-
-    def get_test_automation_runtime(self) -> PromptTestTechnicalRuntimeReadItem:
-        result = self.client.get(
-            "/api/v1/admin/prompt-tests/runtime",
-            headers=self.client.get_admin_headers(),
-            expect_dict=True,
-        )
-        if not result.is_success or not isinstance(result.data, dict):
+        if not result.is_success or not isinstance(result.data, list):
             code, message = self._extract_error_meta(result)
             raise AutomationPromptsExecutionServiceError(
                 self._friendly_error(
                     code=code,
                     status_code=result.status_code,
                     fallback_message=message,
-                    action="consultar runtime tecnico de teste",
+                    action="listar credenciais do provider",
                 ),
                 code=code,
                 status_code=result.status_code,
             )
-        item = self._normalize_prompt_test_runtime(result.data)
-        if item is None:
-            raise AutomationPromptsExecutionServiceError(
-                "Resposta invalida da FastAPI ao consultar runtime tecnico de teste.",
-                code="fastapi_invalid_response",
-                status_code=result.status_code,
-            )
-        return item
+        items: list[ProviderCredentialReadItem] = []
+        for row in result.data:
+            if not isinstance(row, dict):
+                continue
+            normalized = self._normalize_provider_credential(row)
+            if normalized is not None and normalized.is_active:
+                items.append(normalized)
+        items.sort(key=lambda item: item.credential_name.lower())
+        return items
 
     def start_execution(
         self,
@@ -718,6 +610,52 @@ class AutomationPromptsExecutionService:
             content_type=content_type,
             prompt_override=prompt_override,
         )
+
+    def execute_test_prompt(
+        self,
+        *,
+        provider_id: UUID,
+        model_id: UUID,
+        credential_id: UUID | None,
+        uploaded_file,
+        prompt_override: str,
+    ) -> PromptTestExecutionResultItem:
+        file_name, file_content, content_type = self._read_uploaded_file_payload(uploaded_file)
+        data: dict[str, Any] = {
+            "provider_id": str(provider_id),
+            "model_id": str(model_id),
+            "prompt_override": str(prompt_override or "").strip(),
+        }
+        if credential_id is not None:
+            data["credential_id"] = str(credential_id)
+        result = self.client.request_multipart(
+            method="POST",
+            path="/api/v1/admin/prompt-tests/executions",
+            data=data,
+            files={"file": (file_name, file_content, content_type)},
+            headers=self.client.get_admin_headers(),
+            expect_dict=True,
+        )
+        if not result.is_success or not isinstance(result.data, dict):
+            code, message = self._extract_error_meta(result)
+            raise AutomationPromptsExecutionServiceError(
+                self._friendly_error(
+                    code=code,
+                    status_code=result.status_code,
+                    fallback_message=message,
+                    action="executar prompt de teste",
+                ),
+                code=code,
+                status_code=result.status_code,
+            )
+        item = self._normalize_prompt_test_execution(result.data)
+        if item is None:
+            raise AutomationPromptsExecutionServiceError(
+                "Resposta invalida da FastAPI ao executar prompt de teste.",
+                code="fastapi_invalid_response",
+                status_code=result.status_code,
+            )
+        return item
 
     def _read_uploaded_file_payload(self, uploaded_file) -> tuple[str, bytes, str]:
         file_name = str(getattr(uploaded_file, "name", "") or "").strip()

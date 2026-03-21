@@ -51,10 +51,6 @@ class Settings(BaseSettings):
     admin_jwt_expire_minutes: int = 60
     api_token_prefix: str = "ia_live"
     credentials_encryption_key: str | None = None
-    test_prompts_automation_slug: str = "system-test-automation"
-    test_prompts_automation_name: str = "Automacao Tecnica de Teste"
-    test_prompts_automation_id: str | None = None
-
     storage_path: str = "./storage"
     max_upload_size_mb: int = 1024
     upload_chunk_size_bytes: int = 1048576

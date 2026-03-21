@@ -10,7 +10,7 @@
             Modo experimental local. Este cadastro <strong>nao altera</strong> prompts oficiais.
         </p>
         <div class="d-flex gap-2">
-            <a href="{% url 'test_prompts:execute' test_prompt.pk %}" class="btn btn-dark">Executar com override</a>
+            <a href="{% url 'test_prompts:execute' test_prompt.pk %}" class="btn btn-dark">Executar teste</a>
             <a href="{% url 'test_prompts:edit' test_prompt.pk %}" class="btn btn-outline-secondary">Editar</a>
             <a href="{% url 'test_prompts:delete' test_prompt.pk %}" class="btn btn-outline-danger">Excluir</a>
         </div>
@@ -19,18 +19,8 @@
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">A automacao de teste e escolhida separadamente da runtime tecnica interna.</span>
+    <span class="admin-note">O prompt e salvo localmente; a API so entra como engine na hora da execucao.</span>
 </div>
-
-{% if integration_warnings %}
-    <div class="alert alert-warning" role="alert">
-        <ul class="mb-0 ps-3">
-            {% for warning in integration_warnings %}
-                <li>{{ warning }}</li>
-            {% endfor %}
-        </ul>
-    </div>
-{% endif %}
 
 <section class="row g-3 mb-3">
     <div class="col-12 col-xl-6">
@@ -62,23 +52,33 @@
     <div class="col-12 col-xl-6">
         <article class="panel-card h-100">
             <div class="panel-title-wrap">
-                <h3 class="panel-title">Automacao de teste atual</h3>
+                <h3 class="panel-title">Automacao padrao selecionada</h3>
             </div>
             <dl class="row mb-0">
-                <dt class="col-sm-4 text-secondary">Automation ID</dt>
-                <dd class="col-sm-8"><code>{{ selected_automation.automation_id|default:test_prompt.automation_id|default:"-" }}</code></dd>
+                <dt class="col-sm-4 text-secondary">Automacao</dt>
+                <dd class="col-sm-8">{{ selected_automation.name|default:"Nao definida" }}</dd>
 
-                <dt class="col-sm-4 text-secondary">Nome</dt>
-                <dd class="col-sm-8">{{ selected_automation.automation_name|default:"Nao definida" }}</dd>
-
-                <dt class="col-sm-4 text-secondary">Slug</dt>
+                <dt class="col-sm-4 text-secondary">Runtime</dt>
                 <dd class="col-sm-8">
-                    <code>{{ selected_automation.automation_slug|default:"-" }}</code>
+                    {% if selected_automation %}
+                        {{ selected_automation.provider_slug }} / {{ selected_automation.model_slug }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </dd>
+
+                <dt class="col-sm-4 text-secondary">Credencial</dt>
+                <dd class="col-sm-8">
+                    {% if selected_automation %}
+                        {{ selected_automation.credential_name|default:"Credencial ativa do provider" }}
+                    {% else %}
+                        -
+                    {% endif %}
                 </dd>
             </dl>
             <div class="mt-3">
                 {% if selected_automation %}
-                    <a href="{% url 'test_automations:detail' selected_automation.automation_id %}" class="btn btn-sm btn-outline-secondary">Ver automacao de teste</a>
+                    <a href="{% url 'test_automations:detail' selected_automation.id %}" class="btn btn-sm btn-outline-secondary">Ver automacao de teste</a>
                 {% else %}
                     <a href="{% url 'test_automations:list' %}" class="btn btn-sm btn-outline-secondary">Gerenciar automacoes de teste</a>
                 {% endif %}
@@ -95,11 +95,53 @@
 </section>
 
 {% if test_prompt.notes %}
-    <section class="panel-card">
+    <section class="panel-card mb-3">
         <div class="panel-title-wrap">
             <h3 class="panel-title">Observacoes</h3>
         </div>
         <p class="mb-0">{{ test_prompt.notes }}</p>
     </section>
 {% endif %}
+
+<section class="panel-card">
+    <div class="panel-title-wrap">
+        <h3 class="panel-title">Historico local de execucoes</h3>
+    </div>
+    {% if recent_executions %}
+        <div class="table-responsive">
+            <table class="table admin-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Data</th>
+                        <th>Automacao</th>
+                        <th>Status</th>
+                        <th>Arquivo</th>
+                        <th class="text-end">Detalhe</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for execution in recent_executions %}
+                        <tr>
+                            <td>{{ execution.created_at|date:"d/m/Y H:i:s" }}</td>
+                            <td>{{ execution.test_automation_name }}</td>
+                            <td>
+                                {% if execution.status == "completed" %}
+                                    <span class="status-pill status-success">Concluida</span>
+                                {% else %}
+                                    <span class="status-pill status-danger">Falhou</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ execution.request_file_name }}</td>
+                            <td class="text-end">
+                                <a href="{% url 'test_prompts:execution_detail' test_prompt.pk execution.id %}" class="btn btn-sm btn-outline-secondary">Ver execucao</a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p class="admin-note mb-0">Ainda nao ha execucoes registradas para este prompt de teste.</p>
+    {% endif %}
+</section>
 {% endblock %}

@@ -6,13 +6,13 @@
 
 <section class="panel-card mb-3">
     <p class="admin-note mb-0">
-        Modo: teste com <code>prompt_override</code> local. O prompt oficial nao sera alterado.
+        Fluxo local de teste: o Django resolve o prompt e a automacao escolhida, e a FastAPI recebe apenas provider, modelo, credencial, override e arquivo.
     </p>
 </section>
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Fluxo isolado: automacoes de teste reais usam uma runtime tecnica interna separada.</span>
+    <span class="admin-note">Nenhuma automacao oficial, runtime tecnica ou analysis_request sera criada na API.</span>
 </div>
 
 {% if integration_warnings %}
@@ -33,18 +33,19 @@
             <div class="admin-note"><code>ID local {{ test_prompt.pk }}</code></div>
         </div>
         <div class="col-12 col-lg-6">
-            <small class="text-secondary d-block">Runtime tecnica interna</small>
-            {% if technical_runtime %}
-                <div>{{ technical_runtime.technical_automation_name }}</div>
-                <div class="admin-note"><code>{{ technical_runtime.technical_automation_id }}</code></div>
-            {% else %}
-                <div class="admin-note">Runtime tecnico ainda nao configurado.</div>
-            {% endif %}
-        </div>
-        <div class="col-12">
             <small class="text-secondary d-block">Resumo do override</small>
             <span class="admin-note">{{ test_prompt.prompt_text|truncatechars:260 }}</span>
         </div>
+        {% if selected_automation %}
+            <div class="col-12 col-lg-6">
+                <small class="text-secondary d-block">Provider / model</small>
+                <strong>{{ selected_automation.provider_slug }} / {{ selected_automation.model_slug }}</strong>
+            </div>
+            <div class="col-12 col-lg-6">
+                <small class="text-secondary d-block">Credencial</small>
+                <strong>{{ selected_automation.credential_name|default:"Credencial ativa do provider" }}</strong>
+            </div>
+        {% endif %}
     </div>
 </section>
 
@@ -72,19 +73,19 @@
                 {% for error in form.automation.errors %}
                     <div class="invalid-feedback d-block">{{ error }}</div>
                 {% endfor %}
-                <div class="form-text">Escolha uma automacao de teste ja cadastrada. O cadastro fica em uma area propria, separada dos prompts.</div>
+                <div class="form-text">Escolha uma automacao de teste ja cadastrada no Django.</div>
             </div>
             <div class="col-12 col-lg-8">
                 <label for="{{ form.request_file.id_for_label }}" class="form-label fw-semibold">{{ form.request_file.label }}</label>
                 {{ form.request_file }}
-                <div class="form-text">Arquivo enviado para execucao real com override temporario do prompt.</div>
+                <div class="form-text">O arquivo sera enviado para a API apenas como entrada da execucao de teste.</div>
                 {% for error in form.request_file.errors %}
                     <div class="invalid-feedback d-block">{{ error }}</div>
                 {% endfor %}
             </div>
         </div>
         <div class="d-flex gap-2 mt-4">
-            <button type="submit" class="btn btn-dark">Subir arquivo e executar</button>
+            <button type="submit" class="btn btn-dark">Executar teste</button>
             <a href="{{ detail_url }}" class="btn btn-outline-secondary">Voltar</a>
         </div>
     </form>

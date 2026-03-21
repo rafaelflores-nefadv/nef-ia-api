@@ -2,43 +2,42 @@
 
 {% block content %}
 {% url "test_automations:list" as list_url %}
-{% include "includes/page_header.html" with header_title=automation.automation_name header_subtitle="Automação de teste" breadcrumb_parent_label="Automações de teste" breadcrumb_parent_url=list_url breadcrumb_current=automation.automation_name %}
+{% include "includes/page_header.html" with header_title=automation.name header_subtitle="Automação de teste" breadcrumb_parent_label="Automações de teste" breadcrumb_parent_url=list_url breadcrumb_current=automation.name %}
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Entidade própria para seleção na execução de prompts de teste.</span>
+    <span class="admin-note">Entidade local usada para selecionar provider, modelo e credencial na execução de teste.</span>
 </div>
-
-{% if integration_warnings %}
-    <div class="alert alert-warning" role="alert">
-        <ul class="mb-0 ps-3">
-            {% for warning in integration_warnings %}
-                <li>{{ warning }}</li>
-            {% endfor %}
-        </ul>
-    </div>
-{% endif %}
 
 <section class="panel-card mb-3">
     <div class="d-flex gap-2 justify-content-end">
-        <a href="{% url 'test_automations:edit' automation.automation_id %}" class="btn btn-outline-primary">Editar</a>
-        <a href="{% url 'test_automations:delete' automation.automation_id %}" class="btn btn-outline-danger">Excluir</a>
+        <a href="{% url 'test_automations:edit' automation.id %}" class="btn btn-outline-primary">Editar</a>
+        <a href="{% url 'test_automations:delete' automation.id %}" class="btn btn-outline-danger">Excluir</a>
     </div>
 </section>
 
 <section class="panel-card">
     <dl class="row mb-0">
-        <dt class="col-sm-4 text-secondary">Automation ID</dt>
-        <dd class="col-sm-8"><code>{{ automation.automation_id }}</code></dd>
+        <dt class="col-sm-4 text-secondary">ID local</dt>
+        <dd class="col-sm-8"><code>{{ automation.id }}</code></dd>
 
         <dt class="col-sm-4 text-secondary">Slug</dt>
-        <dd class="col-sm-8"><code>{{ automation.automation_slug|default:"-" }}</code></dd>
+        <dd class="col-sm-8"><code>{{ automation.slug }}</code></dd>
 
         <dt class="col-sm-4 text-secondary">Provider</dt>
-        <dd class="col-sm-8">{{ automation.provider_slug }}</dd>
+        <dd class="col-sm-8">{{ automation.provider_slug }} (<code>{{ automation.provider_id }}</code>)</dd>
 
         <dt class="col-sm-4 text-secondary">Model</dt>
-        <dd class="col-sm-8">{{ automation.model_slug }}</dd>
+        <dd class="col-sm-8">{{ automation.model_slug }} (<code>{{ automation.model_id }}</code>)</dd>
+
+        <dt class="col-sm-4 text-secondary">Credencial</dt>
+        <dd class="col-sm-8">
+            {% if automation.credential_id %}
+                {{ automation.credential_name|default:"Credencial selecionada" }} (<code>{{ automation.credential_id }}</code>)
+            {% else %}
+                Credencial ativa do provider no momento da execução
+            {% endif %}
+        </dd>
 
         <dt class="col-sm-4 text-secondary">Status</dt>
         <dd class="col-sm-8">
@@ -48,6 +47,12 @@
                 <span class="status-pill status-neutral">Inativa</span>
             {% endif %}
         </dd>
+
+        <dt class="col-sm-4 text-secondary">Criada em</dt>
+        <dd class="col-sm-8">{{ automation.created_at|date:"d/m/Y H:i:s" }}</dd>
+
+        <dt class="col-sm-4 text-secondary">Atualizada em</dt>
+        <dd class="col-sm-8">{{ automation.updated_at|date:"d/m/Y H:i:s" }}</dd>
     </dl>
 </section>
 {% endblock %}

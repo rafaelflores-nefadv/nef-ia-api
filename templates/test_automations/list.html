@@ -6,13 +6,13 @@
 
 <section class="panel-card mb-3">
     <p class="admin-note mb-0">
-        Gestão própria de automações de teste. Esta área não altera automações oficiais nem o CRUD de prompts de teste.
+        Gestão local das automações de teste. Esta área não cria automações técnicas na API nem altera automações oficiais.
     </p>
 </section>
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Catálogo separado das automações de teste disponíveis para execução.</span>
+    <span class="admin-note">As automações de teste ficam no MySQL da interface e só enviam provider/model/credencial para a API no momento da execução.</span>
 </div>
 
 {% if integration_warnings %}
@@ -54,6 +54,7 @@
                     <tr>
                         <th>Nome</th>
                         <th>Runtime</th>
+                        <th>Credencial</th>
                         <th>Status</th>
                         <th class="text-end">Ações</th>
                     </tr>
@@ -61,8 +62,9 @@
                 <tbody>
                     {% for item in test_automations %}
                         <tr>
-                            <td class="fw-semibold">{{ item.automation_name }}</td>
+                            <td class="fw-semibold">{{ item.name }}</td>
                             <td>{{ item.provider_slug }} / {{ item.model_slug }}</td>
+                            <td>{{ item.credential_name|default:"Credencial ativa do provider" }}</td>
                             <td>
                                 {% if item.is_active %}
                                     <span class="status-pill status-success">Ativa</span>
@@ -72,9 +74,9 @@
                             </td>
                             <td class="text-end">
                                 <div class="table-actions">
-                                    <a href="{% url 'test_automations:detail' item.automation_id %}" class="btn btn-sm btn-outline-secondary">Ver</a>
-                                    <a href="{% url 'test_automations:edit' item.automation_id %}" class="btn btn-sm btn-outline-primary">Editar</a>
-                                    <a href="{% url 'test_automations:delete' item.automation_id %}" class="btn btn-sm btn-outline-danger">Excluir</a>
+                                    <a href="{% url 'test_automations:detail' item.id %}" class="btn btn-sm btn-outline-secondary">Ver</a>
+                                    <a href="{% url 'test_automations:edit' item.id %}" class="btn btn-sm btn-outline-primary">Editar</a>
+                                    <a href="{% url 'test_automations:delete' item.id %}" class="btn btn-sm btn-outline-danger">Excluir</a>
                                 </div>
                             </td>
                         </tr>
@@ -84,6 +86,6 @@
         </div>
     </section>
 {% else %}
-    {% include "includes/empty_state.html" with empty_icon="bi bi-diagram-3" empty_title="Nenhuma automação de teste cadastrada" empty_message="Cadastre automações de teste próprias para depois usá-las na execução dos prompts de teste." empty_action_url=create_url empty_action_label="Nova automação de teste" empty_action_icon="bi bi-plus-lg" %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-diagram-3" empty_title="Nenhuma automação de teste cadastrada" empty_message="Cadastre automações de teste locais para usá-las na execução dos prompts de teste." empty_action_url=create_url empty_action_label="Nova automação de teste" empty_action_icon="bi bi-plus-lg" %}
 {% endif %}
 {% endblock %}

@@ -8,7 +8,6 @@ from app.repositories.operational.metrics_repository import MetricsRepository
 from app.repositories.operational.provider_credentials_repository import ProviderCredentialRepository
 from app.repositories.operational.provider_model_repository import ProviderModelRepository
 from app.repositories.operational.provider_repository import ProviderRepository
-from app.repositories.operational.prompt_test_execution_repository import PromptTestExecutionContextRepository
 from app.repositories.operational.queue_repository import QueueJobRepository
 from app.repositories.operational.request_file_repository import RequestFileRepository
 from app.repositories.operational.token_repository import ApiTokenRepository, IntegrationTokenRepository
@@ -22,7 +21,6 @@ __all__ = [
     "ProviderRepository",
     "ProviderCredentialRepository",
     "ProviderModelRepository",
-    "PromptTestExecutionContextRepository",
     "RequestFileRepository",
     "ExecutionFileRepository",
     "ExecutionInputFileRepository",
