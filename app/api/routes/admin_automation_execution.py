@@ -34,11 +34,11 @@ def create_test_automation(
     _: DjangoAiUser = Depends(get_current_admin_user),
 ) -> TestAutomationCreateResponse:
     raise AppException(
-        "Endpoint deprecated for prompt-test runtime configuration. Use /api/v1/admin/prompt-tests/runtime.",
+        "Endpoint deprecated for prompt-test automation creation. Use /api/v1/admin/prompt-tests/automations.",
         status_code=status.HTTP_410_GONE,
         code="test_prompt_runtime_endpoint_deprecated",
         details={
-            "replacement_endpoint": "/api/v1/admin/prompt-tests/runtime",
+            "replacement_endpoint": "/api/v1/admin/prompt-tests/automations",
             "received_name": payload.name,
             "received_provider_id": str(payload.provider_id),
             "received_model_id": str(payload.model_id),

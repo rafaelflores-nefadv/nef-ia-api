@@ -55,3 +55,40 @@ def test_guess_value_uses_prompt_test_runtime_marker() -> None:
         automation_slug="",
     )
     assert value == "prompt_test_runtime"
+
+
+def test_create_manual_test_automation_creates_distinct_records() -> None:
+    created_payloads: list[dict[str, object]] = []
+
+    class FakeRepository:
+        def ensure_schema(self) -> None:
+            return None
+
+        def create(self, **kwargs):  # type: ignore[no-untyped-def]
+            created_payloads.append(kwargs)
+            return SimpleNamespace(
+                id=kwargs["automation_id"],
+                name=kwargs["name"],
+                slug=kwargs["slug"],
+                provider_slug=kwargs["provider_slug"],
+                model_slug=kwargs["model_slug"],
+            )
+
+    service = _build_service()
+    service.test_automations = FakeRepository()  # type: ignore[assignment]
+
+    first = service.create_manual_test_automation(
+        automation_name="Teste OCR",
+        provider_slug="openai",
+        model_slug="gpt-4.1-mini",
+    )
+    second = service.create_manual_test_automation(
+        automation_name="Teste OCR",
+        provider_slug="openai",
+        model_slug="gpt-4.1-mini",
+    )
+
+    assert first.automation_id != second.automation_id
+    assert first.automation_slug != second.automation_slug
+    assert len(created_payloads) == 2
+    assert all(payload["is_technical_runtime"] is False for payload in created_payloads)

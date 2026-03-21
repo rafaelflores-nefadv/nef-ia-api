@@ -1,5 +1,4 @@
 import importlib
-import json
 import os
 from types import SimpleNamespace
 from uuid import uuid4
@@ -18,6 +17,7 @@ django.setup()
 
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.test import RequestFactory
+from django.urls import reverse
 
 from test_prompts import forms as test_prompt_forms
 from test_prompts import views as test_prompt_views
@@ -106,37 +106,78 @@ def test_execution_create_view_uses_selected_automation(monkeypatch) -> None:
     assert save_updates
 
 
-def test_test_automation_create_view_returns_created_payload(monkeypatch) -> None:
+def test_load_test_automation_payload_returns_real_list(monkeypatch) -> None:
     automation_id = uuid4()
-    analysis_request_id = uuid4()
 
     class FakeService:
-        def create_test_automation(self, *, name, provider_id, model_id):  # type: ignore[no-untyped-def]
-            return SimpleNamespace(
-                automation_id=automation_id,
-                automation_name=name,
-                automation_slug="test-prompt-exemplo",
-                analysis_request_id=analysis_request_id,
-                provider_slug="openai",
-                model_slug="gpt-4.1-mini",
-                is_test_automation=True,
-            )
+        def list_test_automations(self, *, active_only=True):  # type: ignore[no-untyped-def]
+            assert active_only is True
+            return [
+                SimpleNamespace(
+                    automation_id=automation_id,
+                    automation_name="Teste real",
+                    automation_slug="teste-real",
+                    provider_slug="openai",
+                    model_slug="gpt-4.1-mini",
+                    is_active=True,
+                    is_test_automation=True,
+                )
+            ]
 
     monkeypatch.setattr("test_prompts.views.AutomationPromptsExecutionService", lambda: FakeService())
 
-    request = RequestFactory().post(
-        "/prompts-teste/automacoes/criar/",
-        data={
-            "name": "Teste planilhas",
-            "provider_id": str(uuid4()),
-            "model_id": str(uuid4()),
-        },
+    items, source, warnings = test_prompt_views._load_test_automation_payload(active_only=True)
+
+    assert source == "api"
+    assert warnings == []
+    assert len(items) == 1
+    assert items[0].automation_id == automation_id
+
+
+def test_execution_view_context_uses_separated_automation_urls() -> None:
+    prompt = SimpleNamespace(pk=42, name="Prompt local", prompt_text="Texto")
+    automation = SimpleNamespace(
+        automation_id=uuid4(),
+        automation_name="Teste real",
+        provider_slug="openai",
+        model_slug="gpt-4.1-mini",
     )
+
+    request = RequestFactory().get("/prompts-teste/42/executar/")
     request.user = SimpleNamespace(is_authenticated=True)
 
-    response = test_prompt_views.TestAutomationCreateView.as_view()(request)
-    payload = json.loads(response.content.decode("utf-8"))
+    view = test_prompt_views.TestPromptExecutionCreateView()
+    view.setup(request, pk=42)
+    view.test_prompt = prompt
+    view.test_automations = [automation]
+    view.technical_runtime = None
+    view.integration_source = "api"
+    view.integration_warnings = []
+    view.object = None
+    form = test_prompt_forms.TestPromptExecutionForm(
+        automation_choices=[(automation.automation_id, automation.automation_name)],
+        selected_automation=str(automation.automation_id),
+    )
 
-    assert response.status_code == 200
-    assert payload["ok"] is True
-    assert payload["automation"]["automation_id"] == str(automation_id)
+    context = view.get_context_data(form=form)
+
+    assert context["automation_management_url"] == reverse("test_automations:list")
+    assert context["automation_create_url"] == reverse("test_automations:create")
+
+
+def test_prompt_delete_view_removes_prompt_and_redirects(monkeypatch) -> None:
+    deleted: list[bool] = []
+    prompt = SimpleNamespace(pk=7, name="Prompt legado", delete=lambda: deleted.append(True))
+
+    monkeypatch.setattr("test_prompts.views.get_object_or_404", lambda *args, **kwargs: prompt)
+
+    request = RequestFactory().post("/prompts-teste/7/excluir/")
+    request.user = SimpleNamespace(is_authenticated=True)
+    request.session = {}
+    request._messages = FallbackStorage(request)
+
+    response = test_prompt_views.TestPromptDeleteView.as_view()(request, pk=7)
+
+    assert response.status_code == 302
+    assert response.url == reverse("test_prompts:list")
+    assert deleted == [True]

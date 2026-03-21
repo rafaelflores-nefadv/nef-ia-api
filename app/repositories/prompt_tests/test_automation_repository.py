@@ -20,6 +20,7 @@ class PromptTestAutomationRecord:
     model_slug: str | None
     provider_id: uuid.UUID | None
     model_id: uuid.UUID | None
+    is_technical_runtime: bool
     is_active: bool
     created_at: datetime | None
     updated_at: datetime | None
@@ -46,10 +47,17 @@ class PromptTestAutomationRepository:
                 model_slug VARCHAR(160) NULL,
                 provider_id VARCHAR(36) NULL,
                 model_id VARCHAR(36) NULL,
+                is_technical_runtime BOOLEAN NOT NULL DEFAULT FALSE,
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_at TIMESTAMP WITH TIME ZONE NOT NULL,
                 updated_at TIMESTAMP WITH TIME ZONE NOT NULL
             )
+            """
+        )
+        add_technical_runtime_stmt = text(
+            """
+            ALTER TABLE test_automations
+            ADD COLUMN IF NOT EXISTS is_technical_runtime BOOLEAN NOT NULL DEFAULT FALSE
             """
         )
         index_slug_stmt = text(
@@ -64,10 +72,18 @@ class PromptTestAutomationRepository:
             ON test_automations (updated_at)
             """
         )
+        index_technical_runtime_stmt = text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_test_automations_is_technical_runtime
+            ON test_automations (is_technical_runtime)
+            """
+        )
         try:
             self.session.execute(create_stmt)
+            self.session.execute(add_technical_runtime_stmt)
             self.session.execute(index_slug_stmt)
             self.session.execute(index_updated_stmt)
+            self.session.execute(index_technical_runtime_stmt)
             self.session.commit()
         except Exception as exc:
             self.session.rollback()
@@ -89,6 +105,7 @@ class PromptTestAutomationRepository:
                 model_slug,
                 provider_id,
                 model_id,
+                is_technical_runtime,
                 is_active,
                 created_at,
                 updated_at
@@ -111,7 +128,7 @@ class PromptTestAutomationRepository:
     ) -> PromptTestAutomationRecord | None:
         if preferred_id is not None:
             record = self.get_by_id(preferred_id)
-            if record is not None:
+            if record is not None and record.is_technical_runtime:
                 return record
 
         normalized_slug = str(slug or "").strip().lower()
@@ -126,11 +143,13 @@ class PromptTestAutomationRepository:
                     model_slug,
                     provider_id,
                     model_id,
+                    is_technical_runtime,
                     is_active,
                     created_at,
                     updated_at
                 FROM test_automations
                 WHERE lower(slug) = :slug
+                  AND is_technical_runtime = TRUE
                 LIMIT 1
                 """
             )
@@ -150,11 +169,13 @@ class PromptTestAutomationRepository:
                     model_slug,
                     provider_id,
                     model_id,
+                    is_technical_runtime,
                     is_active,
                     created_at,
                     updated_at
                 FROM test_automations
                 WHERE lower(name) = :name
+                  AND is_technical_runtime = TRUE
                 ORDER BY updated_at DESC, id DESC
                 LIMIT 1
                 """
@@ -163,6 +184,73 @@ class PromptTestAutomationRepository:
             if row is not None:
                 return self._map_row(row)
         return None
+
+    def get_by_slug(self, slug: str) -> PromptTestAutomationRecord | None:
+        normalized_slug = str(slug or "").strip().lower()
+        if not normalized_slug:
+            return None
+        stmt = text(
+            """
+            SELECT
+                id,
+                name,
+                slug,
+                provider_slug,
+                model_slug,
+                provider_id,
+                model_id,
+                is_technical_runtime,
+                is_active,
+                created_at,
+                updated_at
+            FROM test_automations
+            WHERE lower(slug) = :slug
+            LIMIT 1
+            """
+        )
+        row = self.session.execute(stmt, {"slug": normalized_slug}).mappings().first()
+        if row is None:
+            return None
+        return self._map_row(row)
+
+    def list_items(
+        self,
+        *,
+        include_technical: bool,
+        active_only: bool,
+    ) -> list[PromptTestAutomationRecord]:
+        clauses: list[str] = []
+        if not include_technical:
+            clauses.append("is_technical_runtime = FALSE")
+        if active_only:
+            clauses.append("is_active = TRUE")
+        where_sql = ""
+        if clauses:
+            where_sql = "WHERE " + " AND ".join(clauses)
+        stmt = text(
+            f"""
+            SELECT
+                id,
+                name,
+                slug,
+                provider_slug,
+                model_slug,
+                provider_id,
+                model_id,
+                is_technical_runtime,
+                is_active,
+                created_at,
+                updated_at
+            FROM test_automations
+            {where_sql}
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            """
+        )
+        rows = self.session.execute(stmt).mappings().all()
+        return [self._map_row(row) for row in rows]
+
+    def list_manual_items(self, *, active_only: bool = True) -> list[PromptTestAutomationRecord]:
+        return self.list_items(include_technical=False, active_only=active_only)
 
     def create(
         self,
@@ -174,6 +262,7 @@ class PromptTestAutomationRepository:
         model_slug: str | None,
         provider_id: uuid.UUID | None,
         model_id: uuid.UUID | None,
+        is_technical_runtime: bool = False,
         is_active: bool = True,
     ) -> PromptTestAutomationRecord:
         now = datetime.now(timezone.utc)
@@ -185,6 +274,7 @@ class PromptTestAutomationRepository:
             "model_slug": self._normalize_slug(model_slug),
             "provider_id": str(provider_id) if provider_id is not None else None,
             "model_id": str(model_id) if model_id is not None else None,
+            "is_technical_runtime": bool(is_technical_runtime),
             "is_active": bool(is_active),
             "created_at": now,
             "updated_at": now,
@@ -199,6 +289,7 @@ class PromptTestAutomationRepository:
                 model_slug,
                 provider_id,
                 model_id,
+                is_technical_runtime,
                 is_active,
                 created_at,
                 updated_at
@@ -210,6 +301,7 @@ class PromptTestAutomationRepository:
                 :model_slug,
                 :provider_id,
                 :model_id,
+                :is_technical_runtime,
                 :is_active,
                 :created_at,
                 :updated_at
@@ -220,9 +312,9 @@ class PromptTestAutomationRepository:
             self.session.execute(insert_stmt, values)
             self.session.commit()
         except Exception:
-            # Race-safe fallback in case another request creates the same runtime row.
+            # Race-safe fallback in case another request creates the same row.
             self.session.rollback()
-            existing = self.find_runtime(preferred_id=automation_id, slug=values["slug"], name=values["name"])
+            existing = self.get_by_id(automation_id)
             if existing is not None:
                 return existing
             raise
@@ -246,6 +338,7 @@ class PromptTestAutomationRepository:
         model_slug: str | None,
         provider_id: uuid.UUID | None,
         model_id: uuid.UUID | None,
+        is_technical_runtime: bool,
         is_active: bool,
     ) -> PromptTestAutomationRecord:
         now = datetime.now(timezone.utc)
@@ -257,6 +350,7 @@ class PromptTestAutomationRepository:
             "model_slug": self._normalize_slug(model_slug),
             "provider_id": str(provider_id) if provider_id is not None else None,
             "model_id": str(model_id) if model_id is not None else None,
+            "is_technical_runtime": bool(is_technical_runtime),
             "is_active": bool(is_active),
             "updated_at": now,
         }
@@ -270,6 +364,7 @@ class PromptTestAutomationRepository:
                 model_slug = :model_slug,
                 provider_id = :provider_id,
                 model_id = :model_id,
+                is_technical_runtime = :is_technical_runtime,
                 is_active = :is_active,
                 updated_at = :updated_at
             WHERE id = :automation_id
@@ -284,8 +379,19 @@ class PromptTestAutomationRepository:
                 status_code=500,
                 code="test_prompt_runtime_invalid",
                 details={"automation_id": str(automation_id)},
-            )
+        )
         return updated
+
+    def delete(self, automation_id: uuid.UUID) -> bool:
+        stmt = text(
+            """
+            DELETE FROM test_automations
+            WHERE id = :automation_id
+            """
+        )
+        result = self.session.execute(stmt, {"automation_id": str(automation_id)})
+        self.session.commit()
+        return bool(result.rowcount)
 
     @staticmethod
     def _normalize_slug(value: str | None) -> str | None:
@@ -324,6 +430,7 @@ class PromptTestAutomationRepository:
             model_slug=model_slug,
             provider_id=cls._coerce_uuid(row.get("provider_id")),
             model_id=cls._coerce_uuid(row.get("model_id")),
+            is_technical_runtime=bool(row.get("is_technical_runtime", False)),
             is_active=bool(row.get("is_active", True)),
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),

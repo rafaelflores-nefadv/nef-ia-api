@@ -53,6 +53,7 @@
             <a href="{{ list_url }}" class="btn btn-outline-secondary">Voltar</a>
             {% if is_editing and object %}
                 <a href="{% url 'test_prompts:detail' object.pk %}" class="btn btn-outline-secondary">Detalhe</a>
+                <a href="{% url 'test_prompts:delete' object.pk %}" class="btn btn-outline-danger">Excluir</a>
             {% endif %}
         </div>
     </form>

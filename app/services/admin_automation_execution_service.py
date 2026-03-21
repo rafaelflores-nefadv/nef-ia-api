@@ -13,11 +13,17 @@ from app.core.exceptions import AppException
 from app.core.constants import ExecutionStatus
 from app.core.config import get_settings
 from app.models.operational import DjangoAiApiToken, DjangoAiApiTokenPermission
-from app.repositories.operational import ProviderModelRepository, ProviderRepository, QueueJobRepository
+from app.repositories.operational import (
+    PromptTestExecutionContextRepository,
+    ProviderModelRepository,
+    ProviderRepository,
+    QueueJobRepository,
+)
 from app.repositories.shared import SharedAnalysisRepository, SharedAutomationRepository
-from app.services.execution_service import ExecutionService
+from app.services.execution_service import ExecutionService, PromptTestExecutionContextInput
 from app.services.file_service import DownloadableFile, FileService
 from app.services.prompt_test_runtime_service import (
+    PromptTestExecutionTargetContext,
     PromptTestManualAutomationContext,
     PromptTestRuntimeContext,
     PromptTestRuntimeService,
@@ -51,6 +57,7 @@ class AdminAutomationExecutionService:
         self.shared_analysis = SharedAnalysisRepository(shared_session)
         self.providers = ProviderRepository(operational_session)
         self.provider_models = ProviderModelRepository(operational_session)
+        self.prompt_test_execution_contexts = PromptTestExecutionContextRepository(operational_session)
         self.queue_jobs = QueueJobRepository(operational_session)
         self.file_service = FileService(
             operational_session=operational_session,
@@ -264,58 +271,111 @@ class AdminAutomationExecutionService:
             "automation_id": context.automation_id,
             "automation_name": context.automation_name,
             "automation_slug": context.automation_slug,
-            "analysis_request_id": context.analysis_request_id,
+            "provider_id": context.provider_id,
+            "model_id": context.model_id,
             "provider_slug": context.provider_slug,
             "model_slug": context.model_slug,
+            "is_active": context.is_active,
             "is_test_automation": True,
         }
+
+    def list_test_automations(self, *, active_only: bool = True) -> list[dict[str, Any]]:
+        items = self.test_prompt_runtime.list_test_automations(active_only=active_only)
+        return [
+            {
+                "automation_id": item.id,
+                "automation_name": item.name,
+                "automation_slug": item.slug,
+                "provider_id": item.provider_id,
+                "model_id": item.model_id,
+                "provider_slug": item.provider_slug,
+                "model_slug": item.model_slug,
+                "is_active": item.is_active,
+                "is_test_automation": not item.is_technical_runtime,
+            }
+            for item in items
+        ]
+
+    def get_test_automation(self, *, automation_id: UUID) -> dict[str, Any]:
+        item = self.test_prompt_runtime.get_manual_test_automation_by_id(automation_id)
+        return {
+            "automation_id": item.id,
+            "automation_name": item.name,
+            "automation_slug": item.slug,
+            "provider_id": item.provider_id,
+            "model_id": item.model_id,
+            "provider_slug": item.provider_slug,
+            "model_slug": item.model_slug,
+            "is_active": item.is_active,
+            "is_test_automation": True,
+        }
+
+    def update_test_automation(
+        self,
+        *,
+        automation_id: UUID,
+        name: str,
+        provider_id: UUID,
+        model_id: UUID,
+        is_active: bool,
+    ) -> dict[str, Any]:
+        provider = self.providers.get_by_id(provider_id)
+        if provider is None or not provider.is_active:
+            raise AppException(
+                "Provider not found or inactive.",
+                status_code=404,
+                code="provider_not_found",
+                details={"provider_id": str(provider_id)},
+            )
+        model = self.provider_models.get_by_id(model_id)
+        if model is None or not model.is_active:
+            raise AppException(
+                "Provider model not found or inactive.",
+                status_code=404,
+                code="provider_model_not_found",
+                details={"model_id": str(model_id)},
+            )
+        if model.provider_id != provider.id:
+            raise AppException(
+                "Selected model does not belong to selected provider.",
+                status_code=422,
+                code="provider_model_mismatch",
+                details={"provider_id": str(provider_id), "model_id": str(model_id)},
+            )
+
+        context = self.test_prompt_runtime.update_manual_test_automation(
+            automation_id=automation_id,
+            automation_name=name,
+            provider_slug=str(provider.slug or "").strip().lower(),
+            model_slug=str(model.model_slug or "").strip().lower(),
+            provider_id=provider.id,
+            model_id=model.id,
+            is_active=bool(is_active),
+        )
+        return {
+            "automation_id": context.automation_id,
+            "automation_name": context.automation_name,
+            "automation_slug": context.automation_slug,
+            "provider_id": context.provider_id,
+            "model_id": context.model_id,
+            "provider_slug": context.provider_slug,
+            "model_slug": context.model_slug,
+            "is_active": context.is_active,
+            "is_test_automation": True,
+        }
+
+    def delete_test_automation(self, *, automation_id: UUID) -> None:
+        self.test_prompt_runtime.delete_manual_test_automation(automation_id=automation_id)
 
     def get_prompt_test_runtime(self) -> dict[str, Any]:
         context: PromptTestRuntimeContext = self.test_prompt_runtime.ensure_runtime_context()
-        provider_slug = context.provider_slug
-        model_slug = context.model_slug
-        automation_name = context.automation_name
-        automation_slug = context.automation_slug
-        automation_id = context.automation_id
-        analysis_request_id = context.analysis_request_id
-
-        if not provider_slug or not model_slug:
-            default_runtime = self._resolve_default_provider_model_for_tests()
-            if default_runtime is not None:
-                configured = self.test_prompt_runtime.create_manual_test_automation(
-                    automation_name=automation_name,
-                    provider_slug=default_runtime["provider_slug"],
-                    model_slug=default_runtime["model_slug"],
-                    provider_id=default_runtime["provider_id"],
-                    model_id=default_runtime["model_id"],
-                )
-                provider_slug = configured.provider_slug
-                model_slug = configured.model_slug
-                automation_name = configured.automation_name
-                automation_slug = configured.automation_slug
-                automation_id = configured.automation_id
-                analysis_request_id = configured.analysis_request_id
-
         return {
-            "automation_id": automation_id,
-            "automation_name": automation_name,
-            "automation_slug": automation_slug,
-            "analysis_request_id": analysis_request_id,
-            "provider_slug": str(provider_slug or "").strip().lower(),
-            "model_slug": str(model_slug or "").strip().lower(),
+            "technical_automation_id": context.automation_id,
+            "technical_automation_name": context.automation_name,
+            "technical_automation_slug": context.automation_slug,
+            "shared_automation_id": context.shared_automation_id,
+            "analysis_request_id": context.analysis_request_id,
             "is_test_automation": True,
-        }
-
-    def _resolve_default_provider_model_for_tests(self) -> dict[str, Any] | None:
-        available = self.list_active_provider_models()
-        if not available:
-            return None
-        selected = available[0]
-        return {
-            "provider_id": selected["provider_id"],
-            "model_id": selected["model_id"],
-            "provider_slug": str(selected["provider_slug"] or "").strip().lower(),
-            "model_slug": str(selected["model_slug"] or "").strip().lower(),
         }
 
     @staticmethod
@@ -354,10 +414,12 @@ class AdminAutomationExecutionService:
         correlation_id: str | None = None,
     ) -> AdminAutomationExecutionStartResult:
         automation = self.shared_automations.get_automation_by_id(automation_id)
-        test_automation = None
+        test_target: PromptTestExecutionTargetContext | None = None
         if automation is None:
-            test_automation = self.test_prompt_runtime.get_test_automation_by_id(automation_id)
-        if automation is None and test_automation is None:
+            test_target = self.test_prompt_runtime.get_execution_target_for_test_automation(
+                automation_id=automation_id,
+            )
+        if automation is None and test_target is None:
             raise AppException(
                 "Automation not found.",
                 status_code=404,
@@ -375,7 +437,12 @@ class AdminAutomationExecutionService:
                 details={"automation_id": str(automation_id)},
             )
 
-        latest_request = self.shared_analysis.get_latest_request_by_automation_id(automation_id)
+        if test_target is not None:
+            latest_request = self.shared_analysis.get_request_by_id(test_target.analysis_request_id)
+            permission_automation_id = test_target.shared_automation_id
+        else:
+            latest_request = self.shared_analysis.get_latest_request_by_automation_id(automation_id)
+            permission_automation_id = automation_id
         if latest_request is None:
             raise AppException(
                 "No analysis_request available for selected automation.",
@@ -386,7 +453,7 @@ class AdminAutomationExecutionService:
 
         admin_token, permissions = self._build_admin_token_and_permissions(
             actor_user_id=actor_user_id,
-            automation_id=automation_id,
+            automation_id=permission_automation_id,
         )
 
         request_file = self.file_service.upload_request_file(
@@ -400,6 +467,16 @@ class AdminAutomationExecutionService:
             analysis_request_id=latest_request.id,
             request_file_id=request_file.id,
             prompt_override=normalized_prompt_override,
+            prompt_test_context=(
+                PromptTestExecutionContextInput(
+                    test_automation_id=test_target.test_automation_id,
+                    test_automation_name=test_target.test_automation_name,
+                    provider_slug=test_target.provider_slug,
+                    model_slug=test_target.model_slug,
+                )
+                if test_target is not None
+                else None
+            ),
             api_token=admin_token,
             token_permissions=permissions,
             ip_address=ip_address,
@@ -434,6 +511,7 @@ class AdminAutomationExecutionService:
                 details={"analysis_request_id": str(shared_execution.analysis_request_id)},
             )
 
+        prompt_test_context = self.prompt_test_execution_contexts.get_by_execution_id(execution_id)
         _, permissions = self._build_admin_token_and_permissions(
             actor_user_id=actor_user_id,
             automation_id=shared_request.automation_id,
@@ -457,7 +535,11 @@ class AdminAutomationExecutionService:
         return {
             "execution_id": result.execution_id,
             "analysis_request_id": shared_execution.analysis_request_id,
-            "automation_id": shared_request.automation_id,
+            "automation_id": (
+                prompt_test_context.test_automation_id
+                if prompt_test_context is not None
+                else shared_request.automation_id
+            ),
             "request_file_id": request_file_id,
             "request_file_name": request_file_name,
             "prompt_override_applied": prompt_override_applied,

@@ -6,6 +6,7 @@ urlpatterns = [
     path("providers/", include("providers.urls")),
     path("modelos/", include("models_catalog.urls")),
     path("prompts/", include("prompts.urls")),
+    path("automacoes-teste/", include("test_automations.urls")),
     path("prompts-teste/", include("test_prompts.urls")),
     path("credenciais/", include("credentials.urls")),
     path("operacoes/", include("operations.urls")),

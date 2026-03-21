@@ -87,13 +87,25 @@ class ProviderModelReadItem:
 
 
 @dataclass
-class TestAutomationCreateReadItem:
+class PromptTestTechnicalRuntimeReadItem:
+    technical_automation_id: UUID
+    technical_automation_name: str
+    technical_automation_slug: str | None
+    shared_automation_id: UUID
+    analysis_request_id: UUID
+    is_test_automation: bool
+
+
+@dataclass
+class TestAutomationReadItem:
     automation_id: UUID
     automation_name: str
     automation_slug: str | None
-    analysis_request_id: UUID
+    provider_id: UUID | None
+    model_id: UUID | None
     provider_slug: str
     model_slug: str
+    is_active: bool
     is_test_automation: bool
 
 
@@ -192,9 +204,9 @@ class AutomationPromptsExecutionService:
         if code == "provider_model_mismatch":
             return "Modelo selecionado nao pertence ao provider informado."
         if code == "invalid_test_automation_name":
-            return "Nome de referencia invalido para configurar o runtime tecnico."
+            return "Nome invalido para criar a automacao de teste."
         if code == "invalid_test_automation_runtime":
-            return "Provider/model sao obrigatorios para configurar o runtime tecnico."
+            return "Provider/model sao obrigatorios para criar a automacao de teste."
         if code == "test_prompt_runtime_schema_incompatible":
             return "Schema de automacoes no banco compartilhado nao e compativel com criacao automatica."
         if code == "test_prompt_runtime_schema_init_failed":
@@ -205,6 +217,14 @@ class AutomationPromptsExecutionService:
             return "Falha ao criar automacao de teste no banco compartilhado."
         if code == "test_prompt_analysis_request_autocreate_failed":
             return "Falha ao preparar analysis_request padrao da automacao de teste."
+        if code == "test_prompt_runtime_shared_automation_not_found":
+            return "Automacao tecnica oficial de suporte ao prompt de teste nao foi encontrada na FastAPI."
+        if code == "test_automation_not_found":
+            return "Automacao de teste nao encontrada na FastAPI."
+        if code == "test_automation_inactive":
+            return "Automacao de teste selecionada esta inativa."
+        if code == "test_automation_delete_failed":
+            return "Falha ao excluir a automacao de teste na FastAPI."
         if code == "invalid_integration_token":
             return "Token de integracao FastAPI invalido."
         if code == "deactivated_integration_token":
@@ -264,18 +284,37 @@ class AutomationPromptsExecutionService:
         )
 
     @staticmethod
-    def _normalize_test_automation_create(payload: dict[str, Any]) -> TestAutomationCreateReadItem | None:
+    def _normalize_test_automation(payload: dict[str, Any]) -> TestAutomationReadItem | None:
         automation_id = _to_uuid(payload.get("automation_id"))
-        analysis_request_id = _to_uuid(payload.get("analysis_request_id"))
-        if automation_id is None or analysis_request_id is None:
+        if automation_id is None:
             return None
-        return TestAutomationCreateReadItem(
+        return TestAutomationReadItem(
             automation_id=automation_id,
             automation_name=str(payload.get("automation_name") or "").strip() or str(automation_id),
             automation_slug=str(payload.get("automation_slug") or "").strip() or None,
-            analysis_request_id=analysis_request_id,
+            provider_id=_to_uuid(payload.get("provider_id")),
+            model_id=_to_uuid(payload.get("model_id")),
             provider_slug=str(payload.get("provider_slug") or "").strip().lower(),
             model_slug=str(payload.get("model_slug") or "").strip().lower(),
+            is_active=bool(payload.get("is_active", True)),
+            is_test_automation=bool(payload.get("is_test_automation", False)),
+        )
+
+    @staticmethod
+    def _normalize_prompt_test_runtime(payload: dict[str, Any]) -> PromptTestTechnicalRuntimeReadItem | None:
+        technical_automation_id = _to_uuid(payload.get("technical_automation_id"))
+        shared_automation_id = _to_uuid(payload.get("shared_automation_id"))
+        analysis_request_id = _to_uuid(payload.get("analysis_request_id"))
+        if technical_automation_id is None or shared_automation_id is None or analysis_request_id is None:
+            return None
+        return PromptTestTechnicalRuntimeReadItem(
+            technical_automation_id=technical_automation_id,
+            technical_automation_name=(
+                str(payload.get("technical_automation_name") or "").strip() or str(technical_automation_id)
+            ),
+            technical_automation_slug=str(payload.get("technical_automation_slug") or "").strip() or None,
+            shared_automation_id=shared_automation_id,
+            analysis_request_id=analysis_request_id,
             is_test_automation=bool(payload.get("is_test_automation", False)),
         )
 
@@ -472,15 +511,44 @@ class AutomationPromptsExecutionService:
         items.sort(key=lambda item: item.model_name.lower())
         return items
 
+    def list_test_automations(self, *, active_only: bool = True) -> list[TestAutomationReadItem]:
+        result = self.client.get(
+            f"/api/v1/admin/prompt-tests/automations?active_only={'true' if active_only else 'false'}",
+            headers=self.client.get_admin_headers(),
+            expect_dict=True,
+        )
+        if not result.is_success or not isinstance(result.data, dict):
+            code, message = self._extract_error_meta(result)
+            raise AutomationPromptsExecutionServiceError(
+                self._friendly_error(
+                    code=code,
+                    status_code=result.status_code,
+                    fallback_message=message,
+                    action="listar automacoes de teste",
+                ),
+                code=code,
+                status_code=result.status_code,
+            )
+        raw_items = result.data.get("items")
+        items: list[TestAutomationReadItem] = []
+        if isinstance(raw_items, list):
+            for row in raw_items:
+                if not isinstance(row, dict):
+                    continue
+                normalized = self._normalize_test_automation(row)
+                if normalized is not None:
+                    items.append(normalized)
+        return items
+
     def create_test_automation(
         self,
         *,
         name: str,
         provider_id: UUID,
         model_id: UUID,
-    ) -> TestAutomationCreateReadItem:
+    ) -> TestAutomationReadItem:
         result = self.client.post(
-            "/api/v1/admin/prompt-tests/runtime",
+            "/api/v1/admin/prompt-tests/automations",
             json_body={
                 "name": str(name or "").strip(),
                 "provider_id": str(provider_id),
@@ -511,7 +579,7 @@ class AutomationPromptsExecutionService:
                 code=code,
                 status_code=result.status_code,
             )
-        item = self._normalize_test_automation_create(result.data)
+        item = self._normalize_test_automation(result.data)
         if item is None:
             raise AutomationPromptsExecutionServiceError(
                 "Resposta invalida da FastAPI ao criar automacao de teste.",
@@ -520,7 +588,95 @@ class AutomationPromptsExecutionService:
             )
         return item
 
-    def get_test_automation_runtime(self) -> TestAutomationCreateReadItem:
+    def get_test_automation(self, *, automation_id: UUID) -> TestAutomationReadItem:
+        result = self.client.get(
+            f"/api/v1/admin/prompt-tests/automations/{automation_id}",
+            headers=self.client.get_admin_headers(),
+            expect_dict=True,
+        )
+        if not result.is_success or not isinstance(result.data, dict):
+            code, message = self._extract_error_meta(result)
+            raise AutomationPromptsExecutionServiceError(
+                self._friendly_error(
+                    code=code,
+                    status_code=result.status_code,
+                    fallback_message=message,
+                    action="consultar automacao de teste",
+                ),
+                code=code,
+                status_code=result.status_code,
+            )
+        item = self._normalize_test_automation(result.data)
+        if item is None:
+            raise AutomationPromptsExecutionServiceError(
+                "Resposta invalida da FastAPI ao consultar automacao de teste.",
+                code="fastapi_invalid_response",
+                status_code=result.status_code,
+            )
+        return item
+
+    def update_test_automation(
+        self,
+        *,
+        automation_id: UUID,
+        name: str,
+        provider_id: UUID,
+        model_id: UUID,
+        is_active: bool,
+    ) -> TestAutomationReadItem:
+        result = self.client.put(
+            f"/api/v1/admin/prompt-tests/automations/{automation_id}",
+            json_body={
+                "name": str(name or "").strip(),
+                "provider_id": str(provider_id),
+                "model_id": str(model_id),
+                "is_active": bool(is_active),
+            },
+            headers=self.client.get_admin_headers(),
+            expect_dict=True,
+        )
+        if not result.is_success or not isinstance(result.data, dict):
+            code, message = self._extract_error_meta(result)
+            raise AutomationPromptsExecutionServiceError(
+                self._friendly_error(
+                    code=code,
+                    status_code=result.status_code,
+                    fallback_message=message,
+                    action="atualizar automacao de teste",
+                ),
+                code=code,
+                status_code=result.status_code,
+            )
+        item = self._normalize_test_automation(result.data)
+        if item is None:
+            raise AutomationPromptsExecutionServiceError(
+                "Resposta invalida da FastAPI ao atualizar automacao de teste.",
+                code="fastapi_invalid_response",
+                status_code=result.status_code,
+            )
+        return item
+
+    def delete_test_automation(self, *, automation_id: UUID) -> None:
+        result = self.client.delete(
+            f"/api/v1/admin/prompt-tests/automations/{automation_id}",
+            headers=self.client.get_admin_headers(),
+            expect_dict=False,
+        )
+        if result.is_success:
+            return
+        code, message = self._extract_error_meta(result)
+        raise AutomationPromptsExecutionServiceError(
+            self._friendly_error(
+                code=code,
+                status_code=result.status_code,
+                fallback_message=message,
+                action="excluir automacao de teste",
+            ),
+            code=code,
+            status_code=result.status_code,
+        )
+
+    def get_test_automation_runtime(self) -> PromptTestTechnicalRuntimeReadItem:
         result = self.client.get(
             "/api/v1/admin/prompt-tests/runtime",
             headers=self.client.get_admin_headers(),
@@ -538,7 +694,7 @@ class AutomationPromptsExecutionService:
                 code=code,
                 status_code=result.status_code,
             )
-        item = self._normalize_test_automation_create(result.data)
+        item = self._normalize_prompt_test_runtime(result.data)
         if item is None:
             raise AutomationPromptsExecutionServiceError(
                 "Resposta invalida da FastAPI ao consultar runtime tecnico de teste.",

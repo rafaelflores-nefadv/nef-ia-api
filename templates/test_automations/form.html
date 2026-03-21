@@ -1,0 +1,121 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "test_automations:list" as list_url %}
+{% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Automações de teste" breadcrumb_parent_url=list_url breadcrumb_current=form_title %}
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    {% include "includes/data_origin_badge.html" with source=integration_source %}
+    <span class="admin-note">Cadastro isolado das automações de teste.</span>
+</div>
+
+{% if integration_warnings %}
+    <div class="alert alert-warning" role="alert">
+        <ul class="mb-0 ps-3">
+            {% for warning in integration_warnings %}
+                <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
+<section class="panel-card">
+    {% if form.non_field_errors %}
+        <div class="alert alert-danger" role="alert">
+            {% for error in form.non_field_errors %}
+                {{ error }}
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <form method="post" novalidate>
+        {% csrf_token %}
+        <div class="row g-3">
+            <div class="col-12 col-lg-8">
+                <label for="{{ form.name.id_for_label }}" class="form-label fw-semibold">{{ form.name.label }}</label>
+                {{ form.name }}
+                {% for error in form.name.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+            <div class="col-12 col-lg-6">
+                <label for="{{ form.provider_id.id_for_label }}" class="form-label fw-semibold">{{ form.provider_id.label }}</label>
+                {{ form.provider_id }}
+                {% for error in form.provider_id.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+            <div class="col-12 col-lg-6">
+                <label for="{{ form.model_id.id_for_label }}" class="form-label fw-semibold">{{ form.model_id.label }}</label>
+                {{ form.model_id }}
+                {% for error in form.model_id.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+            </div>
+            <div class="col-12">
+                <div class="form-check">
+                    {{ form.is_active }}
+                    <label class="form-check-label" for="{{ form.is_active.id_for_label }}">{{ form.is_active.label }}</label>
+                </div>
+            </div>
+        </div>
+        <div class="d-flex gap-2 mt-4">
+            <button type="submit" class="btn btn-dark">{{ submit_label }}</button>
+            <a href="{{ list_url }}" class="btn btn-outline-secondary">Voltar</a>
+        </div>
+    </form>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+    {{ block.super }}
+    <script>
+        (function () {
+            const modelsUrl = "{{ provider_models_url }}";
+            const providerSelect = document.getElementById("{{ form.provider_id.id_for_label }}");
+            const modelSelect = document.getElementById("{{ form.model_id.id_for_label }}");
+            const initialModelValue = modelSelect.value;
+
+            function renderModels(items, selectedValue) {
+                modelSelect.innerHTML = "";
+                const placeholder = document.createElement("option");
+                placeholder.value = "";
+                placeholder.textContent = "Selecione um model";
+                modelSelect.appendChild(placeholder);
+                items.forEach((item) => {
+                    const option = document.createElement("option");
+                    option.value = item.id;
+                    option.textContent = item.model_name + " (" + item.model_slug + ")";
+                    if (selectedValue && option.value === selectedValue) {
+                        option.selected = true;
+                    }
+                    modelSelect.appendChild(option);
+                });
+            }
+
+            async function loadProviderModels(providerId, selectedValue) {
+                renderModels([], "");
+                if (!providerId) {
+                    return;
+                }
+                const response = await fetch(modelsUrl + "?provider_id=" + encodeURIComponent(providerId), {
+                    method: "GET",
+                    headers: { "X-Requested-With": "XMLHttpRequest" }
+                });
+                const payload = await response.json();
+                if (!response.ok || !payload.ok) {
+                    return;
+                }
+                renderModels(payload.items || [], selectedValue || "");
+            }
+
+            providerSelect.addEventListener("change", function () {
+                loadProviderModels(providerSelect.value, "");
+            });
+
+            if (providerSelect.value) {
+                loadProviderModels(providerSelect.value, initialModelValue);
+            }
+        })();
+    </script>
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "test_automations:create" as create_url %}
+{% include "includes/page_header.html" with header_title="Automações de teste" header_subtitle=page_subtitle breadcrumb_current="Automações de teste" header_action_url=create_url header_action_label="Nova automação de teste" header_action_icon="bi bi-plus-lg" header_side_text=list_counter_label %}
+
+<section class="panel-card mb-3">
+    <p class="admin-note mb-0">
+        Gestão própria de automações de teste. Esta área não altera automações oficiais nem o CRUD de prompts de teste.
+    </p>
+</section>
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    {% include "includes/data_origin_badge.html" with source=integration_source %}
+    <span class="admin-note">Catálogo separado das automações de teste disponíveis para execução.</span>
+</div>
+
+{% if integration_warnings %}
+    <div class="alert alert-warning" role="alert">
+        <ul class="mb-0 ps-3">
+            {% for warning in integration_warnings %}
+                <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
+<section class="panel-card mb-3">
+    <form method="get" class="row g-2">
+        <div class="col-12 col-md-4">
+            <label class="form-label small fw-semibold mb-1">Busca</label>
+            <input type="text" name="q" class="form-control" value="{{ search_query }}" placeholder="Nome da automação de teste">
+        </div>
+        <div class="col-12 col-md-3">
+            <label class="form-label small fw-semibold mb-1">Status</label>
+            <select name="status" class="form-select">
+                <option value="">Todos</option>
+                <option value="ativo" {% if selected_status == "ativo" %}selected{% endif %}>Ativas</option>
+                <option value="inativo" {% if selected_status == "inativo" %}selected{% endif %}>Inativas</option>
+            </select>
+        </div>
+        <div class="col-12 d-flex gap-2">
+            <button type="submit" class="btn btn-dark">Filtrar</button>
+            <a href="{% url 'test_automations:list' %}" class="btn btn-outline-secondary">Limpar</a>
+        </div>
+    </form>
+</section>
+
+{% if test_automations %}
+    <section class="panel-card p-0 overflow-hidden">
+        <div class="table-responsive">
+            <table class="table admin-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Runtime</th>
+                        <th>Status</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in test_automations %}
+                        <tr>
+                            <td class="fw-semibold">{{ item.automation_name }}</td>
+                            <td>{{ item.provider_slug }} / {{ item.model_slug }}</td>
+                            <td>
+                                {% if item.is_active %}
+                                    <span class="status-pill status-success">Ativa</span>
+                                {% else %}
+                                    <span class="status-pill status-neutral">Inativa</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end">
+                                <div class="table-actions">
+                                    <a href="{% url 'test_automations:detail' item.automation_id %}" class="btn btn-sm btn-outline-secondary">Ver</a>
+                                    <a href="{% url 'test_automations:edit' item.automation_id %}" class="btn btn-sm btn-outline-primary">Editar</a>
+                                    <a href="{% url 'test_automations:delete' item.automation_id %}" class="btn btn-sm btn-outline-danger">Excluir</a>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+{% else %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-diagram-3" empty_title="Nenhuma automação de teste cadastrada" empty_message="Cadastre automações de teste próprias para depois usá-las na execução dos prompts de teste." empty_action_url=create_url empty_action_label="Nova automação de teste" empty_action_icon="bi bi-plus-lg" %}
+{% endif %}
+{% endblock %}

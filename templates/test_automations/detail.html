@@ -1,0 +1,53 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "test_automations:list" as list_url %}
+{% include "includes/page_header.html" with header_title=automation.automation_name header_subtitle="Automação de teste" breadcrumb_parent_label="Automações de teste" breadcrumb_parent_url=list_url breadcrumb_current=automation.automation_name %}
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    {% include "includes/data_origin_badge.html" with source=integration_source %}
+    <span class="admin-note">Entidade própria para seleção na execução de prompts de teste.</span>
+</div>
+
+{% if integration_warnings %}
+    <div class="alert alert-warning" role="alert">
+        <ul class="mb-0 ps-3">
+            {% for warning in integration_warnings %}
+                <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
+<section class="panel-card mb-3">
+    <div class="d-flex gap-2 justify-content-end">
+        <a href="{% url 'test_automations:edit' automation.automation_id %}" class="btn btn-outline-primary">Editar</a>
+        <a href="{% url 'test_automations:delete' automation.automation_id %}" class="btn btn-outline-danger">Excluir</a>
+    </div>
+</section>
+
+<section class="panel-card">
+    <dl class="row mb-0">
+        <dt class="col-sm-4 text-secondary">Automation ID</dt>
+        <dd class="col-sm-8"><code>{{ automation.automation_id }}</code></dd>
+
+        <dt class="col-sm-4 text-secondary">Slug</dt>
+        <dd class="col-sm-8"><code>{{ automation.automation_slug|default:"-" }}</code></dd>
+
+        <dt class="col-sm-4 text-secondary">Provider</dt>
+        <dd class="col-sm-8">{{ automation.provider_slug }}</dd>
+
+        <dt class="col-sm-4 text-secondary">Model</dt>
+        <dd class="col-sm-8">{{ automation.model_slug }}</dd>
+
+        <dt class="col-sm-4 text-secondary">Status</dt>
+        <dd class="col-sm-8">
+            {% if automation.is_active %}
+                <span class="status-pill status-success">Ativa</span>
+            {% else %}
+                <span class="status-pill status-neutral">Inativa</span>
+            {% endif %}
+        </dd>
+    </dl>
+</section>
+{% endblock %}

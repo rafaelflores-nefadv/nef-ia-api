@@ -12,7 +12,7 @@
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Fluxo isolado: runtime tecnico interno para testes de prompt.</span>
+    <span class="admin-note">Fluxo isolado: automacoes de teste reais usam uma runtime tecnica interna separada.</span>
 </div>
 
 {% if integration_warnings %}
@@ -32,15 +32,15 @@
             <strong>{{ test_prompt.name }}</strong>
             <div class="admin-note"><code>ID local {{ test_prompt.pk }}</code></div>
         </div>
-            <div class="col-12 col-lg-6">
-                <small class="text-secondary d-block">Automacao tecnica de teste</small>
-                {% if selected_automation %}
-                    <div>{{ selected_automation.automation_name }}</div>
-                    <div class="admin-note"><code>{{ selected_automation.automation_id }}</code></div>
-                {% else %}
-                    <div class="admin-note">Runtime tecnico ainda nao configurado.</div>
-                {% endif %}
-            </div>
+        <div class="col-12 col-lg-6">
+            <small class="text-secondary d-block">Runtime tecnica interna</small>
+            {% if technical_runtime %}
+                <div>{{ technical_runtime.technical_automation_name }}</div>
+                <div class="admin-note"><code>{{ technical_runtime.technical_automation_id }}</code></div>
+            {% else %}
+                <div class="admin-note">Runtime tecnico ainda nao configurado.</div>
+            {% endif %}
+        </div>
         <div class="col-12">
             <small class="text-secondary d-block">Resumo do override</small>
             <span class="admin-note">{{ test_prompt.prompt_text|truncatechars:260 }}</span>
@@ -62,18 +62,17 @@
         <div class="row g-3">
             <div class="col-12 col-lg-8">
                 <label for="{{ form.automation.id_for_label }}" class="form-label fw-semibold">{{ form.automation.label }}</label>
-                <div class="d-flex gap-2">
+                <div class="d-flex flex-wrap gap-2">
                     <div class="flex-grow-1">
                         {{ form.automation }}
                     </div>
-                    <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#testAutomationModal">
-                        Configurar runtime tecnico
-                    </button>
+                    <a href="{{ automation_management_url }}" class="btn btn-outline-secondary">Gerenciar automacoes</a>
+                    <a href="{{ automation_create_url }}" class="btn btn-outline-secondary">Nova automacao</a>
                 </div>
                 {% for error in form.automation.errors %}
                     <div class="invalid-feedback d-block">{{ error }}</div>
                 {% endfor %}
-                <div class="form-text">Runtime tecnico interno (nao usa cadastro de automacoes oficiais).</div>
+                <div class="form-text">Escolha uma automacao de teste ja cadastrada. O cadastro fica em uma area propria, separada dos prompts.</div>
             </div>
             <div class="col-12 col-lg-8">
                 <label for="{{ form.request_file.id_for_label }}" class="form-label fw-semibold">{{ form.request_file.label }}</label>
@@ -90,193 +89,4 @@
         </div>
     </form>
 </section>
-
-<div class="modal fade" id="testAutomationModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Configurar runtime tecnico de teste</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
-            </div>
-            <div class="modal-body">
-                <div id="test-automation-modal-feedback" class="alert d-none" role="alert"></div>
-                <div class="mb-3">
-                    <label for="new-automation-name" class="form-label">Nome de referencia</label>
-                    <input id="new-automation-name" type="text" class="form-control" maxlength="180" placeholder="Ex.: Teste OCR financeiro">
-                </div>
-                <div class="mb-3">
-                    <label for="new-automation-provider" class="form-label">Provider</label>
-                    <select id="new-automation-provider" class="form-select">
-                        <option value="">Selecione um provider</option>
-                        {% for provider in provider_options %}
-                            <option value="{{ provider.id }}">{{ provider.name }} ({{ provider.slug }})</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label for="new-automation-model" class="form-label">Model</label>
-                    <select id="new-automation-model" class="form-select">
-                        <option value="">Selecione um model</option>
-                        {% for model in provider_models %}
-                            <option value="{{ model.id }}">{{ model.model_name }} ({{ model.model_slug }})</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <small class="text-secondary d-block">
-                    O sistema cria/reutiliza automaticamente a automacao tecnica interna e o <code>analysis_request</code> padrao para arquivo (<code>xlsx</code>, <code>csv</code>, <code>txt</code>, <code>pdf</code>).
-                </small>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-                <button type="button" id="create-test-automation-btn" class="btn btn-dark">Salvar configuracao</button>
-            </div>
-        </div>
-    </div>
-</div>
-{% endblock %}
-
-{% block extra_js %}
-    {{ block.super }}
-    <script>
-        (function () {
-            const createUrl = "{{ automation_create_url }}";
-            const modelsUrl = "{{ automation_models_url }}";
-            const executionAutomationSelect = document.getElementById("{{ form.automation.id_for_label }}");
-            const providerSelect = document.getElementById("new-automation-provider");
-            const modelSelect = document.getElementById("new-automation-model");
-            const nameInput = document.getElementById("new-automation-name");
-            const createButton = document.getElementById("create-test-automation-btn");
-            const feedback = document.getElementById("test-automation-modal-feedback");
-            const modalElement = document.getElementById("testAutomationModal");
-
-            function getCookie(name) {
-                const cookieValue = document.cookie
-                    .split(";")
-                    .map((part) => part.trim())
-                    .find((part) => part.startsWith(name + "="));
-                if (!cookieValue) {
-                    return "";
-                }
-                return decodeURIComponent(cookieValue.split("=")[1]);
-            }
-
-            function showFeedback(message, level) {
-                feedback.classList.remove("d-none", "alert-danger", "alert-success", "alert-warning");
-                feedback.classList.add("alert-" + level);
-                feedback.textContent = message;
-            }
-
-            function clearFeedback() {
-                feedback.classList.add("d-none");
-                feedback.textContent = "";
-                feedback.classList.remove("alert-danger", "alert-success", "alert-warning");
-            }
-
-            function renderModels(items) {
-                modelSelect.innerHTML = "";
-                const placeholder = document.createElement("option");
-                placeholder.value = "";
-                placeholder.textContent = "Selecione um model";
-                modelSelect.appendChild(placeholder);
-                items.forEach((item) => {
-                    const option = document.createElement("option");
-                    option.value = item.id;
-                    option.textContent = item.model_name + " (" + item.model_slug + ")";
-                    modelSelect.appendChild(option);
-                });
-            }
-
-            async function loadProviderModels(providerId) {
-                renderModels([]);
-                if (!providerId) {
-                    return;
-                }
-                try {
-                    const response = await fetch(modelsUrl + "?provider_id=" + encodeURIComponent(providerId), {
-                        method: "GET",
-                        headers: { "X-Requested-With": "XMLHttpRequest" }
-                    });
-                    const payload = await response.json();
-                    if (!response.ok || !payload.ok) {
-                        throw new Error(payload.error || "Falha ao carregar modelos.");
-                    }
-                    renderModels(payload.items || []);
-                    if (Array.isArray(payload.warnings) && payload.warnings.length > 0) {
-                        showFeedback(payload.warnings.join(" "), "warning");
-                    } else {
-                        clearFeedback();
-                    }
-                } catch (error) {
-                    showFeedback(String(error.message || error), "danger");
-                }
-            }
-
-            providerSelect.addEventListener("change", function () {
-                loadProviderModels(providerSelect.value);
-            });
-
-            createButton.addEventListener("click", async function () {
-                clearFeedback();
-                const name = String(nameInput.value || "").trim();
-                const providerId = String(providerSelect.value || "").trim();
-                const modelId = String(modelSelect.value || "").trim();
-
-                if (!name) {
-                    showFeedback("Informe o nome da automacao de teste.", "danger");
-                    return;
-                }
-                if (!providerId || !modelId) {
-                    showFeedback("Selecione provider e model para continuar.", "danger");
-                    return;
-                }
-
-                createButton.disabled = true;
-                try {
-                    const formData = new FormData();
-                    formData.append("name", name);
-                    formData.append("provider_id", providerId);
-                    formData.append("model_id", modelId);
-
-                    const response = await fetch(createUrl, {
-                        method: "POST",
-                        headers: {
-                            "X-CSRFToken": getCookie("csrftoken"),
-                            "X-Requested-With": "XMLHttpRequest"
-                        },
-                        body: formData
-                    });
-                    const payload = await response.json();
-                    if (!response.ok || !payload.ok) {
-                        throw new Error(payload.error || "Falha ao criar automacao de teste.");
-                    }
-
-                    const automation = payload.automation;
-                    const slugPart = automation.automation_slug ? " [" + automation.automation_slug + "]" : "";
-                    const optionLabel = automation.automation_name + slugPart;
-                    const existingOption = Array.from(executionAutomationSelect.options).find((opt) => opt.value === automation.automation_id);
-                    if (existingOption) {
-                        existingOption.textContent = optionLabel;
-                    } else {
-                        const option = document.createElement("option");
-                        option.value = automation.automation_id;
-                        option.textContent = optionLabel;
-                        executionAutomationSelect.appendChild(option);
-                    }
-                    executionAutomationSelect.value = automation.automation_id;
-
-                    showFeedback("Runtime tecnico configurado com sucesso para esta execucao.", "success");
-                    setTimeout(function () {
-                        const modalInstance = bootstrap.Modal.getOrCreateInstance(modalElement);
-                        modalInstance.hide();
-                        clearFeedback();
-                        nameInput.value = "";
-                    }, 600);
-                } catch (error) {
-                    showFeedback(String(error.message || error), "danger");
-                } finally {
-                    createButton.disabled = false;
-                }
-            });
-        })();
-    </script>
 {% endblock %}

@@ -8,9 +8,12 @@ from app.db.session import SessionLocal, get_operational_session
 from app.db.shared_session import get_shared_session
 from app.models.operational import DjangoAiUser
 from app.schemas.admin_prompt_tests import (
+    PromptTestAutomationListResponse,
+    PromptTestAutomationResponse,
+    PromptTestAutomationUpdateRequest,
     PromptTestCreateResponse,
     PromptTestRuntimeConfigureRequest,
-    PromptTestRuntimeResponse,
+    PromptTestTechnicalRuntimeResponse,
     PromptTestStatusResponse,
 )
 from app.services.admin_automation_execution_service import AdminAutomationExecutionService
@@ -70,31 +73,63 @@ def create_prompt_test(
     )
 
 
-@router.get("/prompt-tests/runtime", response_model=PromptTestRuntimeResponse)
+@router.get("/prompt-tests/runtime", response_model=PromptTestTechnicalRuntimeResponse)
 def get_prompt_test_runtime(
     _: DjangoAiUser = Depends(get_current_admin_user),
     operational_session: Session = Depends(get_operational_session),
     shared_session: Session = Depends(get_shared_session),
-) -> PromptTestRuntimeResponse:
+) -> PromptTestTechnicalRuntimeResponse:
     service = AdminAutomationExecutionService(
         operational_session=operational_session,
         shared_session=shared_session,
     )
     payload = service.get_prompt_test_runtime()
-    return PromptTestRuntimeResponse(**payload)
+    return PromptTestTechnicalRuntimeResponse(**payload)
 
 
-@router.post(
-    "/prompt-tests/runtime",
-    response_model=PromptTestRuntimeResponse,
-    status_code=status.HTTP_201_CREATED,
+@router.get(
+    "/prompt-tests/automations",
+    response_model=PromptTestAutomationListResponse,
 )
-def configure_prompt_test_runtime(
-    payload: PromptTestRuntimeConfigureRequest,
+def list_prompt_test_automations(
+    active_only: bool = True,
     _: DjangoAiUser = Depends(get_current_admin_user),
     operational_session: Session = Depends(get_operational_session),
     shared_session: Session = Depends(get_shared_session),
-) -> PromptTestRuntimeResponse:
+) -> PromptTestAutomationListResponse:
+    service = AdminAutomationExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    items = service.list_test_automations(active_only=active_only)
+    return PromptTestAutomationListResponse(
+        total=len(items),
+        items=[PromptTestAutomationResponse(**item) for item in items],
+    )
+
+
+@router.get(
+    "/prompt-tests/automations/{automation_id}",
+    response_model=PromptTestAutomationResponse,
+)
+def get_prompt_test_automation(
+    automation_id: UUID,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> PromptTestAutomationResponse:
+    service = AdminAutomationExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    return PromptTestAutomationResponse(**service.get_test_automation(automation_id=automation_id))
+
+
+def _create_prompt_test_automation_payload(
+    payload: PromptTestRuntimeConfigureRequest,
+    operational_session: Session,
+    shared_session: Session,
+) -> PromptTestAutomationResponse:
     service = AdminAutomationExecutionService(
         operational_session=operational_session,
         shared_session=shared_session,
@@ -104,7 +139,86 @@ def configure_prompt_test_runtime(
         provider_id=payload.provider_id,
         model_id=payload.model_id,
     )
-    return PromptTestRuntimeResponse(**result)
+    return PromptTestAutomationResponse(**result)
+
+
+@router.post(
+    "/prompt-tests/automations",
+    response_model=PromptTestAutomationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_prompt_test_automation(
+    payload: PromptTestRuntimeConfigureRequest,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> PromptTestAutomationResponse:
+    return _create_prompt_test_automation_payload(
+        payload=payload,
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+
+
+@router.put(
+    "/prompt-tests/automations/{automation_id}",
+    response_model=PromptTestAutomationResponse,
+)
+def update_prompt_test_automation(
+    automation_id: UUID,
+    payload: PromptTestAutomationUpdateRequest,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> PromptTestAutomationResponse:
+    service = AdminAutomationExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    result = service.update_test_automation(
+        automation_id=automation_id,
+        name=payload.name,
+        provider_id=payload.provider_id,
+        model_id=payload.model_id,
+        is_active=payload.is_active,
+    )
+    return PromptTestAutomationResponse(**result)
+
+
+@router.delete(
+    "/prompt-tests/automations/{automation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_prompt_test_automation(
+    automation_id: UUID,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> None:
+    service = AdminAutomationExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    service.delete_test_automation(automation_id=automation_id)
+
+
+@router.post(
+    "/prompt-tests/runtime",
+    response_model=PromptTestAutomationResponse,
+    status_code=status.HTTP_201_CREATED,
+    deprecated=True,
+)
+def configure_prompt_test_runtime(
+    payload: PromptTestRuntimeConfigureRequest,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> PromptTestAutomationResponse:
+    return _create_prompt_test_automation_payload(
+        payload=payload,
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
 
 
 @router.get("/prompt-tests/{prompt_test_id:uuid}", response_model=PromptTestStatusResponse)

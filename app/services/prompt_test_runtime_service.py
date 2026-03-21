@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.exceptions import AppException
 from app.repositories.prompt_tests import PromptTestAutomationRecord, PromptTestAutomationRepository
+from app.repositories.shared import SharedAutomationRepository
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -22,8 +25,7 @@ class PromptTestRuntimeContext:
     automation_id: uuid.UUID
     automation_name: str
     automation_slug: str | None
-    provider_slug: str | None
-    model_slug: str | None
+    shared_automation_id: uuid.UUID
     analysis_request_id: uuid.UUID
     created_automation: bool
     created_analysis_request: bool
@@ -34,8 +36,21 @@ class PromptTestManualAutomationContext:
     automation_id: uuid.UUID
     automation_name: str
     automation_slug: str | None
+    provider_id: uuid.UUID | None
+    model_id: uuid.UUID | None
     provider_slug: str
     model_slug: str
+    is_active: bool
+
+
+@dataclass(slots=True, frozen=True)
+class PromptTestExecutionTargetContext:
+    test_automation_id: uuid.UUID
+    test_automation_name: str
+    test_automation_slug: str | None
+    provider_slug: str
+    model_slug: str
+    shared_automation_id: uuid.UUID
     analysis_request_id: uuid.UUID
 
 
@@ -44,14 +59,16 @@ class PromptTestRuntimeService:
     Runtime tecnico isolado para prompt tests.
 
     Regras de isolamento:
-    - automacao de teste persiste exclusivamente em `test_automations`;
+    - automacao de teste cadastravel persiste exclusivamente em `test_automations`;
+    - runtime tecnico interno e separado das automacoes de teste cadastraveis;
     - nenhuma escrita em `automations`;
-    - nenhuma dependencia de FK/colunas do fluxo oficial de automacoes.
+    - `analysis_requests` sempre usa uma automacao oficial tecnica valida do banco compartilhado.
     """
 
     def __init__(self, shared_session: Session) -> None:
         self.shared_session = shared_session
         self.test_automations = PromptTestAutomationRepository(shared_session)
+        self.shared_automations = SharedAutomationRepository(shared_session)
 
     def ensure_runtime_context(self) -> PromptTestRuntimeContext:
         self.test_automations.ensure_schema()
@@ -75,21 +92,27 @@ class PromptTestRuntimeService:
                 model_slug=None,
                 provider_id=None,
                 model_id=None,
+                is_technical_runtime=True,
                 is_active=True,
             )
             created_automation = True
-        elif not runtime_row.is_active:
+        elif not runtime_row.is_active or not runtime_row.is_technical_runtime:
             runtime_row = self.test_automations.update(
                 automation_id=runtime_row.id,
-                name=runtime_row.name,
+                name=normalized_name,
                 slug=runtime_row.slug or normalized_slug,
-                provider_slug=runtime_row.provider_slug,
-                model_slug=runtime_row.model_slug,
-                provider_id=runtime_row.provider_id,
-                model_id=runtime_row.model_id,
+                provider_slug=None,
+                model_slug=None,
+                provider_id=None,
+                model_id=None,
+                is_technical_runtime=True,
                 is_active=True,
             )
 
+        shared_automation = self._resolve_shared_technical_automation(
+            slug=normalized_slug,
+            name=normalized_name,
+        )
         analysis_columns = self._get_table_columns_metadata("analysis_requests")
         if not analysis_columns:
             raise AppException(
@@ -99,13 +122,13 @@ class PromptTestRuntimeService:
             )
 
         analysis_request_row = self._find_latest_analysis_request(
-            automation_id=runtime_row.id,
+            automation_id=shared_automation.id,
             analysis_columns=analysis_columns,
         )
         created_analysis_request = False
         if analysis_request_row is None:
             analysis_request_row = self._create_analysis_request_for_automation(
-                automation_id=runtime_row.id,
+                automation_id=shared_automation.id,
                 analysis_columns=analysis_columns,
                 apply_file_defaults=True,
             )
@@ -123,12 +146,15 @@ class PromptTestRuntimeService:
             automation_id=runtime_row.id,
             automation_name=runtime_row.name,
             automation_slug=runtime_row.slug,
-            provider_slug=runtime_row.provider_slug,
-            model_slug=runtime_row.model_slug,
+            shared_automation_id=shared_automation.id,
             analysis_request_id=analysis_request_id,
             created_automation=created_automation,
             created_analysis_request=created_analysis_request,
         )
+
+    def list_test_automations(self, *, active_only: bool = True) -> list[PromptTestAutomationRecord]:
+        self.test_automations.ensure_schema()
+        return self.test_automations.list_manual_items(active_only=active_only)
 
     def create_manual_test_automation(
         self,
@@ -158,77 +184,189 @@ class PromptTestRuntimeService:
 
         self.test_automations.ensure_schema()
 
-        technical_slug = str(settings.test_prompts_automation_slug or "").strip().lower() or "system-test-automation"
-        technical_name = str(settings.test_prompts_automation_name or "").strip() or "Automacao Tecnica de Teste"
-        preferred_id = self._configured_automation_id()
-
-        runtime_row = self.test_automations.find_runtime(
-            preferred_id=preferred_id,
-            slug=technical_slug,
-            name=technical_name,
-        )
-        if runtime_row is None:
-            runtime_row = self.test_automations.create(
-                automation_id=preferred_id or uuid.uuid4(),
-                name=normalized_name,
-                slug=technical_slug,
-                provider_slug=normalized_provider,
-                model_slug=normalized_model,
-                provider_id=provider_id,
-                model_id=model_id,
-                is_active=True,
-            )
-        else:
-            runtime_row = self.test_automations.update(
-                automation_id=runtime_row.id,
-                name=normalized_name,
-                slug=technical_slug,
-                provider_slug=normalized_provider,
-                model_slug=normalized_model,
-                provider_id=provider_id,
-                model_id=model_id,
-                is_active=True,
-            )
-
-        analysis_columns = self._get_table_columns_metadata("analysis_requests")
-        if not analysis_columns:
-            raise AppException(
-                "Shared table 'analysis_requests' is unavailable for test automation creation.",
-                status_code=500,
-                code="test_prompt_runtime_unavailable",
-            )
-
-        analysis_row = self._find_latest_analysis_request(
-            automation_id=runtime_row.id,
-            analysis_columns=analysis_columns,
-        )
-        if analysis_row is None:
-            analysis_row = self._create_analysis_request_for_automation(
-                automation_id=runtime_row.id,
-                analysis_columns=analysis_columns,
-                apply_file_defaults=True,
-            )
-
-        analysis_request_id = self._coerce_uuid(analysis_row.get("id"))
-        if analysis_request_id is None:
-            raise AppException(
-                "Test automation analysis_request has invalid identifier.",
-                status_code=500,
-                code="test_prompt_runtime_invalid",
-            )
-
-        return PromptTestManualAutomationContext(
-            automation_id=runtime_row.id,
-            automation_name=runtime_row.name,
-            automation_slug=runtime_row.slug,
+        automation_id = uuid.uuid4()
+        slug = self._build_manual_automation_slug(automation_name=normalized_name, automation_id=automation_id)
+        created = self.test_automations.create(
+            automation_id=automation_id,
+            name=normalized_name,
+            slug=slug,
             provider_slug=normalized_provider,
             model_slug=normalized_model,
-            analysis_request_id=analysis_request_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            is_technical_runtime=False,
+            is_active=True,
+        )
+
+        return PromptTestManualAutomationContext(
+            automation_id=created.id,
+            automation_name=created.name,
+            automation_slug=created.slug,
+            provider_id=created.provider_id,
+            model_id=created.model_id,
+            provider_slug=normalized_provider,
+            model_slug=normalized_model,
+            is_active=created.is_active,
         )
 
     def get_test_automation_by_id(self, automation_id: uuid.UUID) -> PromptTestAutomationRecord | None:
         self.test_automations.ensure_schema()
         return self.test_automations.get_by_id(automation_id)
+
+    def get_manual_test_automation_by_id(self, automation_id: uuid.UUID) -> PromptTestAutomationRecord:
+        automation = self.get_test_automation_by_id(automation_id)
+        if automation is None or automation.is_technical_runtime:
+            raise AppException(
+                "Test automation not found.",
+                status_code=404,
+                code="test_automation_not_found",
+                details={"automation_id": str(automation_id)},
+            )
+        return automation
+
+    def update_manual_test_automation(
+        self,
+        *,
+        automation_id: uuid.UUID,
+        automation_name: str,
+        provider_slug: str,
+        model_slug: str,
+        provider_id: uuid.UUID | None = None,
+        model_id: uuid.UUID | None = None,
+        is_active: bool = True,
+    ) -> PromptTestManualAutomationContext:
+        automation = self.get_manual_test_automation_by_id(automation_id)
+        normalized_name = str(automation_name or "").strip()
+        if not normalized_name:
+            raise AppException(
+                "Automation name is required.",
+                status_code=422,
+                code="invalid_test_automation_name",
+            )
+
+        normalized_provider = str(provider_slug or "").strip().lower()
+        normalized_model = str(model_slug or "").strip().lower()
+        if not normalized_provider or not normalized_model:
+            raise AppException(
+                "Provider/model runtime is required to update test automation.",
+                status_code=422,
+                code="invalid_test_automation_runtime",
+            )
+
+        updated = self.test_automations.update(
+            automation_id=automation.id,
+            name=normalized_name,
+            slug=automation.slug or self._build_manual_automation_slug(
+                automation_name=normalized_name,
+                automation_id=automation.id,
+            ),
+            provider_slug=normalized_provider,
+            model_slug=normalized_model,
+            provider_id=provider_id,
+            model_id=model_id,
+            is_technical_runtime=False,
+            is_active=bool(is_active),
+        )
+        return PromptTestManualAutomationContext(
+            automation_id=updated.id,
+            automation_name=updated.name,
+            automation_slug=updated.slug,
+            provider_id=updated.provider_id,
+            model_id=updated.model_id,
+            provider_slug=str(updated.provider_slug or "").strip().lower(),
+            model_slug=str(updated.model_slug or "").strip().lower(),
+            is_active=updated.is_active,
+        )
+
+    def delete_manual_test_automation(self, *, automation_id: uuid.UUID) -> None:
+        automation = self.get_manual_test_automation_by_id(automation_id)
+        deleted = self.test_automations.delete(automation.id)
+        if not deleted:
+            raise AppException(
+                "Test automation could not be deleted.",
+                status_code=500,
+                code="test_automation_delete_failed",
+                details={"automation_id": str(automation_id)},
+            )
+
+    def get_execution_target_for_test_automation(
+        self,
+        *,
+        automation_id: uuid.UUID,
+    ) -> PromptTestExecutionTargetContext:
+        automation = self.get_test_automation_by_id(automation_id)
+        if automation is None or automation.is_technical_runtime:
+            raise AppException(
+                "Test automation not found.",
+                status_code=404,
+                code="test_automation_not_found",
+                details={"automation_id": str(automation_id)},
+            )
+        if not automation.is_active:
+            raise AppException(
+                "Test automation is inactive.",
+                status_code=422,
+                code="test_automation_inactive",
+                details={"automation_id": str(automation_id)},
+            )
+        provider_slug = str(automation.provider_slug or "").strip().lower()
+        model_slug = str(automation.model_slug or "").strip().lower()
+        if not provider_slug or not model_slug:
+            raise AppException(
+                "Test automation runtime configuration is incomplete.",
+                status_code=422,
+                code="automation_runtime_configuration_missing",
+                details={
+                    "automation_id": str(automation_id),
+                    "missing_fields": [
+                        field_name
+                        for field_name, value in {
+                            "provider": provider_slug,
+                            "model": model_slug,
+                        }.items()
+                        if not value
+                    ],
+                },
+            )
+
+        runtime = self.ensure_runtime_context()
+        return PromptTestExecutionTargetContext(
+            test_automation_id=automation.id,
+            test_automation_name=automation.name,
+            test_automation_slug=automation.slug,
+            provider_slug=provider_slug,
+            model_slug=model_slug,
+            shared_automation_id=runtime.shared_automation_id,
+            analysis_request_id=runtime.analysis_request_id,
+        )
+
+    def _resolve_shared_technical_automation(
+        self,
+        *,
+        slug: str,
+        name: str,
+    ):
+        configured_id = self._configured_automation_id()
+        if configured_id is not None:
+            configured = self.shared_automations.get_automation_by_id(configured_id)
+            if configured is None:
+                raise AppException(
+                    "Configured technical prompt-test automation was not found in shared automations.",
+                    status_code=500,
+                    code="test_prompt_runtime_shared_automation_not_found",
+                    details={"automation_id": str(configured_id)},
+                )
+            return configured
+
+        discovered = self.shared_automations.find_automation_by_slug_or_name(slug=slug, name=name)
+        if discovered is None:
+            raise AppException(
+                "Technical prompt-test automation was not found in shared automations.",
+                status_code=500,
+                code="test_prompt_runtime_shared_automation_not_found",
+                details={"automation_slug": slug, "automation_name": name},
+            )
+        return discovered
 
     def _find_latest_analysis_request(
         self,
@@ -615,3 +753,13 @@ class PromptTestRuntimeService:
             return uuid.UUID(raw)
         except ValueError:
             return None
+
+    @staticmethod
+    def _slugify(value: str) -> str:
+        normalized = unicodedata.normalize("NFKD", str(value or "").strip()).encode("ascii", "ignore").decode("ascii")
+        normalized = re.sub(r"[^a-zA-Z0-9]+", "-", normalized).strip("-").lower()
+        return normalized or "test-automation"
+
+    def _build_manual_automation_slug(self, *, automation_name: str, automation_id: uuid.UUID) -> str:
+        base_slug = self._slugify(automation_name)
+        return f"test-prompt-{base_slug}-{str(automation_id)[:8]}"

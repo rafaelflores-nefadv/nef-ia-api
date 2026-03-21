@@ -20,7 +20,7 @@ from app.models.operational import (
 from app.models.shared import AnalysisExecution
 from app.services import execution_service as execution_module
 from app.services.execution_engine import EngineExecutionInput, ExecutionFileKind
-from app.services.execution_service import ExecutionService
+from app.services.execution_service import ExecutionService, PromptTestExecutionContextInput
 
 
 class FakeSession:
@@ -130,6 +130,18 @@ class FakeAutomationExecutionSettingsRepository:
 
     def get_active_by_automation_id(self, automation_id: UUID):  # type: ignore[no-untyped-def]
         return self.active_settings.get(automation_id)
+
+
+class FakePromptTestExecutionContextRepository:
+    def __init__(self) -> None:
+        self.items: dict[UUID, object] = {}
+
+    def add(self, model):  # type: ignore[no-untyped-def]
+        self.items[model.execution_id] = model
+        return model
+
+    def get_by_execution_id(self, execution_id: UUID):  # type: ignore[no-untyped-def]
+        return self.items.get(execution_id)
 
 
 class FakeSharedAnalysisRepository:
@@ -351,6 +363,7 @@ def _build_service(
     service.request_files = FakeRequestFileRepository({request_file.id: request_file})  # type: ignore[assignment]
     service.execution_inputs = FakeExecutionInputRepository()  # type: ignore[assignment]
     service.execution_profile_settings = FakeAutomationExecutionSettingsRepository()  # type: ignore[assignment]
+    service.prompt_test_execution_contexts = FakePromptTestExecutionContextRepository()  # type: ignore[assignment]
     service.queue_jobs = queue_repo  # type: ignore[assignment]
     service.audit_logs = FakeAuditRepository()  # type: ignore[assignment]
     service.shared_analysis = FakeSharedAnalysisRepository(
@@ -388,6 +401,37 @@ def test_create_execution_creates_queue_job_and_dispatches(monkeypatch) -> None:
     assert result.queue_job_id in queue_repo.jobs
     assert len(dispatched) == 1
     assert dispatched[0][2] is None
+
+
+def test_create_execution_persists_prompt_test_context(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id)
+    permissions = [_build_permission(automation_id)]
+
+    monkeypatch.setattr(
+        "app.services.execution_service.enqueue_execution_job",
+        lambda **kwargs: None,
+    )
+
+    service, _, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    result = service.create_execution(
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+        prompt_test_context=PromptTestExecutionContextInput(
+            test_automation_id=uuid4(),
+            test_automation_name="Teste OCR",
+            provider_slug="openai",
+            model_slug="gpt-4.1-mini",
+        ),
+        api_token=_build_api_token(),
+        token_permissions=permissions,
+    )
+
+    stored_context = service.prompt_test_execution_contexts.get_by_execution_id(result.execution_id)  # type: ignore[attr-defined]
+    assert stored_context is not None
+    assert stored_context.execution_id == result.execution_id
+    assert result.execution_id in shared_exec_repo.executions
 
 
 def test_create_execution_supports_request_file_ids_and_keeps_primary(monkeypatch) -> None:

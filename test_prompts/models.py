@@ -10,7 +10,7 @@ class TestPrompt(models.Model):
     """
 
     name = models.CharField("Nome", max_length=160)
-    automation_id = models.UUIDField("ID da automacao tecnica (interna)", db_index=True, null=True, blank=True)
+    automation_id = models.UUIDField("ID da automacao de teste selecionada", db_index=True, null=True, blank=True)
     prompt_text = models.TextField("Texto do prompt experimental")
     notes = models.TextField("Observacoes", blank=True, default="")
     is_active = models.BooleanField("Ativo", default=True)

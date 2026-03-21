@@ -41,6 +41,60 @@ class SharedAutomationRepository:
         stmt = select(Automation).order_by(Automation.name.asc(), Automation.id.asc())
         return list(self.session.execute(stmt).scalars().all())
 
+    def find_automation_by_slug_or_name(
+        self,
+        *,
+        slug: str | None,
+        name: str | None,
+    ) -> Automation | None:
+        automation_columns = self._get_table_columns("automations")
+        normalized_slug = str(slug or "").strip().lower()
+        normalized_name = str(name or "").strip().lower()
+
+        if normalized_slug:
+            slug_column = next(
+                (
+                    candidate
+                    for candidate in ["slug", "automation_slug", "key", "code"]
+                    if candidate in automation_columns
+                ),
+                None,
+            )
+            if slug_column is not None:
+                stmt = text(
+                    f"""
+                    SELECT id, name, is_active
+                    FROM automations
+                    WHERE lower({slug_column}) = :slug
+                    LIMIT 1
+                    """
+                )
+                row = self.session.execute(stmt, {"slug": normalized_slug}).mappings().first()
+                if row is not None:
+                    return Automation(
+                        id=uuid.UUID(str(row["id"])),
+                        name=str(row["name"] or "").strip() or str(row["id"]),
+                        is_active=bool(row["is_active"]),
+                    )
+
+        if normalized_name:
+            stmt = text(
+                """
+                SELECT id, name, is_active
+                FROM automations
+                WHERE lower(name) = :name
+                LIMIT 1
+                """
+            )
+            row = self.session.execute(stmt, {"name": normalized_name}).mappings().first()
+            if row is not None:
+                return Automation(
+                    id=uuid.UUID(str(row["id"])),
+                    name=str(row["name"] or "").strip() or str(row["id"]),
+                    is_active=bool(row["is_active"]),
+                )
+        return None
+
     def get_latest_prompt_for_automation(self, automation_id: uuid.UUID) -> AutomationPrompt | None:
         stmt = (
             select(AutomationPrompt)
