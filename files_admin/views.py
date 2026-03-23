@@ -69,7 +69,7 @@ class FileDetailView(LoginRequiredMixin, TemplateView):
                 request,
                 str(
                     payload.get("limitation_message")
-                    or "Arquivo nao encontrado na consulta remota da API."
+                    or "Arquivo não encontrado na consulta remota da API."
                 ),
             )
             return redirect("files_admin:list")

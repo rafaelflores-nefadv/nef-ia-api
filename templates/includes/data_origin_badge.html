@@ -1,11 +1,11 @@
 {% if source == "api" or source == "api_provider" %}
     <span class="status-pill status-success">Dados reais da API</span>
 {% elif source == "api_hibrido" or source == "api_catalog" %}
-    <span class="status-pill status-warning">Integracao parcial</span>
+    <span class="status-pill status-warning">Integração parcial</span>
 {% elif source == "local" %}
     <span class="status-pill status-neutral">Dados locais da interface</span>
 {% elif source == "unavailable" %}
-    <span class="status-pill status-neutral">Integracao indisponivel</span>
+    <span class="status-pill status-neutral">Integração indisponível</span>
 {% else %}
     <span class="status-pill status-danger">Fallback local</span>
 {% endif %}

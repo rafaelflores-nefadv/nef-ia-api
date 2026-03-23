@@ -2,14 +2,14 @@
 
 {% block content %}
 {% url "operations:status" as operations_status_url %}
-{% include "includes/page_header.html" with header_title="Perfis por automacao" header_subtitle=page_subtitle breadcrumb_parent_label="Operacoes" breadcrumb_parent_url=operations_status_url breadcrumb_current="Perfis por automacao" %}
+{% include "includes/page_header.html" with header_title="Perfis por automação" header_subtitle=page_subtitle breadcrumb_parent_label="Operações" breadcrumb_parent_url=operations_status_url breadcrumb_current="Perfis por automação" %}
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
     {% if integration_source == "api" %}
         <span class="admin-note">Leitura administrativa via FastAPI.</span>
     {% else %}
-        <span class="admin-note">Integracao FastAPI indisponivel para esta tela.</span>
+        <span class="admin-note">Integração FastAPI indisponível para esta tela.</span>
     {% endif %}
 </div>
 
@@ -29,13 +29,13 @@
             <table class="table admin-table align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Automacao</th>
-                        <th>Status automacao</th>
+                        <th>Automação</th>
+                        <th>Status automação</th>
                         <th>Perfil persistido</th>
                         <th>Perfil resolvido</th>
                         <th>Origem resolvida</th>
                         <th>Hard clamp</th>
-                        <th class="text-end">Acoes</th>
+                        <th class="text-end">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -61,7 +61,7 @@
                                     </div>
                                     <div class="mt-1"><code>{{ item.persisted_execution_profile }}</code></div>
                                 {% else %}
-                                    <span class="status-pill status-neutral">Nao configurado</span>
+                                    <span class="status-pill status-neutral">Não configurado</span>
                                 {% endif %}
                             </td>
                             <td>
@@ -75,7 +75,7 @@
                                 <span class="status-pill {{ item.source_css_class }}">{{ item.source_label }}</span>
                                 {% if item.resolved_profile_source_details.origin %}
                                     <div class="admin-note mt-1">
-                                        origem tecnica: <code>{{ item.resolved_profile_source_details.origin }}</code>
+                                        origem técnica: <code>{{ item.resolved_profile_source_details.origin }}</code>
                                     </div>
                                 {% endif %}
                             </td>
@@ -87,8 +87,8 @@
                                 {% endif %}
                             </td>
                             <td class="text-end">
-                                <a class="btn btn-sm btn-outline-secondary" href="{% url 'operations:execution_profile_edit' item.automation_id %}">
-                                    Editar
+                                <a class="btn btn-sm btn-outline-secondary btn-icon-action" href="{% url 'operations:execution_profile_edit' item.automation_id %}" title="Editar" aria-label="Editar">
+                                    <i class="bi bi-pencil"></i>
                                 </a>
                             </td>
                         </tr>
@@ -98,6 +98,6 @@
         </div>
     </section>
 {% else %}
-    {% include "includes/empty_state.html" with empty_icon="bi bi-sliders" empty_title="Nenhuma automacao retornada" empty_message="Nao foi possivel carregar automacoes/configuracoes via FastAPI para este ambiente." %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-sliders" empty_title="Nenhuma automação retornada" empty_message="Não foi possível carregar automações/configurações via FastAPI para este ambiente." %}
 {% endif %}
 {% endblock %}

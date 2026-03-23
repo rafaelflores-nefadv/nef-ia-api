@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+import uuid
 from uuid import UUID
 
 from sqlalchemy import select
@@ -26,3 +28,13 @@ class SharedAnalysisRepository:
     def get_execution_by_id(self, execution_id: UUID) -> AnalysisExecution | None:
         stmt = select(AnalysisExecution).where(AnalysisExecution.id == execution_id)
         return self.session.execute(stmt).scalar_one_or_none()
+
+    def create_request_for_automation(self, *, automation_id: UUID) -> AnalysisRequest:
+        request = AnalysisRequest(
+            id=uuid.uuid4(),
+            automation_id=automation_id,
+            created_at=datetime.now(timezone.utc),
+        )
+        self.session.add(request)
+        self.session.flush()
+        return request

@@ -83,7 +83,7 @@
                         <th>Provider</th>
                         <th>Modelo</th>
                         <th>Status</th>
-                        <th>Inicio</th>
+                        <th>Início</th>
                         <th>Fim</th>
                         <th>Duração</th>
                         <th>Custo</th>
@@ -110,7 +110,9 @@
                             <td>{{ execution.cost_display|default:"-" }}</td>
                             <td class="text-end">
                                 <div class="table-actions">
-                                    <a href="{% url 'executions:detail' execution.id %}" class="btn btn-sm btn-outline-secondary">Ver detalhe</a>
+                                    <a href="{% url 'executions:detail' execution.id %}" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Ver detalhes" aria-label="Ver detalhes">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
                                 </div>
                             </td>
                         </tr>

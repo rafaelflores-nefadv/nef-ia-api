@@ -1,15 +1,14 @@
-{% extends "layouts/base_admin.html" %}
+﻿{% extends "layouts/base_admin.html" %}
 
 {% block content %}
-{% url "prompts:execute" as prompt_execute_url %}
-{% include "includes/page_header.html" with header_title="Prompts de automação" header_subtitle=page_subtitle breadcrumb_current="Prompts de automação" header_action_url=prompt_execute_url header_action_label="Executar automação" header_action_icon="bi bi-play-circle" header_side_text=list_counter_label %}
+{% include "includes/page_header.html" with header_title="Automações" header_subtitle=page_subtitle breadcrumb_current="Automações" header_side_text=list_counter_label %}
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
     {% if integration_source == "api" %}
-        <span class="admin-note">Fonte oficial: automations + automation_prompts via FastAPI.</span>
+        <span class="admin-note">Fonte oficial via FastAPI e banco compartilhado.</span>
     {% else %}
-        <span class="admin-note">Nao foi possivel carregar dados oficiais da FastAPI.</span>
+        <span class="admin-note">Não foi possível carregar dados oficiais da FastAPI.</span>
     {% endif %}
 </div>
 
@@ -23,6 +22,27 @@
     </div>
 {% endif %}
 
+<section class="panel-card mb-3">
+    <form method="get" class="row g-2">
+        <div class="col-12 col-md-5">
+            <label class="form-label small fw-semibold mb-1">Busca</label>
+            <input type="text" name="q" class="form-control" value="{{ search_query }}" placeholder="Nome da automação oficial">
+        </div>
+        <div class="col-12 col-md-3">
+            <label class="form-label small fw-semibold mb-1">Status</label>
+            <select name="status" class="form-select">
+                <option value="">Todos</option>
+                <option value="ativo" {% if selected_status == "ativo" %}selected{% endif %}>Ativas</option>
+                <option value="inativo" {% if selected_status == "inativo" %}selected{% endif %}>Inativas</option>
+            </select>
+        </div>
+        <div class="col-12 d-flex gap-2">
+            <button type="submit" class="btn btn-dark">Filtrar</button>
+            <a href="{% url 'prompts:list' %}" class="btn btn-outline-secondary">Limpar</a>
+        </div>
+    </form>
+</section>
+
 {% if automations %}
     <section class="panel-card p-0 overflow-hidden">
         <div class="table-responsive">
@@ -30,19 +50,63 @@
                 <thead>
                     <tr>
                         <th>Automação</th>
-                        <th>ID</th>
-                        <th>Status</th>
-                        <th>Prompt oficial</th>
-                        <th>Versão</th>
+                        <th>Chave</th>
                         <th>Runtime</th>
+                        <th>Prompt oficial</th>
+                        <th>Contrato</th>
+                        <th>Status</th>
                         <th class="text-end">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for automation in automations %}
                         <tr>
-                            <td class="fw-semibold">{{ automation.automation_name }}</td>
-                            <td><code>{{ automation.automation_id }}</code></td>
+                            <td>
+                                <div class="fw-semibold">{{ automation.automation_name }}</div>
+                                <small class="admin-note"><code>{{ automation.automation_id }}</code></small>
+                            </td>
+                            <td>
+                                {% if automation.owner_token_name %}
+                                    <span class="status-pill status-neutral">{{ automation.owner_token_name }}</span>
+                                {% else %}
+                                    <span class="admin-note">Não vinculada</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if automation.provider_slug and automation.model_slug %}
+                                    <div>{{ automation.provider_slug }} / {{ automation.model_slug }}</div>
+                                {% else %}
+                                    <div class="admin-note">Runtime não resolvido</div>
+                                {% endif %}
+                                {% if automation.credential_name %}
+                                    <small class="admin-note">{{ automation.credential_name }}</small>
+                                {% elif automation.credential_id %}
+                                    <small class="admin-note"><code>{{ automation.credential_id }}</code></small>
+                                {% else %}
+                                    <small class="admin-note">Credencial ativa do provider</small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if automation.prompt_available %}
+                                    <span class="status-pill status-success">Vinculado</span>
+                                    <div class="admin-note mt-1">{{ automation.prompt_summary|default:"-" }}</div>
+                                    {% if automation.prompt_version %}
+                                        <div class="admin-note">Versão: <code>v{{ automation.prompt_version }}</code></div>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="status-pill status-danger">Ausente</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="status-pill {{ automation.output_contract_source_css }}">{{ automation.output_contract_source_label }}</span>
+                                {% if automation.has_explicit_output_contract %}
+                                    <div class="admin-note mt-1">Tipo: {{ automation.output_type_label }}</div>
+                                    <div class="admin-note">Parser: {{ automation.result_parser_label }}</div>
+                                    <div class="admin-note">Formatador: {{ automation.result_formatter_label }}</div>
+                                {% else %}
+                                    <div class="admin-note mt-1">Sem contrato explícito.</div>
+                                {% endif %}
+                            </td>
                             <td>
                                 {% if automation.automation_is_active %}
                                     <span class="status-pill status-success">Ativa</span>
@@ -50,32 +114,33 @@
                                     <span class="status-pill status-neutral">Inativa</span>
                                 {% endif %}
                             </td>
-                            <td>
-                                {% if automation.prompt_available %}
-                                    <span class="status-pill status-success">Disponível</span>
-                                    <div class="admin-note mt-1">{{ automation.prompt_summary|default:"-" }}</div>
-                                {% else %}
-                                    <span class="status-pill status-danger">Indisponível</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if automation.prompt_version %}
-                                    <code>v{{ automation.prompt_version }}</code>
-                                {% else %}
-                                    -
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if automation.provider_slug and automation.model_slug %}
-                                    <code>{{ automation.provider_slug }}/{{ automation.model_slug }}</code>
-                                {% else %}
-                                    <span class="admin-note">Não resolvido</span>
-                                {% endif %}
-                            </td>
                             <td class="text-end">
-                                <a href="{% url 'prompts:execute' %}?automation={{ automation.automation_id }}" class="btn btn-sm btn-outline-primary">
-                                    Executar automação
-                                </a>
+                                <div class="table-actions">
+                                    <a href="{% url 'prompts:detail' automation.automation_id %}" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Visualizar" aria-label="Visualizar">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    <a href="{% url 'prompts:prompt_detail' automation.automation_id %}" class="btn btn-sm btn-outline-info btn-icon-action" title="Visualizar prompt" aria-label="Visualizar prompt">
+                                        <i class="bi bi-chat-left-text"></i>
+                                    </a>
+                                    <a href="{% url 'prompts:edit' automation.automation_id %}" class="btn btn-sm btn-outline-primary btn-icon-action" title="Editar" aria-label="Editar">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <form method="post" action="{% url 'prompts:toggle_status' automation.automation_id %}">
+                                        {% csrf_token %}
+                                        {% if automation.automation_is_active %}
+                                            <button type="submit" class="btn btn-sm btn-outline-danger btn-icon-action" title="Desativar" aria-label="Desativar">
+                                                <i class="bi bi-slash-circle"></i>
+                                            </button>
+                                        {% else %}
+                                            <button type="submit" class="btn btn-sm btn-outline-success btn-icon-action" title="Ativar" aria-label="Ativar">
+                                                <i class="bi bi-check-circle"></i>
+                                            </button>
+                                        {% endif %}
+                                    </form>
+                                    <a href="{% url 'prompts:delete' automation.automation_id %}" class="btn btn-sm btn-outline-danger btn-icon-action" title="Excluir" aria-label="Excluir">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
+                                </div>
                             </td>
                         </tr>
                     {% endfor %}
@@ -84,6 +149,6 @@
         </div>
     </section>
 {% else %}
-    {% include "includes/empty_state.html" with empty_icon="bi bi-chat-square-text" empty_title="Nenhuma automação disponível" empty_message="A lista oficial de automações não retornou itens para este ambiente." empty_action_url=prompt_execute_url empty_action_label="Executar automação" empty_action_icon="bi bi-play-circle" %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-diagram-3" empty_title="Nenhuma automação oficial disponível" empty_message="Não foram encontradas automações oficiais para os filtros selecionados." %}
 {% endif %}
 {% endblock %}

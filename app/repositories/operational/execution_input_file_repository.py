@@ -40,3 +40,11 @@ class ExecutionInputFileRepository:
             .limit(1)
         )
         return self.session.execute(stmt).scalar_one_or_none()
+
+    def list_by_request_file_id(self, request_file_id: UUID) -> list[DjangoAiExecutionInputFile]:
+        stmt = (
+            select(DjangoAiExecutionInputFile)
+            .where(DjangoAiExecutionInputFile.request_file_id == request_file_id)
+            .order_by(DjangoAiExecutionInputFile.created_at.desc())
+        )
+        return list(self.session.execute(stmt).scalars().all())

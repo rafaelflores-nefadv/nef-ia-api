@@ -2,22 +2,22 @@
 
 {% block content %}
 {% url "fastapi_integration_settings" as integration_settings_url %}
-{% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Configuracoes" breadcrumb_parent_url=integration_settings_url breadcrumb_current="Bootstrap Integracao FastAPI" %}
+{% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Configurações" breadcrumb_parent_url=integration_settings_url breadcrumb_current="Bootstrap Integração FastAPI" %}
 
 <section class="panel-card mb-3 border border-warning-subtle">
     <div class="d-flex align-items-center gap-2 mb-2">
-        <span class="status-pill status-warning">Operacao sensivel</span>
+        <span class="status-pill status-warning">Operação sensível</span>
         <span class="badge text-bg-warning">Bootstrap</span>
     </div>
     <p class="admin-note mb-0">
-        Use esta tela apenas na configura&ccedil;&atilde;o inicial do sistema. O token bootstrap pode ser armazenado localmente no Django para autentica&ccedil;&atilde;o administrativa; os demais tokens permanecem remotos por padr&atilde;o.
+        Use esta tela apenas na configuração inicial do sistema. O token bootstrap pode ser armazenado localmente no Django para autenticação administrativa; os demais tokens permanecem remotos por padrão.
     </p>
 </section>
 
 {% if bootstrap_already_done %}
     <section class="panel-card mb-3 border border-warning-subtle">
         <div class="alert alert-warning mb-0" role="alert">
-            <strong>Bootstrap j&aacute; realizado.</strong> N&atilde;o &eacute; necess&aacute;rio repetir esta opera&ccedil;&atilde;o.
+            <strong>Bootstrap já realizado.</strong> Não é necessário repetir esta operação.
         </div>
     </section>
 {% endif %}

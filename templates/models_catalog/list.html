@@ -9,7 +9,7 @@
     {% if integration_source == "api" %}
         <span class="admin-note">Leitura principal via FastAPI.</span>
     {% else %}
-        <span class="admin-note">Fallback local temporario.</span>
+        <span class="admin-note">Fallback local temporário.</span>
     {% endif %}
 </div>
 
@@ -32,13 +32,13 @@
                         <th>Provider</th>
                         <th>Nome</th>
                         <th>Slug</th>
-                        <th>Vinculo FastAPI</th>
+                        <th>Vínculo FastAPI</th>
                         <th>Janela de contexto</th>
                         <th>Custo input/1k</th>
                         <th>Custo output/1k</th>
                         <th>Status</th>
                         <th>Atualizado em</th>
-                        <th class="text-end">Acoes</th>
+                        <th class="text-end">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -68,24 +68,32 @@
                             <td class="text-end">
                                 <div class="table-actions">
                                     {% if model.fastapi_model_id %}
-                                        <a href="{% url 'models_catalog:edit' model.fastapi_model_id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
+                                        <a href="{% url 'models_catalog:edit' model.fastapi_model_id %}" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Editar" aria-label="Editar">
+                                            <i class="bi bi-pencil"></i>
+                                        </a>
                                         <form method="post" action="{% url 'models_catalog:toggle_status' model.fastapi_model_id %}">
                                             {% csrf_token %}
                                             {% if model.is_active %}
-                                                <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
+                                                <button type="submit" class="btn btn-sm btn-outline-danger btn-icon-action" title="Desativar" aria-label="Desativar">
+                                                    <i class="bi bi-slash-circle"></i>
+                                                </button>
                                             {% else %}
-                                                <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
+                                                <button type="submit" class="btn btn-sm btn-outline-success btn-icon-action" title="Ativar" aria-label="Ativar">
+                                                    <i class="bi bi-check-circle"></i>
+                                                </button>
                                             {% endif %}
                                         </form>
                                         <button
                                             type="button"
-                                            class="btn btn-sm btn-outline-danger"
+                                            class="btn btn-sm btn-outline-danger btn-icon-action"
                                             data-bs-toggle="modal"
                                             data-bs-target="#deleteModelModal"
                                             data-delete-url="{% url 'models_catalog:delete' model.fastapi_model_id %}"
                                             data-model-name="{{ model.name|escape }}"
+                                            title="Excluir"
+                                            aria-label="Excluir"
                                         >
-                                            Excluir
+                                            <i class="bi bi-trash"></i>
                                         </button>
                                     {% else %}
                                         <span class="admin-note">Sem ID remoto</span>
@@ -99,7 +107,7 @@
         </div>
     </section>
 {% else %}
-    {% include "includes/empty_state.html" with empty_icon="bi bi-boxes" empty_title="Nenhum modelo cadastrado" empty_message="Cadastre um modelo conhecido para disponibilizar operacoes de IA no ambiente." empty_action_url=model_create_url empty_action_label="Criar modelo" empty_action_icon="bi bi-plus-lg" %}
+    {% include "includes/empty_state.html" with empty_icon="bi bi-boxes" empty_title="Nenhum modelo cadastrado" empty_message="Cadastre um modelo conhecido para disponibilizar operações de IA no ambiente." empty_action_url=model_create_url empty_action_label="Criar modelo" empty_action_icon="bi bi-plus-lg" %}
 {% endif %}
 
 {% if models %}
@@ -111,7 +119,7 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
                 </div>
                 <div class="modal-body">
-                    <p class="mb-2">Tem certeza que deseja excluir este modelo? Essa ação não poderá ser desfeita.</p>
+                    <p class="mb-2">Tem certeza de que deseja excluir este modelo? Essa ação não poderá ser desfeita.</p>
                     <small id="deleteModelName" class="text-secondary d-none"></small>
                 </div>
                 <div class="modal-footer">

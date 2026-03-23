@@ -1,0 +1,19 @@
+﻿{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "prompts:list" as list_url %}
+{% include "includes/page_header.html" with header_title="Excluir automação oficial" header_subtitle=automation.automation_name breadcrumb_parent_label="Automações" breadcrumb_parent_url=list_url breadcrumb_current="Excluir" %}
+
+<section class="panel-card">
+    <p>Tem certeza que deseja excluir a automação oficial <strong>{{ automation.automation_name }}</strong>?</p>
+    <p class="admin-note mb-4">Essa ação remove a automação oficial e o prompt oficial vinculado. Dependências técnicas podem bloquear a exclusão.</p>
+
+    <form method="post">
+        {% csrf_token %}
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-danger">Excluir automação oficial</button>
+            <a href="{% url 'prompts:detail' automation.automation_id %}" class="btn btn-outline-secondary">Cancelar</a>
+        </div>
+    </form>
+</section>
+{% endblock %}

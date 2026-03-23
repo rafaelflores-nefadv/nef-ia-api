@@ -45,9 +45,17 @@ class TestPrompt(models.Model):
 
 
 class TestPromptExecution(models.Model):
+    STATUS_QUEUED = "queued"
+    STATUS_PENDING = "pending"
+    STATUS_RUNNING = "running"
+    STATUS_PROCESSING = "processing"
     STATUS_COMPLETED = "completed"
     STATUS_FAILED = "failed"
     STATUS_CHOICES = (
+        (STATUS_QUEUED, "Na fila"),
+        (STATUS_PENDING, "Pendente"),
+        (STATUS_RUNNING, "Em andamento"),
+        (STATUS_PROCESSING, "Processando"),
         (STATUS_COMPLETED, "Concluida"),
         (STATUS_FAILED, "Falhou"),
     )
@@ -78,6 +86,14 @@ class TestPromptExecution(models.Model):
     request_file_name = models.CharField("Nome do arquivo de entrada", max_length=255)
     request_file_mime_type = models.CharField("MIME type do arquivo de entrada", max_length=160, blank=True, default="")
     request_file_size = models.PositiveIntegerField("Tamanho do arquivo de entrada", default=0)
+    remote_execution_id = models.UUIDField("ID remoto da execucao", null=True, blank=True, db_index=True)
+    remote_status = models.CharField("Status remoto", max_length=32, blank=True, default="")
+    remote_phase = models.CharField("Fase remota", max_length=64, blank=True, default="")
+    remote_progress_percent = models.PositiveSmallIntegerField("Progresso remoto (%)", default=0)
+    remote_status_message = models.TextField("Mensagem de status remota", blank=True, default="")
+    remote_result_ready = models.BooleanField("Resultado remoto pronto", default=False)
+    remote_error_message = models.TextField("Erro remoto", blank=True, default="")
+    remote_last_checked_at = models.DateTimeField("Status remoto verificado em", null=True, blank=True)
     status = models.CharField("Status", max_length=20, choices=STATUS_CHOICES)
     result_type = models.CharField("Tipo de resultado", max_length=20, choices=RESULT_CHOICES)
     output_text = models.TextField("Saida textual", blank=True, default="")
@@ -86,6 +102,11 @@ class TestPromptExecution(models.Model):
     output_file_size = models.PositiveIntegerField("Tamanho do arquivo de saida", default=0)
     output_file_content = models.BinaryField("Conteudo binario do arquivo de saida", null=True, blank=True)
     output_file_checksum = models.CharField("Checksum do arquivo de saida", max_length=128, blank=True, default="")
+    debug_file_name = models.CharField("Nome do arquivo de debug", max_length=255, blank=True, default="")
+    debug_file_mime_type = models.CharField("MIME type do arquivo de debug", max_length=160, blank=True, default="")
+    debug_file_size = models.PositiveIntegerField("Tamanho do arquivo de debug", default=0)
+    debug_file_content = models.BinaryField("Conteudo binario do arquivo de debug", null=True, blank=True)
+    debug_file_checksum = models.CharField("Checksum do arquivo de debug", max_length=128, blank=True, default="")
     provider_calls = models.PositiveIntegerField("Chamadas ao provider", default=0)
     input_tokens = models.PositiveIntegerField("Tokens de entrada", default=0)
     output_tokens = models.PositiveIntegerField("Tokens de saida", default=0)

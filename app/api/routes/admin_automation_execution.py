@@ -15,6 +15,8 @@ from app.schemas.admin_automation_execution import (
     AutomationRuntimeDetailResponse,
     AutomationRuntimeItemResponse,
     AutomationRuntimeListResponse,
+    AutomationRuntimeStatusUpdateRequest,
+    AutomationRuntimeUpdateRequest,
 )
 from app.services.admin_automation_execution_service import AdminAutomationExecutionService
 
@@ -58,6 +60,67 @@ def get_automation_runtime(
     )
     payload = service.get_automation_runtime(automation_id=automation_id)
     return AutomationRuntimeDetailResponse(**payload)
+
+
+@router.patch(
+    "/automations/runtime/{automation_id}",
+    response_model=AutomationRuntimeDetailResponse,
+)
+def update_automation_runtime(
+    automation_id: UUID,
+    payload: AutomationRuntimeUpdateRequest,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> AutomationRuntimeDetailResponse:
+    service = AdminAutomationExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    updated = service.update_automation_runtime(
+        automation_id=automation_id,
+        changes=payload.model_dump(exclude_unset=True),
+    )
+    return AutomationRuntimeDetailResponse(**updated)
+
+
+@router.patch(
+    "/automations/runtime/{automation_id}/status",
+    response_model=AutomationRuntimeDetailResponse,
+)
+def set_automation_runtime_status(
+    automation_id: UUID,
+    payload: AutomationRuntimeStatusUpdateRequest,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> AutomationRuntimeDetailResponse:
+    service = AdminAutomationExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    updated = service.set_automation_runtime_status(
+        automation_id=automation_id,
+        is_active=payload.is_active,
+    )
+    return AutomationRuntimeDetailResponse(**updated)
+
+
+@router.delete(
+    "/automations/runtime/{automation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_automation_runtime(
+    automation_id: UUID,
+    _: DjangoAiUser = Depends(get_current_admin_user),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+):
+    service = AdminAutomationExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    service.delete_automation_runtime(automation_id=automation_id)
 
 
 @router.post(

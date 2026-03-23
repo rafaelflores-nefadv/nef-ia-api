@@ -64,7 +64,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
 
         context.update(
             {
-                "page_title": "Operacoes",
+                "page_title": "Operações",
                 "page_subtitle": "Visao consolidada do status operacional da plataforma.",
                 "active_menu": "operacoes",
                 "summary_cards": [
@@ -126,7 +126,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
             alerts.append(
                 {
                     "level": "danger",
-                    "message": "FastAPI indisponivel. Exibindo dados de saude com fallback.",
+                    "message": "FastAPI indisponível. Exibindo dados de saúde com fallback.",
                 }
             )
         elif health["overall"]["status"] == "degraded":
@@ -204,7 +204,7 @@ class OperationsStatusView(LoginRequiredMixin, TemplateView):
                 {
                     "level": "warning",
                     "message": (
-                        "Existem providers sem configuracao minima para operacao."
+                        "Existem providers sem configuração mínima para operação."
                     ),
                 }
             )
@@ -234,8 +234,8 @@ class AutomationExecutionSettingsListView(LoginRequiredMixin, ListView):
         context = super().get_context_data(**kwargs)
         context.update(
             {
-                "page_title": "Perfis por automacao",
-                "page_subtitle": "Configuracao administrativa persistida de perfil operacional por automacao.",
+                "page_title": "Perfis por automação",
+                "page_subtitle": "Configuração administrativa persistida de perfil operacional por automação.",
                 "active_menu": "operacoes_perfis",
                 "integration_source": getattr(self, "integration_source", "unavailable"),
                 "integration_warnings": getattr(self, "integration_warnings", []),
@@ -315,7 +315,7 @@ class AutomationExecutionSettingsUpdateView(LoginRequiredMixin, FormView):
         context.update(
             {
                 "page_title": "Editar perfil operacional",
-                "page_subtitle": "Persistencia por automacao com fallback ativo por env/config.",
+                "page_subtitle": "Persistência por automação com fallback ativo por env/config.",
                 "active_menu": "operacoes_perfis",
                 "setting": self.setting_item,
             }

@@ -6,8 +6,12 @@ import httpx
 
 from app.core.exceptions import AppException
 from app.services.providers.http_client_utils import (
+    build_provider_transport_error_details,
+    create_provider_request_trace,
+    finalize_provider_request_trace,
     raise_provider_http_exception,
     resolve_timeout_seconds,
+    summarize_provider_error_message,
 )
 
 
@@ -28,6 +32,7 @@ class GeminiClient:
             api_key=api_key,
             config_json=config_json,
             default_timeout_seconds=default_timeout_seconds,
+            model_name=None,
         )
         items = payload.get("models")
         if not isinstance(items, list):
@@ -49,6 +54,7 @@ class GeminiClient:
         temperature: float,
         config_json: dict[str, Any],
         default_timeout_seconds: int,
+        client_request_id: str | None = None,
     ) -> dict[str, Any]:
         model_id = self._normalize_model_id(model_name)
         generation_config: dict[str, Any] = {}
@@ -62,6 +68,8 @@ class GeminiClient:
             api_key=api_key,
             config_json=config_json,
             default_timeout_seconds=default_timeout_seconds,
+            model_name=model_name,
+            client_request_id=client_request_id,
             json_body={
                 "contents": [
                     {
@@ -146,8 +154,10 @@ class GeminiClient:
         method: str,
         path: str,
         api_key: str,
+        model_name: str | None,
         config_json: dict[str, Any],
         default_timeout_seconds: int,
+        client_request_id: str | None = None,
         json_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         timeout_seconds = resolve_timeout_seconds(
@@ -161,31 +171,69 @@ class GeminiClient:
             "accept": "application/json",
             "content-type": "application/json",
         }
+        normalized_client_request_id = str(client_request_id or "").strip()
+        if normalized_client_request_id:
+            headers["X-Client-Request-Id"] = normalized_client_request_id
+        request_url = f"{api_base}{path}"
+        request_trace = create_provider_request_trace(
+            provider_name="Gemini",
+            provider_slug="gemini",
+            model_name=model_name,
+            model_slug=model_name,
+            resolved_model_identifier=model_name,
+            request_url=request_url,
+            endpoint_name=path.strip("/"),
+            request_method=method.upper(),
+            request_timeout_seconds=timeout_seconds,
+            request_payload=json_body,
+            request_headers=headers,
+            extra_fields={
+                "request_profile_resolved": "legacy_chat",
+                "token_limit_param_used": "maxOutputTokens",
+                "retry_attempted": False,
+                "retry_count": 0,
+                "error_type": "",
+            },
+        )
 
         try:
             response = httpx.request(
                 method=method.upper(),
-                url=f"{api_base}{path}",
+                url=request_url,
                 headers=headers,
                 json=json_body,
                 timeout=timeout_seconds,
             )
             response.raise_for_status()
         except httpx.TimeoutException as exc:
+            details = build_provider_transport_error_details(
+                provider="gemini",
+                transport_exception=exc,
+                request_trace=request_trace,
+            )
             raise AppException(
-                "Provider request timed out.",
+                summarize_provider_error_message(details=details),
                 status_code=504,
                 code="provider_timeout",
-                details={"provider": "gemini"},
+                details=details,
             ) from exc
         except httpx.HTTPStatusError as exc:
-            raise_provider_http_exception(provider="gemini", exc=exc)
+            raise_provider_http_exception(
+                provider="gemini",
+                exc=exc,
+                request_trace=request_trace,
+            )
         except httpx.HTTPError as exc:
+            details = build_provider_transport_error_details(
+                provider="gemini",
+                transport_exception=exc,
+                request_trace=request_trace,
+            )
             raise AppException(
-                "Failed to communicate with provider.",
+                summarize_provider_error_message(details=details),
                 status_code=502,
                 code="provider_network_error",
-                details={"provider": "gemini"},
+                details=details,
             ) from exc
 
         try:
@@ -205,6 +253,27 @@ class GeminiClient:
                 code="provider_invalid_response",
                 details={"provider": "gemini"},
             )
+        provider_request_id = ""
+        for header_name in ("x-request-id", "request-id"):
+            header_value = response.headers.get(header_name)
+            if header_value:
+                provider_request_id = str(header_value)
+                break
+        payload["provider_debug"] = {
+            **finalize_provider_request_trace(request_trace),
+            "provider_name": "Gemini",
+            "provider_slug": "gemini",
+            "model": str(model_name or ""),
+            "request_profile_resolved": "legacy_chat",
+            "token_limit_param_used": "maxOutputTokens",
+            "client_request_id": normalized_client_request_id,
+            "provider_request_id": provider_request_id,
+            "endpoint": path.strip("/"),
+            "status_code": int(response.status_code),
+            "retry_attempted": False,
+            "retry_count": 0,
+            "error_type": "",
+        }
         return payload
 
     def _resolve_api_base(self, *, config_json: dict[str, Any]) -> str:

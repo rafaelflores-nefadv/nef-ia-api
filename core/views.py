@@ -53,7 +53,7 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             source = str(payload.get("source") or "unavailable")
             if source != "api":
                 catalog_integration_warnings.append(
-                    f"{domain_label}: leitura remota indisponivel em modo pleno ({source})."
+                    f"{domain_label}: leitura remota indisponível em modo pleno ({source})."
                 )
             for warning in payload.get("warnings", []):
                 warning_message = str(warning or "").strip()
@@ -87,8 +87,8 @@ def _integration_status_meta(status: str) -> dict[str, str]:
         "online": {"label": "Conectado", "css_class": "status-success"},
         "degraded": {"label": "Conexao parcial", "css_class": "status-warning"},
         "disabled": {"label": "Desativado", "css_class": "status-neutral"},
-        "error": {"label": "Indisponivel", "css_class": "status-danger"},
-        "unknown": {"label": "Nao testado", "css_class": "status-neutral"},
+        "error": {"label": "Indisponível", "css_class": "status-danger"},
+        "unknown": {"label": "Não testado", "css_class": "status-neutral"},
     }
     return table.get(status, table["unknown"])
 
@@ -128,7 +128,7 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
                 "status": "disabled",
                 "status_label": meta["label"],
                 "status_css_class": meta["css_class"],
-                "message": "Integracao desativada nas configuracoes.",
+                "message": "Integração desativada nas configurações.",
             }
 
         if selected_token is None:
@@ -153,7 +153,7 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
                 "status": "online",
                 "status_label": meta["label"],
                 "status_css_class": meta["css_class"],
-                "message": f"Ultima validacao registrada em {validated}.",
+                "message": f"Última validação registrada em {validated}.",
             }
 
         meta = _integration_status_meta("unknown")
@@ -186,7 +186,7 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
             {
                 "page_title": "Integracao FastAPI",
                 "form_title": "Integracao FastAPI",
-                "form_subtitle": "Gerencie URL, status e tokens da integracao administrativa.",
+                "form_subtitle": "Gerencie URL, status e tokens da integração administrativa.",
                 "active_menu": "integracao_fastapi",
                 "form": form,
                 "token_form": token_form,
@@ -235,9 +235,9 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
                             "Teste de conexao concluiu com pendencias. Revise URL e token selecionado.",
                         )
                 else:
-                    messages.success(request, "Configuracoes de integracao salvas com sucesso.")
+                    messages.success(request, "Configurações de integração salvas com sucesso.")
             else:
-                messages.error(request, "Nao foi possivel salvar as configuracoes informadas.")
+                messages.error(request, "Não foi possível salvar as configurações informadas.")
 
         elif action == "create_token":
             token_form = FastAPIIntegrationTokenCreateForm(request.POST)
@@ -256,12 +256,12 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
                 except FastAPIIntegrationServiceError as exc:
                     messages.error(request, str(exc))
             else:
-                messages.error(request, "Informe um nome valido para criar o token.")
+                messages.error(request, "Informe um nome válido para criar o token.")
 
         elif action in {"select_token", "deactivate_token", "revoke_token"}:
             token_reference = self._extract_token_reference(request.POST.get("token_id"))
             if token_reference is None:
-                messages.error(request, "Token informado e invalido.")
+                messages.error(request, "Token informado é inválido.")
             else:
                 try:
                     if action == "select_token":
@@ -281,7 +281,7 @@ class FastAPIIntegrationSettingsView(LoginRequiredMixin, TemplateView):
                     messages.error(request, str(exc))
 
         else:
-            messages.error(request, "Acao informada nao e suportada.")
+            messages.error(request, "Ação informada não é suportada.")
 
         config.refresh_from_db()
         tokens = FastAPIIntegrationService.list_tokens(config=config)
@@ -350,7 +350,7 @@ class FastAPIIntegrationBootstrapView(LoginRequiredMixin, TemplateView):
             except FastAPIIntegrationServiceError as exc:
                 messages.error(request, str(exc))
         else:
-            messages.error(request, "Informe nome e token bootstrap validos.")
+            messages.error(request, "Informe nome e token bootstrap válidos.")
 
         config.refresh_from_db()
         tokens = FastAPIIntegrationService.list_tokens(config=config)

@@ -98,7 +98,7 @@ class ProviderListView(LoginRequiredMixin, ListView):
         context.update(
             {
                 "page_title": "Providers",
-                "page_subtitle": "Gestao administrativa de integracoes disponiveis.",
+                "page_subtitle": "Gestão administrativa de integrações disponíveis.",
                 "active_menu": "providers",
                 "integration_source": getattr(self, "providers_source", "fallback_local"),
                 "integration_warnings": getattr(self, "providers_warnings", []),
@@ -160,7 +160,7 @@ class ProviderUpdateView(LoginRequiredMixin, FormView):
             self.provider_item = service.get_provider(remote_provider_id=self.remote_provider_id)
         except ProvidersAPIServiceError as exc:
             if exc.code == "provider_not_found":
-                raise Http404("Provider remoto nao encontrado.") from exc
+                raise Http404("Provider remoto não encontrado.") from exc
             messages.error(request, str(exc))
             return redirect("providers:list")
         return super().dispatch(request, *args, **kwargs)
@@ -187,7 +187,7 @@ class ProviderUpdateView(LoginRequiredMixin, FormView):
                 "form_title": "Editar provider",
                 "form_subtitle": "Atualize os dados do provider selecionado.",
                 "active_menu": "providers",
-                "submit_label": "Salvar alteracoes",
+                "submit_label": "Salvar alterações",
                 "is_editing": True,
                 "latest_connectivity_result": latest_result,
                 "remote_provider_id": self.remote_provider_id,
@@ -234,7 +234,7 @@ def provider_toggle_status(request, remote_id: UUID):
     except ProvidersAPIServiceError as exc:
         messages.error(
             request,
-            f"Nao foi possivel sincronizar status do provider na FastAPI: {exc}",
+            f"Não foi possível sincronizar status do provider na FastAPI: {exc}",
         )
         return redirect("providers:list")
 

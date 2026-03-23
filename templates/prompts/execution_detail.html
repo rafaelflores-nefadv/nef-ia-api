@@ -3,28 +3,36 @@
 {% block content %}
 {% url "prompts:list" as prompts_list_url %}
 {% url "prompts:execute" as prompt_execute_url %}
-{% include "includes/page_header.html" with header_title="Execucao real" header_subtitle=execution.execution_id breadcrumb_parent_label="Prompts de automacao" breadcrumb_parent_url=prompts_list_url breadcrumb_current="Execucao real" %}
+{% include "includes/page_header.html" with header_title="Execução real" header_subtitle=execution.execution_id breadcrumb_parent_label="Prompts de automação" breadcrumb_parent_url=prompts_list_url breadcrumb_current="Execução real" %}
 
-<section class="panel-card mb-3">
+<section class="panel-card mb-3" id="execution-status-card" data-status-endpoint="{{ status_endpoint_url }}" data-initial-terminal="{% if is_terminal %}1{% else %}0{% endif %}">
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
         <div>
             <small class="text-secondary d-block">Status atual</small>
-            <span class="status-pill {{ status_css_class }}">{{ status_label }}</span>
+            <span id="execution-status-pill" class="status-pill {{ status_css_class }}">{{ status_label }}</span>
         </div>
         <div class="d-flex gap-2">
-            <a href="" class="btn btn-outline-secondary">Atualizar status</a>
-            <a href="{{ prompt_execute_url }}?automation={{ execution.automation_id }}" class="btn btn-dark">Nova execucao</a>
+            <a href="{{ prompt_execute_url }}?automation={{ execution.automation_id }}" class="btn btn-dark">Nova execução</a>
         </div>
     </div>
+
+    <div class="mt-3">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+            <small class="text-secondary">Progresso</small>
+            <small id="execution-progress-text" class="fw-semibold">{{ progress_percent }}%</small>
+        </div>
+        <div class="progress" role="progressbar" aria-label="Progresso da execução" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ progress_percent }}">
+            <div id="execution-progress-bar" class="progress-bar" style="width: {{ progress_percent }}%;"></div>
+        </div>
+        <p id="execution-status-message" class="admin-note mt-2 mb-0">{{ status_message }}</p>
+    </div>
+
     <div class="d-flex align-items-center gap-2 mt-2">
         {% include "includes/data_origin_badge.html" with source=integration_source %}
         {% if integration_source == "api_partial" %}
-            <span class="admin-note">Status carregado, mas houve falha ao listar arquivos de saida.</span>
+            <span class="admin-note">Status carregado, mas houve falha ao listar arquivos de saída.</span>
         {% endif %}
     </div>
-    {% if not is_terminal %}
-        <p class="admin-note mt-2 mb-0">Execucao em andamento. A pagina atualiza automaticamente.</p>
-    {% endif %}
 </section>
 
 {% if integration_warnings %}
@@ -43,13 +51,13 @@
     <div class="col-12 col-xl-6">
         <article class="panel-card h-100">
             <div class="panel-title-wrap">
-                <h3 class="panel-title">Identificacao</h3>
+                <h3 class="panel-title">Identificação</h3>
             </div>
             <dl class="row mb-0">
                 <dt class="col-sm-4 text-secondary">Execution ID</dt>
                 <dd class="col-sm-8"><code>{{ execution.execution_id }}</code></dd>
 
-                <dt class="col-sm-4 text-secondary">Automacao</dt>
+                <dt class="col-sm-4 text-secondary">Automação</dt>
                 <dd class="col-sm-8"><code>{{ execution.automation_id }}</code></dd>
 
                 <dt class="col-sm-4 text-secondary">Analysis request</dt>
@@ -64,9 +72,6 @@
                         -
                     {% endif %}
                 </dd>
-
-                <dt class="col-sm-4 text-secondary">Progresso</dt>
-                <dd class="col-sm-8">{% if execution.progress != None %}{{ execution.progress }}%{% else %}-{% endif %}</dd>
             </dl>
         </article>
     </div>
@@ -78,34 +83,33 @@
             </div>
             <dl class="row mb-0">
                 <dt class="col-sm-4 text-secondary">Criado em</dt>
-                <dd class="col-sm-8">{{ execution.created_at|date:"d/m/Y H:i:s"|default:"-" }}</dd>
+                <dd class="col-sm-8" id="execution-created-at">{{ execution.created_at|date:"d/m/Y H:i:s"|default:"-" }}</dd>
 
                 <dt class="col-sm-4 text-secondary">Iniciado em</dt>
-                <dd class="col-sm-8">{{ execution.started_at|date:"d/m/Y H:i:s"|default:"-" }}</dd>
+                <dd class="col-sm-8" id="execution-started-at">{{ execution.started_at|date:"d/m/Y H:i:s"|default:"-" }}</dd>
 
                 <dt class="col-sm-4 text-secondary">Finalizado em</dt>
-                <dd class="col-sm-8">{{ execution.finished_at|date:"d/m/Y H:i:s"|default:"-" }}</dd>
+                <dd class="col-sm-8" id="execution-finished-at">{{ execution.finished_at|date:"d/m/Y H:i:s"|default:"-" }}</dd>
 
-                <dt class="col-sm-4 text-secondary">Ultima checagem</dt>
-                <dd class="col-sm-8">{{ execution.checked_at|date:"d/m/Y H:i:s"|default:"-" }}</dd>
+                <dt class="col-sm-4 text-secondary">Última checagem</dt>
+                <dd class="col-sm-8" id="execution-checked-at">{{ execution.checked_at|date:"d/m/Y H:i:s"|default:"-" }}</dd>
             </dl>
         </article>
     </div>
 </section>
 
-{% if execution.error_message %}
-    <section class="panel-card mb-3">
-        <div class="alert alert-danger mb-0" role="alert">
-            <strong>Falha na execucao:</strong> {{ execution.error_message }}
-        </div>
-    </section>
-{% endif %}
+<section class="panel-card mb-3 {% if not execution.error_message %}d-none{% endif %}" id="execution-error-card">
+    <div class="alert alert-danger mb-0" role="alert" id="execution-error-text">
+        <strong>Falha na execução:</strong> {{ execution.error_message }}
+    </div>
+</section>
 
 <section class="panel-card">
     <div class="panel-title-wrap">
         <h3 class="panel-title">Arquivos gerados</h3>
     </div>
-    {% if file_rows %}
+
+    <div id="execution-files-table-wrap" {% if not file_rows %}class="d-none"{% endif %}>
         <div class="table-responsive">
             <table class="table admin-table align-middle mb-0">
                 <thead>
@@ -118,35 +122,149 @@
                         <th class="text-end">Download</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="execution-files-body">
                     {% for file_row in file_rows %}
                         <tr>
                             <td><code>{{ file_row.id }}</code></td>
                             <td>{{ file_row.file_name }}</td>
                             <td><code>{{ file_row.file_type }}</code></td>
                             <td>{{ file_row.file_size_display }}</td>
-                            <td>{{ file_row.created_at|date:"d/m/Y H:i:s"|default:"-" }}</td>
+                            <td>{{ file_row.created_at_display }}</td>
                             <td class="text-end">
-                                <a href="{{ file_row.download_url }}" class="btn btn-sm btn-outline-secondary">Baixar</a>
+                                <a href="{{ file_row.download_url }}" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Baixar" aria-label="Baixar">
+                                    <i class="bi bi-download"></i>
+                                </a>
                             </td>
                         </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
-    {% else %}
-        <p class="admin-note mb-0">Nenhum arquivo gerado disponivel ate o momento.</p>
-    {% endif %}
+    </div>
+
+    <p id="execution-files-empty" class="admin-note mb-0 {% if file_rows %}d-none{% endif %}">Nenhum arquivo gerado disponível até o momento.</p>
 </section>
 {% endblock %}
 
 {% block extra_js %}
     {{ block.super }}
-    {% if auto_refresh_seconds %}
-        <script>
-            setTimeout(function () {
-                window.location.reload();
-            }, {{ auto_refresh_seconds }} * 1000);
-        </script>
-    {% endif %}
+    <script>
+        (function () {
+            const statusCard = document.getElementById("execution-status-card");
+            if (!statusCard) {
+                return;
+            }
+
+            const statusEndpoint = statusCard.dataset.statusEndpoint;
+            const statusPill = document.getElementById("execution-status-pill");
+            const progressText = document.getElementById("execution-progress-text");
+            const progressBar = document.getElementById("execution-progress-bar");
+            const statusMessage = document.getElementById("execution-status-message");
+            const errorCard = document.getElementById("execution-error-card");
+            const errorText = document.getElementById("execution-error-text");
+            const filesTableWrap = document.getElementById("execution-files-table-wrap");
+            const filesBody = document.getElementById("execution-files-body");
+            const filesEmpty = document.getElementById("execution-files-empty");
+            const createdAtEl = document.getElementById("execution-created-at");
+            const startedAtEl = document.getElementById("execution-started-at");
+            const finishedAtEl = document.getElementById("execution-finished-at");
+            const checkedAtEl = document.getElementById("execution-checked-at");
+
+            let pollTimer = null;
+            let isTerminal = statusCard.dataset.initialTerminal === "1";
+
+            function formatDateTime(value) {
+                if (!value) {
+                    return "-";
+                }
+                const parsed = new Date(value);
+                if (Number.isNaN(parsed.getTime())) {
+                    return "-";
+                }
+                const dd = String(parsed.getDate()).padStart(2, "0");
+                const mm = String(parsed.getMonth() + 1).padStart(2, "0");
+                const yyyy = parsed.getFullYear();
+                const hh = String(parsed.getHours()).padStart(2, "0");
+                const min = String(parsed.getMinutes()).padStart(2, "0");
+                const ss = String(parsed.getSeconds()).padStart(2, "0");
+                return `${dd}/${mm}/${yyyy} ${hh}:${min}:${ss}`;
+            }
+
+            function updateFiles(fileRows) {
+                filesBody.innerHTML = "";
+                if (!fileRows || fileRows.length === 0) {
+                    filesTableWrap.classList.add("d-none");
+                    filesEmpty.classList.remove("d-none");
+                    return;
+                }
+                fileRows.forEach((fileRow) => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td><code>${fileRow.id}</code></td>
+                        <td>${fileRow.file_name}</td>
+                        <td><code>${fileRow.file_type}</code></td>
+                        <td>${fileRow.file_size_display}</td>
+                        <td>${fileRow.created_at_display || "-"}</td>
+                        <td class="text-end"><a href="${fileRow.download_url}" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Baixar" aria-label="Baixar"><i class="bi bi-download"></i></a></td>
+                    `;
+                    filesBody.appendChild(tr);
+                });
+                filesTableWrap.classList.remove("d-none");
+                filesEmpty.classList.add("d-none");
+            }
+
+            function applyPayload(payload) {
+                statusPill.textContent = payload.status_label || "Desconhecido";
+                statusPill.className = `status-pill ${payload.status_css_class || "status-neutral"}`;
+
+                const percent = Number.isFinite(payload.progress_percent) ? payload.progress_percent : 0;
+                progressText.textContent = `${percent}%`;
+                progressBar.style.width = `${percent}%`;
+                progressBar.parentElement.setAttribute("aria-valuenow", String(percent));
+
+                statusMessage.textContent = payload.status_message || "Status atualizado.";
+
+                createdAtEl.textContent = formatDateTime(payload.created_at);
+                startedAtEl.textContent = formatDateTime(payload.started_at);
+                finishedAtEl.textContent = formatDateTime(payload.finished_at);
+                checkedAtEl.textContent = formatDateTime(payload.checked_at);
+
+                if (payload.error_message || payload.status === "failed") {
+                    const message = payload.error_message || "A execução falhou sem detalhe adicional.";
+                    errorText.innerHTML = `<strong>Falha na execução:</strong> ${message}`;
+                    errorCard.classList.remove("d-none");
+                } else {
+                    errorCard.classList.add("d-none");
+                }
+
+                updateFiles(payload.file_rows || []);
+                isTerminal = Boolean(payload.is_terminal);
+            }
+
+            async function pollStatus() {
+                try {
+                    const response = await fetch(statusEndpoint, {
+                        method: "GET",
+                        headers: { "X-Requested-With": "XMLHttpRequest" },
+                    });
+                    const payload = await response.json();
+                    if (!response.ok || !payload.ok) {
+                        throw new Error(payload.error || "Falha ao atualizar status da execução.");
+                    }
+                    applyPayload(payload);
+                    if (isTerminal && pollTimer) {
+                        clearInterval(pollTimer);
+                        pollTimer = null;
+                    }
+                } catch (error) {
+                    statusMessage.textContent = "Não foi possível atualizar automaticamente. Tente novamente em instantes.";
+                }
+            }
+
+            pollStatus();
+            if (!isTerminal) {
+                pollTimer = setInterval(pollStatus, 4000);
+            }
+        })();
+    </script>
 {% endblock %}

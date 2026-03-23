@@ -14,6 +14,11 @@ class TestPromptForm(forms.Form):
             }
         ),
     )
+    automation_id = forms.ChoiceField(
+        label="Automacao vinculada",
+        required=True,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
     prompt_text = forms.CharField(
         label="Texto do prompt de teste",
         required=True,
@@ -43,6 +48,17 @@ class TestPromptForm(forms.Form):
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
     )
 
+    def __init__(self, *args, **kwargs):
+        automation_choices = kwargs.pop("automation_choices", [])
+        selected_automation = kwargs.pop("selected_automation", None)
+        super().__init__(*args, **kwargs)
+        self.fields["automation_id"].choices = [("", "Selecione uma automacao de teste")] + [
+            (str(automation_id), label)
+            for automation_id, label in automation_choices
+        ]
+        if selected_automation is not None and not self.is_bound:
+            self.fields["automation_id"].initial = str(selected_automation)
+
     def clean_name(self) -> str:
         value = str(self.cleaned_data.get("name") or "").strip()
         if not value:
@@ -55,39 +71,22 @@ class TestPromptForm(forms.Form):
             raise ValidationError("Texto do prompt de teste e obrigatorio.")
         return value
 
+    def clean_automation_id(self) -> str:
+        value = str(self.cleaned_data.get("automation_id") or "").strip()
+        if not value:
+            raise ValidationError("Selecione uma automacao de teste vinculada.")
+        return value
+
     def clean_notes(self) -> str:
         return str(self.cleaned_data.get("notes") or "").strip()
 
 
 class TestPromptExecutionForm(forms.Form):
-    automation = forms.ChoiceField(
-        label="Automacao de teste",
-        required=True,
-        widget=forms.Select(attrs={"class": "form-select"}),
-    )
     request_file = forms.FileField(
         label="Arquivo de entrada",
         required=True,
         widget=forms.ClearableFileInput(attrs={"class": "form-control"}),
     )
-
-    def __init__(self, *args, **kwargs):
-        automation_choices = kwargs.pop("automation_choices", [])
-        selected_automation = kwargs.pop("selected_automation", None)
-        super().__init__(*args, **kwargs)
-
-        self.fields["automation"].choices = [("", "Selecione uma automacao de teste")] + [
-            (str(automation_id), label)
-            for automation_id, label in automation_choices
-        ]
-        if selected_automation is not None and not self.is_bound:
-            self.fields["automation"].initial = str(selected_automation)
-
-    def clean_automation(self) -> str:
-        value = str(self.cleaned_data.get("automation") or "").strip()
-        if not value:
-            raise ValidationError("Selecione uma automacao de teste antes de executar.")
-        return value
 
     def clean_request_file(self):
         uploaded_file = self.cleaned_data.get("request_file")

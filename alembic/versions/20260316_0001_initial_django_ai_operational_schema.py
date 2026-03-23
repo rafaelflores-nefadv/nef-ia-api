@@ -26,7 +26,54 @@ def _timestamp_columns() -> list[sa.Column]:
     ]
 
 
+def _create_shared_reference_tables() -> None:
+    op.create_table(
+        "automations",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("name", sa.String(length=255), nullable=False),
+        sa.PrimaryKeyConstraint("id", name="pk_automations"),
+    )
+
+    op.create_table(
+        "analysis_requests",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("automation_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["automation_id"],
+            ["automations.id"],
+            ondelete="CASCADE",
+            name="fk_analysis_requests_automation_id_automations",
+        ),
+        sa.PrimaryKeyConstraint("id", name="pk_analysis_requests"),
+    )
+    op.create_index("ix_analysis_requests_automation_id", "analysis_requests", ["automation_id"], unique=False)
+
+    op.create_table(
+        "analysis_executions",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("analysis_request_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("status", sa.String(length=32), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["analysis_request_id"],
+            ["analysis_requests.id"],
+            ondelete="CASCADE",
+            name="fk_analysis_executions_analysis_request_id_analysis_requests",
+        ),
+        sa.PrimaryKeyConstraint("id", name="pk_analysis_executions"),
+    )
+    op.create_index(
+        "ix_analysis_executions_analysis_request_id",
+        "analysis_executions",
+        ["analysis_request_id"],
+        unique=False,
+    )
+
+
 def upgrade() -> None:
+    _create_shared_reference_tables()
+
     op.create_table(
         "django_ai_roles",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -477,4 +524,12 @@ def downgrade() -> None:
 
     op.drop_index(op.f("ix_django_ai_roles_name"), table_name="django_ai_roles")
     op.drop_table("django_ai_roles")
+
+    op.drop_index("ix_analysis_executions_analysis_request_id", table_name="analysis_executions")
+    op.drop_table("analysis_executions")
+
+    op.drop_index("ix_analysis_requests_automation_id", table_name="analysis_requests")
+    op.drop_table("analysis_requests")
+
+    op.drop_table("automations")
 

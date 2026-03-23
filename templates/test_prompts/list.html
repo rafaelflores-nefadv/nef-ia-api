@@ -6,19 +6,19 @@
 
 <section class="panel-card mb-3">
     <p class="admin-note mb-0">
-        Uso local da interface. Prompts de teste sao experimentais, independentes para o usuario e <strong>nao alteram</strong> prompts oficiais.
+        Uso local da interface. Prompts de teste são experimentais, independentes para o usuário e <strong>não alteram</strong> prompts oficiais.
     </p>
 </section>
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Automacoes de teste cadastradas e disponiveis: <strong>{{ test_automations_count }}</strong>.</span>
+    <span class="admin-note">Automações de teste cadastradas e disponíveis: <strong>{{ test_automations_count }}</strong>.</span>
 </div>
 
 <section class="panel-card mb-3">
     <div class="d-flex flex-wrap justify-content-between gap-2 align-items-center">
-        <p class="admin-note mb-0">O cadastro de automacoes de teste foi separado desta area.</p>
-        <a href="{% url 'test_automations:list' %}" class="btn btn-outline-secondary">Ir para automacoes de teste</a>
+        <p class="admin-note mb-0">A automação vinculada é definida no cadastro/edição do prompt.</p>
+        <a href="{% url 'test_automations:list' %}" class="btn btn-outline-secondary">Ir para automações de teste</a>
     </div>
 </section>
 
@@ -60,15 +60,23 @@
                 <thead>
                     <tr>
                         <th>Nome</th>
+                        <th>Automação vinculada</th>
                         <th>Status</th>
                         <th>Atualizado</th>
-                        <th class="text-end">Acoes</th>
+                        <th class="text-end">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for item in test_prompts %}
                         <tr>
                             <td class="fw-semibold">{{ item.name }}</td>
+                            <td>
+                                {% if item.automation_id %}
+                                    <code>{{ item.automation_id }}</code>
+                                {% else %}
+                                    <span class="status-pill status-warning">Não vinculada</span>
+                                {% endif %}
+                            </td>
                             <td>
                                 {% if item.is_active %}
                                     <span class="status-pill status-success">Ativo</span>
@@ -79,20 +87,40 @@
                             <td>{{ item.updated_at|date:"d/m/Y H:i" }}</td>
                             <td class="text-end">
                                 <div class="table-actions">
-                                    <a href="{% url 'test_prompts:detail' item.pk %}" class="btn btn-sm btn-outline-secondary">Ver</a>
-                                    <a href="{% url 'test_prompts:execute' item.pk %}" class="btn btn-sm btn-outline-primary">Executar</a>
-                                    <a href="{% url 'test_prompts:edit' item.pk %}" class="btn btn-sm btn-outline-secondary">Editar</a>
-                                    <a href="{% url 'test_prompts:delete' item.pk %}" class="btn btn-sm btn-outline-danger">Excluir</a>
+                                    <a href="{% url 'test_prompts:detail' item.pk %}" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Ver detalhes" aria-label="Ver detalhes">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    {% if item.automation_id %}
+                                        <a href="{% url 'test_prompts:execute' item.pk %}" class="btn btn-sm btn-outline-primary btn-icon-action" title="Executar" aria-label="Executar">
+                                            <i class="bi bi-play-circle"></i>
+                                        </a>
+                                    {% else %}
+                                        <a href="{% url 'test_prompts:edit' item.pk %}" class="btn btn-sm btn-outline-primary btn-icon-action" title="Vincular automação" aria-label="Vincular automação">
+                                            <i class="bi bi-link-45deg"></i>
+                                        </a>
+                                    {% endif %}
+                                    <a href="{% url 'test_prompts:edit' item.pk %}" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Editar" aria-label="Editar">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <a href="{% url 'test_prompts:delete' item.pk %}" class="btn btn-sm btn-outline-danger btn-icon-action" title="Excluir" aria-label="Excluir">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
                                     <form method="post" action="{% url 'test_prompts:duplicate' item.pk %}">
                                         {% csrf_token %}
-                                        <button type="submit" class="btn btn-sm btn-outline-secondary">Duplicar</button>
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Duplicar" aria-label="Duplicar">
+                                            <i class="bi bi-copy"></i>
+                                        </button>
                                     </form>
                                     <form method="post" action="{% url 'test_prompts:toggle_status' item.pk %}">
                                         {% csrf_token %}
                                         {% if item.is_active %}
-                                            <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
+                                            <button type="submit" class="btn btn-sm btn-outline-danger btn-icon-action" title="Desativar" aria-label="Desativar">
+                                                <i class="bi bi-slash-circle"></i>
+                                            </button>
                                         {% else %}
-                                            <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
+                                            <button type="submit" class="btn btn-sm btn-outline-success btn-icon-action" title="Ativar" aria-label="Ativar">
+                                                <i class="bi bi-check-circle"></i>
+                                            </button>
                                         {% endif %}
                                     </form>
                                 </div>

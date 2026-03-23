@@ -8,6 +8,11 @@ from app.repositories.shared.automation_repository import (
     SharedAutomationTargetRecord,
 )
 from app.repositories.shared.execution_repository import SharedExecutionRepository
+from app.repositories.shared.token_owned_catalog_repository import (
+    TokenOwnedAutomationRecord,
+    TokenOwnedCatalogRepository,
+    TokenOwnedPromptRecord,
+)
 
 __all__ = [
     "SharedAutomationRepository",
@@ -16,4 +21,7 @@ __all__ = [
     "SharedAutomationTargetRecord",
     "SharedAnalysisRepository",
     "SharedExecutionRepository",
+    "TokenOwnedCatalogRepository",
+    "TokenOwnedAutomationRecord",
+    "TokenOwnedPromptRecord",
 ]

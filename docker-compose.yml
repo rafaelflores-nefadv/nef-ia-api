@@ -1,6 +1,26 @@
 version: "3.9"
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-nef_ia}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      DJANGO_DB_NAME: ${DJANGO_DB_NAME:-nef_ia_django}
+    ports:
+      - "5432:5432"
+    volumes:
+      - nef_postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   api:
     build:
       context: .
@@ -14,6 +34,8 @@ services:
     ports:
       - "8000:8000"
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -35,6 +57,8 @@ services:
       - ./:/app
       - nef_storage:/app/storage
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -52,5 +76,6 @@ services:
       retries: 5
 
 volumes:
+  nef_postgres_data:
   nef_redis_data:
   nef_storage:

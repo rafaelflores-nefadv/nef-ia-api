@@ -1,15 +1,16 @@
 import logging
 import csv
 import io
+import json
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
-from typing import Any
-from uuid import UUID
+from typing import Any, Callable
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
@@ -41,6 +42,8 @@ from app.services.execution_engine import (
     INPUT_ROLE_PRIMARY,
     EngineExecutionInput,
     EngineExecutionPlan,
+    ExecutionOutputContract,
+    ExecutionFormatterStrategy,
     ExecutionInputType,
     ExecutionOutputPolicy,
     ExecutionOutputType,
@@ -48,6 +51,9 @@ from app.services.execution_engine import (
     ExecutionResponseParser,
     ExecutionStrategyEngine,
 )
+from app.services.execution_output_contract import ExecutionOutputContractResolver
+from app.services.execution_output_pipeline import ExecutionResultFormatter, ExecutionResultNormalizer
+from app.services.execution_tabular_prompt_strategy import TabularPromptStrategyResolver
 from app.services.execution_observability import (
     ExecutionErrorDiagnostic,
     classify_execution_error,
@@ -55,6 +61,10 @@ from app.services.execution_observability import (
     summarize_processing_plan,
 )
 from app.services.file_service import FileService
+from app.services.providers.http_client_utils import (
+    sanitize_provider_debug_payload,
+    summarize_provider_error_message,
+)
 from app.services.provider_service import ProviderRuntimeSelection, ProviderService
 from app.services.shared.automation_runtime_resolver import AutomationRuntimeResolverService
 from app.services.token_service import check_token_permission
@@ -97,73 +107,10 @@ PROFILE_LIMIT_ERROR_CODES = {
 FATAL_TABULAR_ERROR_CODES = {
     "cost_limit_exceeded",
     "prompt_token_limit_exceeded",
+    "prompt_placeholder_unresolved",
     *HARD_LIMIT_ERROR_CODES,
     *PROFILE_LIMIT_ERROR_CODES,
 }
-
-TABULAR_FIELD_ALIASES = {
-    "conteudo": {
-        "conteudo",
-        "conteudo_texto",
-        "texto",
-        "descricao",
-        "descricao_fato",
-        "historico",
-    },
-    "prazo_agendado": {
-        "prazo_agendado",
-        "prazo",
-        "data_prazo",
-        "prazo_previsto",
-    },
-    "valor_da_causa": {
-        "valor_da_causa",
-        "valor_causa",
-        "valor",
-    },
-    "tipo_de_acao": {
-        "tipo_de_acao",
-        "tipo_acao",
-        "acao",
-        "classe_acao",
-    },
-}
-
-STRUCTURED_OUTPUT_ALIASES = {
-    "classificacao_da_planilha": {
-        "classificacao da planilha",
-        "classificacao_planilha",
-    },
-    "classificacao_correta": {
-        "classificacao correta",
-        "classificacao_correta",
-    },
-    "veredito": {
-        "veredito",
-    },
-    "motivo": {
-        "motivo",
-    },
-    "trecho_determinante": {
-        "trecho determinante",
-        "trecho_determinante",
-    },
-}
-
-TABULAR_OUTPUT_COLUMNS = (
-    "linha_origem",
-    "conteudo",
-    "prazo_agendado",
-    "valor_da_causa",
-    "tipo_de_acao",
-    "classificacao_da_planilha",
-    "classificacao_correta",
-    "veredito",
-    "motivo",
-    "trecho_determinante",
-    "status",
-    "erro",
-)
 
 CONTEXT_STRUCTURED_EXTENSIONS = {".json", ".xml", ".yaml", ".yml", ".csv", ".tsv"}
 CONTEXT_RAW_EXTENSIONS = {".txt", ".md", ".log", ".pdf", ".html", ".htm", ".rtf"}
@@ -233,6 +180,26 @@ class ProcessedOutput:
     models_used: set[str]
     provider_calls: int
     processing_summary: dict[str, Any]
+    auxiliary_files: list["GeneratedExecutionFile"] = field(default_factory=list)
+
+
+@dataclass(slots=True, frozen=True)
+class ExecutionProgressUpdate:
+    phase: str
+    status_message: str
+    processed_rows: int | None = None
+    total_rows: int | None = None
+    current_row: int | None = None
+    processed_chunks: int | None = None
+    total_chunks: int | None = None
+
+
+@dataclass(slots=True)
+class GeneratedExecutionFile:
+    file_type: str
+    file_name: str
+    mime_type: str
+    content: bytes
 
 
 @dataclass(slots=True, frozen=True)
@@ -284,7 +251,10 @@ class ExecutionService:
         self.audit_logs = AuditLogRepository(operational_session)
         self.shared_analysis = SharedAnalysisRepository(shared_session)
         self.shared_executions = SharedExecutionRepository(shared_session)
-        self.runtime_resolver = AutomationRuntimeResolverService(shared_session)
+        self.runtime_resolver = AutomationRuntimeResolverService(
+            shared_session=shared_session,
+            operational_session=operational_session,
+        )
         self.provider_service = ProviderService(operational_session)
         self.usage_service = UsageService(operational_session)
         self.file_service = FileService(
@@ -297,9 +267,11 @@ class ExecutionService:
             tabular_mime_hints=TABULAR_MIME_HINTS,
             textual_mime_hints=TEXTUAL_MIME_HINTS,
         )
-        self.response_parser = ExecutionResponseParser(
-            structured_output_aliases=STRUCTURED_OUTPUT_ALIASES,
-        )
+        self.output_contract_resolver = ExecutionOutputContractResolver()
+        self.response_parser = ExecutionResponseParser()
+        self.result_normalizer = ExecutionResultNormalizer()
+        self.result_formatter = ExecutionResultFormatter()
+        self.tabular_prompt_strategy_resolver = TabularPromptStrategyResolver()
         self.output_policy = ExecutionOutputPolicy()
 
     def _log_execution_phase(
@@ -317,6 +289,44 @@ class ExecutionService:
         }
         log_method = getattr(logger, level, logger.info)
         log_method(message, extra=payload)
+
+    @staticmethod
+    def _safe_progress_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _notify_progress_update(
+        self,
+        *,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None,
+        phase: str,
+        status_message: str,
+        processed_rows: int | None = None,
+        total_rows: int | None = None,
+        current_row: int | None = None,
+        processed_chunks: int | None = None,
+        total_chunks: int | None = None,
+    ) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(
+                ExecutionProgressUpdate(
+                    phase=str(phase or "").strip().lower() or "running_model",
+                    status_message=str(status_message or "").strip() or "Processando execucao.",
+                    processed_rows=self._safe_progress_int(processed_rows),
+                    total_rows=self._safe_progress_int(total_rows),
+                    current_row=self._safe_progress_int(current_row),
+                    processed_chunks=self._safe_progress_int(processed_chunks),
+                    total_chunks=self._safe_progress_int(total_chunks),
+                )
+            )
+        except Exception:
+            logger.warning("Execution progress callback failed.", exc_info=True)
 
     @staticmethod
     def _safe_hard_limit(value: int, *, fallback: int = 1) -> int:
@@ -1318,6 +1328,7 @@ class ExecutionService:
         plan_summary: dict[str, Any] | None = None
         input_summary: dict[str, Any] | None = None
         execution_profile: ExecutionOperationalProfile | None = None
+        automation_id: UUID | None = None
 
         queue_job = self.queue_jobs.get_by_id(queue_job_id)
         if queue_job is None:
@@ -1433,6 +1444,7 @@ class ExecutionService:
             shared_request = self.shared_analysis.get_request_by_id(shared_execution.analysis_request_id)
             if shared_request is None:
                 raise AppException("Related analysis request not found.", status_code=404, code="analysis_request_not_found")
+            automation_id = shared_request.automation_id
 
             failure_phase = "execution.process.profile_resolution"
             profile_automation_id = shared_request.automation_id
@@ -1459,6 +1471,7 @@ class ExecutionService:
                 require_prompt=not bool(prompt_override),
             )
             effective_prompt = prompt_override or resolved_runtime.prompt_text
+            debug_enabled = bool(getattr(resolved_runtime, "debug_enabled", False))
             logger.info(
                 "Execution runtime resolved from shared system.",
                 extra={
@@ -1468,6 +1481,7 @@ class ExecutionService:
                     "model": resolved_runtime.model_slug,
                     "prompt_version": resolved_runtime.prompt_version,
                     "prompt_source": "override" if prompt_override else "official",
+                    "debug_enabled": debug_enabled,
                 },
             )
             if prompt_override:
@@ -1482,6 +1496,7 @@ class ExecutionService:
             runtime = self.provider_service.resolve_runtime(
                 provider_slug=resolved_runtime.provider_slug,
                 model_slug=resolved_runtime.model_slug,
+                credential_id=getattr(resolved_runtime, "credential_id", None),
             )
             logger.info(
                 "Operational provider/model validation succeeded.",
@@ -1491,6 +1506,78 @@ class ExecutionService:
                     "provider": runtime.provider.slug,
                     "model": runtime.model.model_slug,
                 },
+            )
+
+            failure_phase = "execution.process.output_contract_resolution"
+            runtime_output_type = getattr(resolved_runtime, "output_type", None)
+            runtime_result_parser = getattr(resolved_runtime, "result_parser", None)
+            runtime_result_formatter = getattr(resolved_runtime, "result_formatter", None)
+            runtime_output_schema = getattr(resolved_runtime, "output_schema", None)
+            explicit_output_contract_present = any(
+                value is not None
+                for value in (
+                    runtime_output_type,
+                    runtime_result_parser,
+                    runtime_result_formatter,
+                    runtime_output_schema,
+                )
+            )
+
+            try:
+                resolved_output_contract = self._resolve_execution_output_contract(
+                    automation_id=shared_request.automation_id,
+                    automation_slug=getattr(resolved_runtime, "automation_slug", None),
+                    processing_plan=processing_plan,
+                    runtime_output_type=runtime_output_type,
+                    runtime_result_parser=runtime_result_parser,
+                    runtime_result_formatter=runtime_result_formatter,
+                    runtime_output_schema=runtime_output_schema,
+                )
+            except AppException as contract_exc:
+                if contract_exc.payload.code in {
+                    "execution_output_contract_invalid",
+                    "execution_output_schema_invalid",
+                    "execution_output_contract_incompatible",
+                }:
+                    self._log_execution_phase(
+                        phase=f"{failure_phase}.invalid",
+                        message="Execution output contract is invalid for this automation.",
+                        level="error",
+                        execution_id=str(execution_id),
+                        queue_job_id=str(queue_job_id),
+                        contract_configured=explicit_output_contract_present,
+                        automation_id=str(shared_request.automation_id),
+                        output_type=runtime_output_type,
+                        parser_strategy=runtime_result_parser,
+                        formatter_strategy=runtime_result_formatter,
+                        output_schema_payload_type=type(runtime_output_schema).__name__
+                        if runtime_output_schema is not None
+                        else None,
+                        error_code=contract_exc.payload.code,
+                    )
+                raise
+
+            processing_plan = self.strategy_engine.with_output_contract(
+                processing_plan=processing_plan,
+                output_contract=resolved_output_contract,
+            )
+            plan_summary = summarize_processing_plan(processing_plan)
+            if resolved_output_contract.source == "fallback_no_output_contract_config":
+                self._log_execution_phase(
+                    phase=f"{failure_phase}.fallback",
+                    message="Execution output contract fallback was applied because automation has no explicit configuration.",
+                    execution_id=str(execution_id),
+                    queue_job_id=str(queue_job_id),
+                    automation_id=str(shared_request.automation_id),
+                    output_contract_source=resolved_output_contract.source,
+                )
+            self._log_execution_phase(
+                phase=f"{failure_phase}.completed",
+                message="Execution output contract resolved.",
+                execution_id=str(execution_id),
+                queue_job_id=str(queue_job_id),
+                output_schema_columns=list(processing_plan.output_contract.output_schema.columns),
+                **(plan_summary or {}),
             )
 
             self.shared_executions.update_status(execution_id=execution_id, status=ExecutionStatus.GENERATING_OUTPUT.value)
@@ -1529,6 +1616,9 @@ class ExecutionService:
                 runtime=runtime,
                 execution_started_at=execution_started_at,
                 execution_profile=execution_profile,
+                debug_enabled=debug_enabled,
+                automation_id=automation_id,
+                retry_count=max(int(queue_job.retry_count or 0), 0),
             )
             self._log_execution_phase(
                 phase=f"{failure_phase}.completed",
@@ -1547,6 +1637,14 @@ class ExecutionService:
                 content=processed_output.content,
                 mime_type=processed_output.mime_type,
             )
+            for auxiliary_file in processed_output.auxiliary_files:
+                self.file_service.register_generated_execution_file(
+                    execution_id=execution_id,
+                    file_type=auxiliary_file.file_type,
+                    file_name=auxiliary_file.file_name,
+                    content=auxiliary_file.content,
+                    mime_type=auxiliary_file.mime_type,
+                )
             self._enforce_execution_time_profile_limit(
                 execution_id=execution_id,
                 execution_started_at=execution_started_at,
@@ -1566,6 +1664,7 @@ class ExecutionService:
                 output_file_name=processed_output.file_name,
                 output_file_mime=processed_output.mime_type,
                 output_file_size=len(processed_output.content),
+                auxiliary_files_count=len(processed_output.auxiliary_files),
             )
 
             failure_phase = "execution.process.final_persist"
@@ -1588,6 +1687,15 @@ class ExecutionService:
                         "estimated_cost": str(processed_output.total_cost),
                     "provider_calls": processed_output.provider_calls,
                     "processing_summary": processed_output.processing_summary,
+                    "auxiliary_files": [
+                        {
+                            "file_type": item.file_type,
+                            "file_name": item.file_name,
+                            "mime_type": item.mime_type,
+                            "file_size": len(item.content),
+                        }
+                        for item in processed_output.auxiliary_files
+                    ],
                     "execution_profile": execution_profile.name if execution_profile else None,
                     "execution_profile_source": execution_profile.source if execution_profile else None,
                     "execution_profile_source_details": execution_profile.source_details if execution_profile else None,
@@ -1627,6 +1735,8 @@ class ExecutionService:
             )
         except Exception as exc:
             diagnostic = classify_execution_error(exc, failure_phase=failure_phase)
+            provider_details = self._provider_error_details(exc)
+            provider_status_code = provider_details.get("status_code") or provider_details.get("http_status_code")
             logger.exception(
                 "Execution processing failed.",
                 extra={
@@ -1641,6 +1751,24 @@ class ExecutionService:
                     "output_type": plan_summary.get("output_type") if plan_summary else None,
                     "parser_strategy": plan_summary.get("parser_strategy") if plan_summary else None,
                     "execution_profile": execution_profile.name if execution_profile else None,
+                    "automation_id": str(automation_id) if automation_id is not None else None,
+                    "provider": provider_details.get("provider_slug")
+                    or provider_details.get("provider")
+                    or None,
+                    "model": provider_details.get("model_slug") or None,
+                    "status_code": int(provider_status_code)
+                    if isinstance(provider_status_code, int) or str(provider_status_code).isdigit()
+                    else None,
+                    "error_type": self._classify_execution_error_type(
+                        exc=exc,
+                        stage_of_failure="provider_call",
+                    ),
+                    "request_id": provider_details.get("provider_request_id") or None,
+                    "client_request_id": provider_details.get("client_request_id") or None,
+                    "duration_ms": int(provider_details.get("duration_ms"))
+                    if isinstance(provider_details.get("duration_ms"), int)
+                    or str(provider_details.get("duration_ms")).isdigit()
+                    else None,
                 },
                 exc_info=exc,
             )
@@ -1740,8 +1868,33 @@ class ExecutionService:
         self,
         *,
         processing_inputs: list[EngineExecutionInput],
+        output_contract: ExecutionOutputContract | None = None,
     ) -> EngineExecutionPlan:
-        return self.strategy_engine.resolve_plan(processing_inputs=processing_inputs)
+        return self.strategy_engine.resolve_plan(
+            processing_inputs=processing_inputs,
+            output_contract=output_contract,
+        )
+
+    def _resolve_execution_output_contract(
+        self,
+        *,
+        automation_id: UUID | None,
+        automation_slug: str | None,
+        processing_plan: EngineExecutionPlan,
+        runtime_output_type: str | None,
+        runtime_result_parser: str | None,
+        runtime_result_formatter: str | None,
+        runtime_output_schema: dict[str, Any] | str | None,
+    ) -> ExecutionOutputContract:
+        return self.output_contract_resolver.resolve(
+            input_type=processing_plan.input_type,
+            automation_id=automation_id,
+            automation_slug=automation_slug,
+            runtime_output_type=runtime_output_type,
+            runtime_result_parser=runtime_result_parser,
+            runtime_result_formatter=runtime_result_formatter,
+            runtime_output_schema=runtime_output_schema,
+        )
 
     def _process_execution_by_strategy(
         self,
@@ -1752,6 +1905,10 @@ class ExecutionService:
         runtime: ProviderRuntimeSelection,
         execution_started_at: float,
         execution_profile: ExecutionOperationalProfile,
+        debug_enabled: bool = False,
+        automation_id: UUID | None = None,
+        retry_count: int = 0,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
     ) -> ProcessedOutput:
         self._enforce_execution_time_hard_limit(
             execution_id=execution_id,
@@ -1777,9 +1934,15 @@ class ExecutionService:
                 runtime=runtime,
                 global_context=global_context,
                 parser_strategy=processing_plan.parser_strategy,
+                formatter_strategy=processing_plan.formatter_strategy,
                 output_type=processing_plan.output_type,
+                output_contract=processing_plan.output_contract,
                 execution_started_at=execution_started_at,
                 execution_profile=execution_profile,
+                debug_enabled=debug_enabled,
+                automation_id=automation_id,
+                retry_count=retry_count,
+                progress_callback=progress_callback,
             )
 
         if processing_plan.input_type == ExecutionInputType.TABULAR:
@@ -1791,9 +1954,15 @@ class ExecutionService:
                 runtime=runtime,
                 global_context=None,
                 parser_strategy=processing_plan.parser_strategy,
+                formatter_strategy=processing_plan.formatter_strategy,
                 output_type=processing_plan.output_type,
+                output_contract=processing_plan.output_contract,
                 execution_started_at=execution_started_at,
                 execution_profile=execution_profile,
+                debug_enabled=debug_enabled,
+                automation_id=automation_id,
+                retry_count=retry_count,
+                progress_callback=progress_callback,
             )
 
         if processing_plan.input_type == ExecutionInputType.TEXT:
@@ -1804,9 +1973,15 @@ class ExecutionService:
                 official_prompt=official_prompt,
                 runtime=runtime,
                 parser_strategy=processing_plan.parser_strategy,
+                formatter_strategy=processing_plan.formatter_strategy,
                 output_type=processing_plan.output_type,
+                output_contract=processing_plan.output_contract,
                 execution_started_at=execution_started_at,
                 execution_profile=execution_profile,
+                debug_enabled=debug_enabled,
+                automation_id=automation_id,
+                retry_count=retry_count,
+                progress_callback=progress_callback,
             )
 
         if processing_plan.input_type == ExecutionInputType.MULTI_TEXT:
@@ -1820,9 +1995,15 @@ class ExecutionService:
                 official_prompt=official_prompt,
                 runtime=runtime,
                 parser_strategy=processing_plan.parser_strategy,
+                formatter_strategy=processing_plan.formatter_strategy,
                 output_type=processing_plan.output_type,
+                output_contract=processing_plan.output_contract,
                 execution_started_at=execution_started_at,
                 execution_profile=execution_profile,
+                debug_enabled=debug_enabled,
+                automation_id=automation_id,
+                retry_count=retry_count,
+                progress_callback=progress_callback,
             )
 
         raise AppException(
@@ -1841,10 +2022,21 @@ class ExecutionService:
         official_prompt: str,
         runtime: ProviderRuntimeSelection,
         parser_strategy: ExecutionParserStrategy,
+        formatter_strategy: ExecutionFormatterStrategy,
         output_type: ExecutionOutputType,
+        output_contract: ExecutionOutputContract,
         execution_started_at: float,
         execution_profile: ExecutionOperationalProfile,
+        debug_enabled: bool = False,
+        automation_id: UUID | None = None,
+        retry_count: int = 0,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
     ) -> ProcessedOutput:
+        self._notify_progress_update(
+            progress_callback=progress_callback,
+            phase="reading_input",
+            status_message="Lendo arquivo textual de entrada.",
+        )
         self._log_execution_phase(
             phase="execution.pipeline.file_read",
             message="Reading textual input file.",
@@ -1863,15 +2055,26 @@ class ExecutionService:
             execution_id=str(execution_id),
             input_characters=len(input_file_content or ""),
         )
+        self._notify_progress_update(
+            progress_callback=progress_callback,
+            phase="prompt_build",
+            status_message="Entrada textual carregada. Preparando processamento.",
+        )
         return self._process_text_content(
             execution_id=execution_id,
             file_content=input_file_content,
             official_prompt=official_prompt,
             runtime=runtime,
             parser_strategy=parser_strategy,
+            formatter_strategy=formatter_strategy,
             output_type=output_type,
+            output_contract=output_contract,
             execution_started_at=execution_started_at,
             execution_profile=execution_profile,
+            debug_enabled=debug_enabled,
+            automation_id=automation_id,
+            retry_count=retry_count,
+            progress_callback=progress_callback,
         )
 
     def _process_text_content(
@@ -1882,9 +2085,15 @@ class ExecutionService:
         official_prompt: str,
         runtime: ProviderRuntimeSelection,
         parser_strategy: ExecutionParserStrategy,
+        formatter_strategy: ExecutionFormatterStrategy,
         output_type: ExecutionOutputType,
+        output_contract: ExecutionOutputContract,
         execution_started_at: float,
         execution_profile: ExecutionOperationalProfile,
+        debug_enabled: bool = False,
+        automation_id: UUID | None = None,
+        retry_count: int = 0,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
     ) -> ProcessedOutput:
         content_chunks = self._chunk_content(file_content)
         self._enforce_text_chunks_profile_limit(
@@ -1905,6 +2114,13 @@ class ExecutionService:
             parser_strategy=parser_strategy.value,
             output_type=output_type.value,
         )
+        self._notify_progress_update(
+            progress_callback=progress_callback,
+            phase="processing_chunks",
+            status_message="Processando conteudo textual no modelo.",
+            processed_chunks=0,
+            total_chunks=len(content_chunks),
+        )
 
         total_input_tokens = 0
         total_output_tokens = 0
@@ -1912,8 +2128,18 @@ class ExecutionService:
         output_chunks: list[str] = []
         providers_used: set[str] = set()
         models_used: set[str] = set()
+        debug_chunks: list[dict[str, Any]] = []
+        chunk_retry_count = max(int(retry_count or 0), 0)
 
         for chunk_index, content_chunk in enumerate(content_chunks, start=1):
+            self._notify_progress_update(
+                progress_callback=progress_callback,
+                phase="processing_chunks",
+                status_message="Processando conteudo textual no modelo.",
+                processed_chunks=chunk_index - 1,
+                total_chunks=len(content_chunks),
+                current_row=chunk_index,
+            )
             self._enforce_execution_time_profile_limit(
                 execution_id=execution_id,
                 execution_started_at=execution_started_at,
@@ -1932,6 +2158,30 @@ class ExecutionService:
                 file_content=content_chunk,
                 execution_profile=execution_profile,
             )
+            chunk_stage_of_failure = "provider_call"
+            chunk_debug: dict[str, Any] | None = None
+            if debug_enabled:
+                chunk_debug = {
+                    "chunk_index": chunk_index,
+                    "chunk_characters": len(content_chunk or ""),
+                    "prompt_template": official_prompt,
+                    "prompt_final": "",
+                    "prompt_truncated": False,
+                    **self._build_provider_debug_context(
+                        runtime=runtime,
+                        retry_count=chunk_retry_count,
+                    ),
+                    "provider_parameters": {
+                        "temperature": getattr(settings, "temperature", None),
+                        "max_tokens": getattr(settings, "max_tokens", None),
+                    },
+                    "response_raw_text": "",
+                    "response_raw_payload": None,
+                    "parsed_output": None,
+                    "normalized_output": "",
+                    "warnings": [],
+                    "errors": [],
+                }
             self._enforce_provider_calls_profile_limit(
                 execution_id=execution_id,
                 provider_calls=provider_calls,
@@ -1957,6 +2207,26 @@ class ExecutionService:
                 prompt=prompt_input,
                 provider_runtime=runtime,
             )
+            if chunk_debug is not None:
+                chunk_debug["prompt_final"] = sanitized_prompt
+                chunk_debug["prompt_truncated"] = bool(was_truncated)
+                chunk_payload = self._build_provider_request_payload(
+                    runtime=runtime,
+                    prompt_input=sanitized_prompt,
+                )
+                chunk_debug["request_payload_sanitized"] = chunk_payload
+                chunk_token_param = ""
+                if isinstance(chunk_payload, dict):
+                    if "max_completion_tokens" in chunk_payload:
+                        chunk_token_param = "max_completion_tokens"
+                    elif "max_tokens" in chunk_payload:
+                        chunk_token_param = "max_tokens"
+                chunk_debug["token_limit_param_used"] = chunk_token_param
+                chunk_debug["api_family_resolved"] = "chat_completions"
+                if str(runtime.provider.slug or "").strip().lower() == "openai":
+                    chunk_debug["request_profile_resolved"] = (
+                        "gpt5_chat" if chunk_token_param == "max_completion_tokens" else "legacy_chat"
+                    )
             if was_truncated:
                 logger.warning(
                     "Prompt content truncated due to token limit.",
@@ -1966,11 +2236,53 @@ class ExecutionService:
                         "chunk_index": chunk_index,
                     },
                 )
+                if chunk_debug is not None:
+                    chunk_debug["warnings"] = [*chunk_debug["warnings"], "prompt_truncated_to_token_limit"]
 
-            provider_result = self._execute_with_runtime(
-                prompt_input=sanitized_prompt,
-                runtime=runtime,
-            )
+            chunk_client_request_id = f"{execution_id}:chunk:{chunk_index}:{uuid4().hex[:8]}"
+            provider_call_started_at = datetime.now(timezone.utc).isoformat()
+            provider_call_started_perf = perf_counter()
+            if chunk_debug is not None:
+                chunk_debug["started_at"] = provider_call_started_at
+                chunk_debug["stage_of_failure"] = chunk_stage_of_failure
+                chunk_debug["client_request_id"] = chunk_client_request_id
+            try:
+                provider_result = self._execute_with_runtime(
+                    prompt_input=sanitized_prompt,
+                    runtime=runtime,
+                    client_request_id=chunk_client_request_id,
+                )
+            except Exception as chunk_exc:
+                if chunk_debug is not None:
+                    self._enrich_debug_with_error(
+                        debug_item=chunk_debug,
+                        exc=chunk_exc,
+                        stage_of_failure=chunk_stage_of_failure,
+                    )
+                    chunk_debug["errors"] = [self._summarize_execution_error(chunk_exc)]
+                    debug_chunks.append(chunk_debug)
+                if self._classify_execution_error_type(
+                    exc=chunk_exc,
+                    stage_of_failure=chunk_stage_of_failure,
+                ).startswith("provider_"):
+                    self._log_provider_error(
+                        execution_id=execution_id,
+                        row_index=None,
+                        automation_id=automation_id,
+                        runtime=runtime,
+                        stage_of_failure=chunk_stage_of_failure,
+                        exc=chunk_exc,
+                    )
+                raise
+            provider_call_finished_at = datetime.now(timezone.utc).isoformat()
+            provider_call_duration_ms = max(int((perf_counter() - provider_call_started_perf) * 1000), 0)
+            if chunk_debug is not None:
+                chunk_debug["finished_at"] = provider_call_finished_at
+                chunk_debug["duration_ms"] = provider_call_duration_ms
+                chunk_debug["http_status_code"] = 200
+                chunk_debug["stage_of_failure"] = "provider_response_validation"
+                chunk_debug["response_raw_text"] = str(provider_result.output_text or "")
+                chunk_debug["response_raw_payload"] = provider_result.raw_response
             provider_calls += 1
             chunk_cost = runtime.client.estimate_cost(
                 input_tokens=provider_result.input_tokens,
@@ -2000,11 +2312,20 @@ class ExecutionService:
             total_cost += chunk_cost
             providers_used.add(runtime.provider.slug)
             models_used.add(runtime.model.model_slug)
+            chunk_stage_of_failure = "provider_response_validation"
             parsed_chunk = self.response_parser.parse(
                 parser_strategy=parser_strategy,
                 output_text=str(provider_result.output_text or "").strip(),
+                output_schema=output_contract.output_schema,
             )
-            output_chunks.append(str(parsed_chunk or "").strip())
+            chunk_stage_of_failure = "output_normalization"
+            normalized_chunk = self.result_normalizer.normalize_text_chunk(parsed_chunk=parsed_chunk)
+            output_chunks.append(normalized_chunk)
+            if chunk_debug is not None:
+                chunk_debug["parsed_output"] = parsed_chunk
+                chunk_debug["normalized_output"] = normalized_chunk
+                chunk_debug["stage_of_failure"] = ""
+                debug_chunks.append(chunk_debug)
             self._log_execution_phase(
                 phase="execution.pipeline.response_parse",
                 message="Text chunk response parsed.",
@@ -2013,25 +2334,61 @@ class ExecutionService:
                 chunk_index=chunk_index,
                 parser_strategy=parser_strategy.value,
             )
+            self._notify_progress_update(
+                progress_callback=progress_callback,
+                phase="processing_chunks",
+                status_message="Processando conteudo textual no modelo.",
+                processed_chunks=chunk_index,
+                total_chunks=len(content_chunks),
+                current_row=chunk_index,
+            )
 
-        merged_output = "\n\n".join([item for item in output_chunks if item]).strip()
-        output_descriptor = self.output_policy.build_output_file(
+        self._notify_progress_update(
+            progress_callback=progress_callback,
+            phase="normalizing_output",
+            status_message="Normalizando resposta final da execucao textual.",
+            processed_chunks=len(content_chunks),
+            total_chunks=len(content_chunks),
+        )
+        merged_output = self.result_normalizer.merge_text_chunks(chunks=output_chunks)
+        self._notify_progress_update(
+            progress_callback=progress_callback,
+            phase="exporting_result",
+            status_message="Gerando arquivo final da execucao textual.",
+            processed_chunks=len(content_chunks),
+            total_chunks=len(content_chunks),
+        )
+        formatted_output = self.result_formatter.format_text_output(
             execution_id=execution_id,
-            output_type=output_type,
+            output_text=merged_output,
+            output_contract=output_contract,
+            output_policy=self.output_policy,
         )
         self._log_execution_phase(
             phase="execution.pipeline.output_generation",
             message="Text output generated.",
             execution_id=str(execution_id),
             provider_calls=provider_calls,
-            output_file_name=output_descriptor.file_name,
-            output_file_mime=output_descriptor.mime_type,
+            output_file_name=formatted_output.file_name,
+            output_file_mime=formatted_output.mime_type,
             output_characters=len(merged_output),
         )
+        auxiliary_files: list[GeneratedExecutionFile] = []
+        if debug_enabled:
+            auxiliary_files = self._build_text_debug_files(
+                execution_id=execution_id,
+                official_prompt=official_prompt,
+                runtime=runtime,
+                parser_strategy=parser_strategy,
+                formatter_strategy=formatter_strategy,
+                output_contract=output_contract,
+                debug_chunks=debug_chunks,
+                merged_output=merged_output,
+            )
         return ProcessedOutput(
-            content=(merged_output or "(sem retorno textual do modelo)").encode("utf-8"),
-            file_name=output_descriptor.file_name,
-            mime_type=output_descriptor.mime_type,
+            content=formatted_output.content,
+            file_name=formatted_output.file_name,
+            mime_type=formatted_output.mime_type,
             total_input_tokens=total_input_tokens,
             total_output_tokens=total_output_tokens,
             total_cost=total_cost,
@@ -2043,8 +2400,11 @@ class ExecutionService:
                 "chunk_count": len(content_chunks),
                 "output_type": output_type.value,
                 "parser_strategy": parser_strategy.value,
+                "formatter_strategy": formatter_strategy.value,
+                "output_contract_source": output_contract.source,
                 "execution_profile": execution_profile.name,
             },
+            auxiliary_files=auxiliary_files,
         )
 
     def _process_tabular_file(
@@ -2057,10 +2417,21 @@ class ExecutionService:
         runtime: ProviderRuntimeSelection,
         global_context: str | None = None,
         parser_strategy: ExecutionParserStrategy,
+        formatter_strategy: ExecutionFormatterStrategy,
         output_type: ExecutionOutputType,
+        output_contract: ExecutionOutputContract,
         execution_started_at: float,
         execution_profile: ExecutionOperationalProfile,
+        debug_enabled: bool = False,
+        automation_id: UUID | None = None,
+        retry_count: int = 0,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
     ) -> ProcessedOutput:
+        self._notify_progress_update(
+            progress_callback=progress_callback,
+            phase="reading_input",
+            status_message="Lendo arquivo tabular de entrada.",
+        )
         extension = Path(str(file_name or "")).suffix.lower()
         self._log_execution_phase(
             phase="execution.pipeline.file_read",
@@ -2101,6 +2472,13 @@ class ExecutionService:
             total_rows=total_rows,
             header_count=len(input_headers),
         )
+        self._notify_progress_update(
+            progress_callback=progress_callback,
+            phase="processing_rows",
+            status_message="Processamento linha a linha iniciado.",
+            processed_rows=0,
+            total_rows=total_rows,
+        )
         self._log_execution_phase(
             phase="execution.pipeline.prompt_build",
             message="Tabular row-by-row prompt generation started.",
@@ -2115,13 +2493,26 @@ class ExecutionService:
         providers_used: set[str] = set()
         models_used: set[str] = set()
         output_rows: list[dict[str, Any]] = []
-
-        original_header_map: dict[str, str] = {}
-        for header in input_headers:
-            output_header = header
-            if output_header in TABULAR_OUTPUT_COLUMNS:
-                output_header = f"entrada_{header}"
-            original_header_map[header] = output_header
+        debug_rows: list[dict[str, Any]] = []
+        successful_rows = 0
+        failed_rows = 0
+        output_schema = output_contract.output_schema
+        prompt_strategy = self.tabular_prompt_strategy_resolver.resolve(output_schema=output_schema)
+        detected_prompt_placeholders = prompt_strategy.detect_placeholders(str(official_prompt or ""))
+        row_retry_count = max(int(retry_count or 0), 0)
+        self._log_execution_phase(
+            phase="execution.pipeline.prompt_template",
+            message="Automation prompt template loaded for tabular hydration.",
+            level="debug",
+            execution_id=str(execution_id),
+            prompt_template_preview=self._prompt_preview(official_prompt),
+            detected_placeholders=list(detected_prompt_placeholders),
+            prompt_field_columns=list(output_schema.prompt_field_columns.keys()),
+        )
+        tabular_context = self.result_normalizer.build_tabular_context(
+            input_headers=input_headers,
+            output_schema=output_schema,
+        )
 
         for row in input_rows:
             row_index = int(row.get("row_index") or 0)
@@ -2150,32 +2541,101 @@ class ExecutionService:
                 row_index=row_index,
                 row_values=row_values,
             )
-            prompt_fields = self._extract_prompt_fields_from_row(row_values=row_values)
-            prompt_input = self._render_prompt_for_row(
-                official_prompt=official_prompt,
+            prompt_fields: dict[str, str] = {}
+            prompt_field_sources: dict[str, str] = {}
+            prompt_render = None
+            prompt_input = ""
+            row_stage_of_failure = "provider_call"
+            debug_row: dict[str, Any] | None = None
+            if debug_enabled:
+                debug_row = {
+                    "row_index": row_index,
+                    "input_snapshot": row_values,
+                    "canonical_fields": {},
+                    "prompt_field_sources": {},
+                    "placeholders_detected": [],
+                    "placeholders_resolved": [],
+                    "placeholders_unresolved": [],
+                    "prompt_template": official_prompt,
+                    "prompt_final": "",
+                    **self._build_provider_debug_context(
+                        runtime=runtime,
+                        retry_count=row_retry_count,
+                    ),
+                    "provider_parameters": {
+                        "temperature": getattr(settings, "temperature", None),
+                        "max_tokens": getattr(settings, "max_tokens", None),
+                    },
+                    "response_raw_text": "",
+                    "response_raw_payload": None,
+                    "json_payload_cleaned": None,
+                    "json_payload_parsed": None,
+                    "parsed_output": None,
+                    "normalized_output": None,
+                    "projected_output_row": None,
+                    "warnings": [],
+                    "errors": [],
+                }
+            try:
+                prompt_field_resolution = prompt_strategy.resolve_prompt_fields(row_values=row_values)
+                prompt_fields = prompt_field_resolution.values
+                prompt_field_sources = prompt_field_resolution.sources
+                prompt_render = prompt_strategy.render_prompt_with_metadata(
+                    official_prompt=official_prompt,
+                    prompt_fields=prompt_fields,
+                    global_context=global_context,
+                    normalize_inline_text=self._normalize_inline_text,
+                    assemble_prompt=self._assemble_prompt,
+                    execution_profile=execution_profile,
+                    field_sources=prompt_field_resolution.sources,
+                )
+                prompt_input = prompt_render.prompt_text
+                if debug_row is not None:
+                    debug_row["canonical_fields"] = prompt_fields
+                    debug_row["prompt_field_sources"] = prompt_field_sources
+                    debug_row["placeholders_detected"] = list(prompt_render.detected_placeholders)
+                    debug_row["placeholders_resolved"] = list(prompt_render.resolved_placeholders)
+                    debug_row["placeholders_unresolved"] = list(prompt_render.unresolved_placeholders)
+                    debug_row["prompt_final"] = prompt_input
+                self._log_execution_phase(
+                    phase="execution.pipeline.prompt_hydration",
+                    message="Tabular prompt hydrated with schema-resolved input fields.",
+                    level="debug",
+                    execution_id=str(execution_id),
+                    row_index=row_index,
+                    detected_placeholders=list(prompt_render.detected_placeholders),
+                    resolved_placeholders=list(prompt_render.resolved_placeholders),
+                    unresolved_placeholders=list(prompt_render.unresolved_placeholders),
+                    prompt_field_sources=prompt_field_sources,
+                    prompt_preview=self._prompt_preview(prompt_input),
+                )
+            except Exception as prompt_exc:
+                if debug_row is not None:
+                    debug_row["canonical_fields"] = prompt_fields
+                    debug_row["prompt_field_sources"] = prompt_field_sources
+                    debug_row["stage_of_failure"] = "prompt_hydration"
+                    error_summary = self._summarize_execution_error(prompt_exc)
+                    debug_row["provider_error_message"] = error_summary
+                    debug_row["error_type"] = self._classify_execution_error_type(
+                        exc=prompt_exc,
+                        stage_of_failure="prompt_hydration",
+                    )
+                    debug_row["errors"] = [error_summary]
+                    debug_rows.append(self._normalize_tabular_debug_row(debug_row=debug_row))
+                raise
+
+            output_row = self.result_normalizer.build_tabular_output_row(
+                row_index=row_index,
+                row_values=row_values,
                 prompt_fields=prompt_fields,
-                global_context=global_context,
-                execution_profile=execution_profile,
+                output_schema=output_schema,
+                context=tabular_context,
             )
 
-            output_row: dict[str, Any] = {
-                "linha_origem": row_index,
-                "conteudo": prompt_fields["conteudo"],
-                "prazo_agendado": prompt_fields["prazo_agendado"],
-                "valor_da_causa": prompt_fields["valor_da_causa"],
-                "tipo_de_acao": prompt_fields["tipo_de_acao"],
-                "classificacao_da_planilha": "",
-                "classificacao_correta": "",
-                "veredito": "",
-                "motivo": "",
-                "trecho_determinante": "",
-                "status": "erro",
-                "erro": "",
-            }
-            for original_header, output_header in original_header_map.items():
-                output_row[output_header] = row_values.get(original_header, "")
-
             try:
+                provider_call_started_at = ""
+                provider_call_finished_at = ""
+                provider_call_duration_ms = 0
                 self._enforce_provider_calls_profile_limit(
                     execution_id=execution_id,
                     provider_calls=provider_calls,
@@ -2193,6 +2653,32 @@ class ExecutionService:
                     prompt=prompt_input,
                     provider_runtime=runtime,
                 )
+                request_payload_sanitized = self._build_provider_request_payload(
+                    runtime=runtime,
+                    prompt_input=sanitized_prompt,
+                )
+                token_limit_param_used = ""
+                if isinstance(request_payload_sanitized, dict):
+                    if "max_completion_tokens" in request_payload_sanitized:
+                        token_limit_param_used = "max_completion_tokens"
+                    elif "max_tokens" in request_payload_sanitized:
+                        token_limit_param_used = "max_tokens"
+                if debug_row is not None:
+                    debug_row["prompt_final"] = sanitized_prompt
+                    debug_row["request_payload_sanitized"] = request_payload_sanitized
+                    debug_row["token_limit_param_used"] = token_limit_param_used
+                    debug_row["api_family_resolved"] = "chat_completions"
+                    if str(runtime.provider.slug or "").strip().lower() == "openai":
+                        debug_row["request_profile_resolved"] = (
+                            "gpt5_chat" if token_limit_param_used == "max_completion_tokens" else "legacy_chat"
+                        )
+                    debug_row["stage_of_failure"] = row_stage_of_failure
+                row_client_request_id = f"{execution_id}:row:{row_index}:{uuid4().hex[:8]}"
+                provider_call_started_at = datetime.now(timezone.utc).isoformat()
+                provider_call_started_perf = perf_counter()
+                if debug_row is not None:
+                    debug_row["started_at"] = provider_call_started_at
+                    debug_row["client_request_id"] = row_client_request_id
                 self._log_execution_phase(
                     phase="execution.pipeline.provider_call",
                     message="Executing provider call for tabular row.",
@@ -2204,7 +2690,17 @@ class ExecutionService:
                 provider_result = self._execute_with_runtime(
                     prompt_input=sanitized_prompt,
                     runtime=runtime,
+                    client_request_id=row_client_request_id,
                 )
+                provider_call_finished_at = datetime.now(timezone.utc).isoformat()
+                provider_call_duration_ms = max(int((perf_counter() - provider_call_started_perf) * 1000), 0)
+                if debug_row is not None:
+                    debug_row["finished_at"] = provider_call_finished_at
+                    debug_row["duration_ms"] = provider_call_duration_ms
+                    debug_row["stage_of_failure"] = "provider_response_validation"
+                    debug_row["http_status_code"] = 200
+                    debug_row["response_raw_text"] = str(provider_result.output_text or "")
+                    debug_row["response_raw_payload"] = provider_result.raw_response
                 line_cost = runtime.client.estimate_cost(
                     input_tokens=provider_result.input_tokens,
                     output_tokens=provider_result.output_tokens,
@@ -2228,19 +2724,74 @@ class ExecutionService:
                     estimated_cost=line_cost,
                 )
 
+                row_stage_of_failure = "provider_response_validation"
+                model_output_text = str(provider_result.output_text or "").strip()
+                if not model_output_text:
+                    raise AppException(
+                        "Provider returned empty body.",
+                        status_code=502,
+                        code="provider_empty_output",
+                        details={
+                            "provider": str(runtime.provider.slug or "").strip().lower(),
+                            "request_url": str(debug_row.get("request_url") if debug_row else ""),
+                            "endpoint_name": str(debug_row.get("endpoint_name") if debug_row else ""),
+                            "request_method": str(debug_row.get("request_method") if debug_row else ""),
+                            "request_timeout_seconds": debug_row.get("request_timeout_seconds") if debug_row else None,
+                            "request_payload_sanitized": request_payload_sanitized,
+                            "started_at": provider_call_started_at,
+                            "finished_at": provider_call_finished_at,
+                            "duration_ms": provider_call_duration_ms,
+                            "http_status_code": 200,
+                            "status_code": 200,
+                            "provider_error_message": "Provider returned empty body",
+                            "provider_error_classification": "provider_empty_response",
+                            "client_request_id": row_client_request_id,
+                        },
+                    )
+                json_inspection: dict[str, Any] | None = None
+                if parser_strategy == ExecutionParserStrategy.TABULAR_STRUCTURED:
+                    schema_aliases = output_schema.structured_output_aliases if output_schema is not None else {}
+                    json_inspection = self.response_parser.inspect_structured_output_json(
+                        output_text=model_output_text,
+                        structured_aliases=schema_aliases,
+                    )
+
+                row_stage_of_failure = "structured_parse"
+                if debug_row is not None:
+                    debug_row["stage_of_failure"] = row_stage_of_failure
                 parsed_output = self.response_parser.parse(
                     parser_strategy=parser_strategy,
-                    output_text=str(provider_result.output_text or "").strip(),
+                    output_text=model_output_text,
+                    output_schema=output_schema,
                 )
-                if not isinstance(parsed_output, dict):
-                    raise AppException(
-                        "Tabular parser returned invalid output.",
-                        status_code=422,
-                        code="tabular_parser_invalid_output",
-                    )
-                output_row.update(parsed_output)
-                output_row["status"] = "ok"
-                output_row["erro"] = ""
+                row_stage_of_failure = "output_normalization"
+                if debug_row is not None:
+                    debug_row["stage_of_failure"] = row_stage_of_failure
+                normalized_output = self.result_normalizer.normalize_tabular_row_result(
+                    parsed_output=parsed_output,
+                    output_schema=output_schema,
+                )
+                row_stage_of_failure = "spreadsheet_projection"
+                if debug_row is not None:
+                    debug_row["stage_of_failure"] = row_stage_of_failure
+                output_row.update(normalized_output)
+                if debug_row is not None:
+                    if json_inspection is not None:
+                        debug_row["json_payload_cleaned"] = json_inspection.get("cleaned_payload")
+                        debug_row["json_payload_parsed"] = json_inspection.get("parsed_json")
+                        parse_error = str(json_inspection.get("parse_error") or "").strip()
+                        if parse_error:
+                            debug_row["warnings"] = [*list(debug_row.get("warnings") or []), parse_error]
+                    debug_row["parsed_output"] = parsed_output
+                    debug_row["normalized_output"] = normalized_output
+                    debug_row["stage_of_failure"] = ""
+                if output_schema.status_column:
+                    output_row[output_schema.status_column] = "ok"
+                if output_schema.error_column:
+                    output_row[output_schema.error_column] = ""
+                if debug_row is not None:
+                    debug_row["projected_output_row"] = dict(output_row)
+                successful_rows += 1
                 self._log_execution_phase(
                     phase="execution.pipeline.response_parse",
                     message="Tabular row response parsed.",
@@ -2255,7 +2806,34 @@ class ExecutionService:
                 providers_used.add(runtime.provider.slug)
                 models_used.add(runtime.model.model_slug)
             except Exception as row_exc:
+                error_summary = self._summarize_execution_error(row_exc)
+                error_type = self._classify_execution_error_type(
+                    exc=row_exc,
+                    stage_of_failure=row_stage_of_failure,
+                )
+                if debug_row is not None:
+                    self._enrich_debug_with_error(
+                        debug_item=debug_row,
+                        exc=row_exc,
+                        stage_of_failure=row_stage_of_failure,
+                    )
+                    debug_row["errors"] = [error_summary]
+                    debug_row["projected_output_row"] = dict(output_row)
+                if error_type.startswith("provider_") or row_stage_of_failure in {
+                    "provider_call",
+                    "provider_response_validation",
+                }:
+                    self._log_provider_error(
+                        execution_id=execution_id,
+                        row_index=row_index,
+                        automation_id=automation_id,
+                        runtime=runtime,
+                        stage_of_failure=row_stage_of_failure,
+                        exc=row_exc,
+                    )
                 if self._is_fatal_tabular_row_exception(row_exc):
+                    if debug_row is not None:
+                        debug_rows.append(self._normalize_tabular_debug_row(debug_row=debug_row))
                     self._log_execution_phase(
                         phase="execution.pipeline.row_by_row.fatal_error",
                         message="Fatal error while processing tabular row.",
@@ -2263,33 +2841,85 @@ class ExecutionService:
                         execution_id=str(execution_id),
                         row_index=row_index,
                         error_code=row_exc.payload.code if isinstance(row_exc, AppException) else "unexpected_error",
+                        error_details=row_exc.payload.details if isinstance(row_exc, AppException) else None,
                     )
                     raise
-                output_row["status"] = "erro"
-                output_row["erro"] = self._error_message(row_exc)
+                if output_schema.status_column:
+                    output_row[output_schema.status_column] = "erro"
+                if output_schema.error_column:
+                    output_row[output_schema.error_column] = error_summary
+                failed_rows += 1
                 logger.warning(
                     "Failed to process tabular row; execution will continue for remaining rows.",
-                    extra={"execution_id": str(execution_id), "row_index": row_index},
+                    extra={
+                        "execution_id": str(execution_id),
+                        "row_index": row_index,
+                        "automation_id": str(automation_id) if automation_id is not None else None,
+                        "provider": str(runtime.provider.slug or "").strip().lower(),
+                        "model": str(runtime.model.model_slug or "").strip(),
+                        "status_code": debug_row.get("http_status_code") if debug_row is not None else None,
+                        "error_type": error_type,
+                        "request_id": debug_row.get("provider_request_id") if debug_row is not None else None,
+                        "client_request_id": debug_row.get("client_request_id") if debug_row is not None else None,
+                        "duration_ms": debug_row.get("duration_ms") if debug_row is not None else None,
+                        "stage_of_failure": row_stage_of_failure,
+                    },
                     exc_info=row_exc,
                 )
+                if debug_row is not None:
+                    debug_row["projected_output_row"] = dict(output_row)
+                    debug_rows.append(self._normalize_tabular_debug_row(debug_row=debug_row))
+            else:
+                if debug_row is not None:
+                    debug_rows.append(self._normalize_tabular_debug_row(debug_row=debug_row))
 
             output_rows.append(output_row)
+            self._notify_progress_update(
+                progress_callback=progress_callback,
+                phase="processing_rows",
+                status_message="Processando linhas no modelo de IA.",
+                processed_rows=len(output_rows),
+                total_rows=total_rows,
+                current_row=row_index,
+            )
 
-        output_columns = ["linha_origem", *original_header_map.values()]
-        for column in TABULAR_OUTPUT_COLUMNS:
-            if column not in output_columns:
-                output_columns.append(column)
-
-        output_bytes = self._build_tabular_workbook(
+        self._notify_progress_update(
+            progress_callback=progress_callback,
+            phase="normalizing_output",
+            status_message="Normalizando dados de saida da planilha.",
+            processed_rows=len(output_rows),
+            total_rows=total_rows,
+        )
+        output_columns = self.result_normalizer.build_tabular_output_columns(
+            output_schema=output_schema,
+            context=tabular_context,
+        )
+        self._notify_progress_update(
+            progress_callback=progress_callback,
+            phase="exporting_result",
+            status_message="Gerando arquivo final com os resultados.",
+            processed_rows=len(output_rows),
+            total_rows=total_rows,
+        )
+        formatted_output = self.result_formatter.format_tabular_output(
+            execution_id=execution_id,
             rows=output_rows,
             columns=output_columns,
+            output_contract=output_contract,
+            output_policy=self.output_policy,
+            workbook_builder=self._build_tabular_workbook,
         )
-        output_descriptor = self.output_policy.build_output_file(
-            execution_id=execution_id,
-            output_type=output_type,
-        )
-        successful_rows = sum(1 for row in output_rows if row.get("status") == "ok")
-        failed_rows = sum(1 for row in output_rows if row.get("status") == "erro")
+        auxiliary_files: list[GeneratedExecutionFile] = []
+        if debug_enabled:
+            auxiliary_files = self._build_tabular_debug_files(
+                execution_id=execution_id,
+                runtime=runtime,
+                parser_strategy=parser_strategy,
+                formatter_strategy=formatter_strategy,
+                output_contract=output_contract,
+                debug_rows=debug_rows,
+                retry_count=row_retry_count,
+            )
         logger.info(
             "Tabular execution completed.",
             extra={
@@ -2299,14 +2929,14 @@ class ExecutionService:
                 "failed_rows": failed_rows,
                 "provider_calls": provider_calls,
                 "phase": "execution.pipeline.output_generation",
-                "output_file_name": output_descriptor.file_name,
-                "output_file_mime": output_descriptor.mime_type,
+                "output_file_name": formatted_output.file_name,
+                "output_file_mime": formatted_output.mime_type,
             },
         )
         return ProcessedOutput(
-            content=output_bytes,
-            file_name=output_descriptor.file_name,
-            mime_type=output_descriptor.mime_type,
+            content=formatted_output.content,
+            file_name=formatted_output.file_name,
+            mime_type=formatted_output.mime_type,
             total_input_tokens=total_input_tokens,
             total_output_tokens=total_output_tokens,
             total_cost=total_cost,
@@ -2321,8 +2951,11 @@ class ExecutionService:
                 "failed_rows": failed_rows,
                 "output_type": output_type.value,
                 "parser_strategy": parser_strategy.value,
+                "formatter_strategy": formatter_strategy.value,
+                "output_contract_source": output_contract.source,
                 "execution_profile": execution_profile.name,
             },
+            auxiliary_files=auxiliary_files,
         )
 
     @staticmethod
@@ -2334,63 +2967,6 @@ class ExecutionService:
         normalized = normalized.encode("ascii", "ignore").decode("ascii")
         normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
         return normalized
-
-    @classmethod
-    def _extract_prompt_fields_from_row(cls, *, row_values: dict[str, Any]) -> dict[str, str]:
-        indexed: dict[str, str] = {}
-        for raw_key, raw_value in row_values.items():
-            indexed[cls._normalize_key(raw_key)] = str(raw_value or "").strip()
-
-        def _pick(field_name: str) -> str:
-            aliases = TABULAR_FIELD_ALIASES[field_name]
-            for alias in aliases:
-                value = indexed.get(cls._normalize_key(alias))
-                if value:
-                    return value
-            return ""
-
-        conteudo = _pick("conteudo")
-        if not conteudo:
-            conteudo = next((value for value in indexed.values() if value), "")
-
-        return {
-            "conteudo": conteudo,
-            "prazo_agendado": _pick("prazo_agendado"),
-            "valor_da_causa": _pick("valor_da_causa"),
-            "tipo_de_acao": _pick("tipo_de_acao"),
-        }
-
-    def _render_prompt_for_row(
-        self,
-        *,
-        official_prompt: str,
-        prompt_fields: dict[str, str],
-        global_context: str | None = None,
-        execution_profile: ExecutionOperationalProfile,
-    ) -> str:
-        rendered = str(official_prompt or "")
-        replacements: dict[str, str] = {
-            "CONTEUDO": self._normalize_inline_text(prompt_fields.get("conteudo") or ""),
-            "PRAZO_AGENDADO": self._normalize_inline_text(prompt_fields.get("prazo_agendado") or ""),
-            "VALOR_DA_CAUSA": self._normalize_inline_text(prompt_fields.get("valor_da_causa") or ""),
-            "TIPO_DE_ACAO": self._normalize_inline_text(prompt_fields.get("tipo_de_acao") or ""),
-        }
-        for key, value in replacements.items():
-            pattern = re.compile(r"\{\{\s*" + re.escape(key) + r"\s*\}\}", re.IGNORECASE)
-            rendered = pattern.sub(value, rendered)
-
-        contextual_block = ""
-        if global_context:
-            contextual_block = (
-                "Contexto global complementar (aplicado em todas as linhas):\n"
-                f"{global_context}"
-            )
-        return self._assemble_prompt(
-            instruction_text=rendered,
-            row_data=replacements,
-            auxiliary_context=contextual_block,
-            execution_profile=execution_profile,
-        )
 
     @staticmethod
     def _normalize_tabular_value(value: Any) -> str:
@@ -2593,12 +3169,614 @@ class ExecutionService:
         return not any(str(value or "").strip() for value in row_values.values())
 
     @staticmethod
-    def _build_tabular_workbook(*, rows: list[dict[str, Any]], columns: list[str]) -> bytes:
+    def _provider_endpoint_context(*, runtime: ProviderRuntimeSelection) -> dict[str, Any]:
+        provider_slug = str(runtime.provider.slug or "").strip().lower()
+        model_identifier = str(runtime.model.model_slug or "").strip()
+        timeout_seconds = int(getattr(runtime.client, "timeout_seconds", settings.provider_timeout) or settings.provider_timeout)
+
+        if provider_slug == "openai":
+            base_url = str(getattr(runtime.client, "base_url", "https://api.openai.com/v1") or "https://api.openai.com/v1").rstrip("/")
+            return {
+                "endpoint_name": "chat_completions",
+                "request_url": f"{base_url}/chat/completions",
+                "request_method": "POST",
+                "request_timeout_seconds": timeout_seconds,
+            }
+        if provider_slug == "anthropic":
+            base_url = str(getattr(runtime.client, "base_url", "https://api.anthropic.com") or "https://api.anthropic.com").rstrip("/")
+            return {
+                "endpoint_name": "messages",
+                "request_url": f"{base_url}/v1/messages",
+                "request_method": "POST",
+                "request_timeout_seconds": timeout_seconds,
+            }
+        if provider_slug == "gemini":
+            config_json = getattr(runtime.client, "config_json", {}) or {}
+            base_url = str(config_json.get("base_url") or "https://generativelanguage.googleapis.com").rstrip("/")
+            api_version = str(config_json.get("api_version") or "v1beta").strip().strip("/") or "v1beta"
+            model_id = model_identifier[7:] if model_identifier.startswith("models/") else model_identifier
+            return {
+                "endpoint_name": "generate_content",
+                "request_url": f"{base_url}/{api_version}/models/{model_id}:generateContent",
+                "request_method": "POST",
+                "request_timeout_seconds": timeout_seconds,
+            }
+        return {
+            "endpoint_name": "unknown",
+            "request_url": "",
+            "request_method": "POST",
+            "request_timeout_seconds": timeout_seconds,
+        }
+
+    def _build_provider_request_payload(
+        self,
+        *,
+        runtime: ProviderRuntimeSelection,
+        prompt_input: str,
+    ) -> dict[str, Any]:
+        provider_slug = str(runtime.provider.slug or "").strip().lower()
+        model_identifier = str(runtime.model.model_slug or "").strip()
+        if provider_slug == "gemini":
+            model_id = model_identifier[7:] if model_identifier.startswith("models/") else model_identifier
+            payload: dict[str, Any] = {
+                "model": model_identifier,
+                "resolved_model_identifier": model_id,
+                "input": prompt_input,
+                "contents": [{"role": "user", "parts": [{"text": prompt_input}]}],
+                "generationConfig": {
+                    "temperature": getattr(settings, "temperature", None),
+                    "maxOutputTokens": getattr(settings, "max_tokens", None),
+                },
+                "response_format": None,
+                "tools": [],
+                "metadata": {
+                    "provider_slug": provider_slug,
+                    "model_slug": model_identifier,
+                },
+            }
+            return sanitize_provider_debug_payload(payload)
+
+        payload = {
+            "model": model_identifier,
+            "resolved_model_identifier": model_identifier,
+            "input": prompt_input,
+            "messages": [{"role": "user", "content": prompt_input}],
+            "temperature": getattr(settings, "temperature", None),
+            "response_format": None,
+            "tools": [],
+            "metadata": {
+                "provider_slug": provider_slug,
+                "model_slug": model_identifier,
+            },
+        }
+        token_limit_param = "max_tokens"
+        if provider_slug == "openai":
+            raw_model_metadata = getattr(runtime.model, "config_json", None)
+            model_metadata = dict(raw_model_metadata) if isinstance(raw_model_metadata, dict) else {}
+            for field_name in ("api_family", "token_limit_param", "request_profile", "supports_reasoning"):
+                raw_value = getattr(runtime.model, field_name, None)
+                if raw_value is not None and field_name not in model_metadata:
+                    model_metadata[field_name] = raw_value
+
+            explicit_token_param = str(model_metadata.get("token_limit_param") or "").strip().lower()
+            explicit_request_profile = str(model_metadata.get("request_profile") or "").strip().lower()
+            explicit_api_family = str(model_metadata.get("api_family") or "").strip().lower()
+            supports_reasoning = str(model_metadata.get("supports_reasoning") or "").strip().lower()
+            inferred_gpt5 = str(model_identifier or "").strip().lower().startswith("gpt-5")
+            if explicit_token_param == "max_completion_tokens":
+                token_limit_param = "max_completion_tokens"
+            elif explicit_token_param == "max_tokens":
+                token_limit_param = "max_tokens"
+            elif explicit_request_profile in {"gpt5_chat", "gpt5_responses"}:
+                token_limit_param = "max_completion_tokens"
+            elif explicit_request_profile == "legacy_chat":
+                token_limit_param = "max_tokens"
+            elif explicit_api_family == "responses":
+                token_limit_param = "max_completion_tokens"
+            elif supports_reasoning in {"true", "1", "yes", "on"}:
+                token_limit_param = "max_completion_tokens"
+            elif inferred_gpt5:
+                token_limit_param = "max_completion_tokens"
+
+        if token_limit_param == "max_completion_tokens":
+            payload["max_completion_tokens"] = getattr(settings, "max_tokens", None)
+        else:
+            payload["max_tokens"] = getattr(settings, "max_tokens", None)
+        return sanitize_provider_debug_payload(payload)
+
+    @staticmethod
+    def _provider_debug_identity(*, runtime: ProviderRuntimeSelection) -> dict[str, Any]:
+        provider_slug = str(runtime.provider.slug or "").strip().lower()
+        provider_name = str(getattr(runtime.provider, "name", "") or provider_slug).strip() or provider_slug
+        model_slug = str(runtime.model.model_slug or "").strip()
+        model_name = str(getattr(runtime.model, "model_name", "") or model_slug).strip() or model_slug
+        return {
+            "provider_name": provider_name,
+            "provider_slug": provider_slug,
+            "model_name": model_name,
+            "model_slug": model_slug,
+            "resolved_model_identifier": model_slug or model_name,
+        }
+
+    def _build_provider_debug_context(
+        self,
+        *,
+        runtime: ProviderRuntimeSelection,
+        retry_count: int,
+    ) -> dict[str, Any]:
+        endpoint_context = self._provider_endpoint_context(runtime=runtime)
+        request_timeout_raw = endpoint_context.get("request_timeout_seconds")
+        try:
+            request_timeout_seconds = int(request_timeout_raw) if request_timeout_raw is not None else None
+        except (TypeError, ValueError):
+            request_timeout_seconds = None
+        return {
+            **self._provider_debug_identity(runtime=runtime),
+            "endpoint_name": endpoint_context.get("endpoint_name", ""),
+            "request_url": endpoint_context.get("request_url", ""),
+            "request_method": endpoint_context.get("request_method", ""),
+            "request_timeout_seconds": request_timeout_seconds,
+            "api_family_resolved": "",
+            "request_profile_resolved": "",
+            "token_limit_param_used": "",
+            "client_request_id": "",
+            "request_payload_sanitized": {},
+            "started_at": "",
+            "finished_at": "",
+            "duration_ms": 0,
+            "http_status_code": None,
+            "provider_error_message": "",
+            "provider_error_type": "",
+            "provider_error_code": "",
+            "provider_request_id": "",
+            "provider_trace_id": "",
+            "response_headers_relevantes": {},
+            "response_body_text": "",
+            "response_body_json": None,
+            "transport_error_class": "",
+            "transport_error_message": "",
+            "retry_count": max(int(retry_count or 0), 0),
+            "retried": bool((retry_count or 0) > 0),
+            "stage_of_failure": "",
+            "error_type": "",
+        }
+
+    @staticmethod
+    def _provider_error_details(exc: Exception) -> dict[str, Any]:
+        if isinstance(exc, AppException) and isinstance(exc.payload.details, dict):
+            return dict(exc.payload.details)
+        return {}
+
+    def _classify_execution_error_type(
+        self,
+        *,
+        exc: Exception,
+        stage_of_failure: str,
+    ) -> str:
+        if stage_of_failure == "structured_parse":
+            return "parse_error"
+        if stage_of_failure == "output_normalization":
+            return "parse_error"
+        if stage_of_failure == "spreadsheet_projection":
+            return "projection_error"
+
+        if not isinstance(exc, AppException):
+            return "unknown_provider_error"
+        code = exc.payload.code
+        details = self._provider_error_details(exc)
+        if stage_of_failure == "provider_response_validation":
+            if code == "provider_empty_output":
+                return "provider_empty_response"
+            if code == "provider_invalid_response":
+                return "provider_non_json_error"
+        if code == "provider_timeout":
+            return "provider_timeout"
+        if code == "provider_network_error":
+            return "provider_connection_error"
+        if code == "provider_empty_output":
+            return "provider_empty_response"
+        if code == "provider_invalid_response":
+            return "provider_non_json_error"
+        if code == "provider_http_error":
+            provider_classification = str(details.get("provider_error_classification") or "").strip()
+            if provider_classification:
+                return provider_classification
+            status_code = details.get("status_code") or details.get("http_status_code")
+            try:
+                status_code_int = int(status_code) if status_code is not None else None
+            except (TypeError, ValueError):
+                status_code_int = None
+            if status_code_int in {401, 403}:
+                return "provider_auth_error"
+            if status_code_int == 429:
+                return "provider_rate_limit"
+            if status_code_int == 404:
+                return "provider_unsupported_model"
+            if status_code_int in {400, 422}:
+                return "provider_invalid_request"
+            return "provider_http_error"
+        return "unknown_provider_error"
+
+    def _summarize_execution_error(self, exc: Exception) -> str:
+        if isinstance(exc, AppException):
+            if exc.payload.code in {"provider_http_error", "provider_timeout", "provider_network_error"}:
+                details = self._provider_error_details(exc)
+                if details:
+                    return summarize_provider_error_message(details=details)
+            return exc.payload.message
+        return str(exc)
+
+    def _enrich_debug_with_error(
+        self,
+        *,
+        debug_item: dict[str, Any],
+        exc: Exception,
+        stage_of_failure: str,
+    ) -> None:
+        details = self._provider_error_details(exc)
+        debug_item["stage_of_failure"] = stage_of_failure
+        debug_item["error_type"] = self._classify_execution_error_type(
+            exc=exc,
+            stage_of_failure=stage_of_failure,
+        )
+        debug_item["provider_error_message"] = str(
+            details.get("provider_error_message")
+            or self._summarize_execution_error(exc)
+            or ""
+        ).strip()
+        debug_item["provider_error_type"] = str(details.get("provider_error_type") or "").strip()
+        debug_item["provider_error_code"] = str(details.get("provider_error_code") or "").strip()
+        debug_item["provider_request_id"] = str(details.get("provider_request_id") or "").strip()
+        debug_item["provider_trace_id"] = str(details.get("provider_trace_id") or "").strip()
+        debug_item["response_headers_relevantes"] = details.get("response_headers_relevantes") or {}
+        debug_item["response_body_text"] = str(details.get("response_body_text") or "").strip()
+        debug_item["response_body_json"] = details.get("response_body_json")
+        debug_item["transport_error_class"] = str(details.get("transport_error_class") or "").strip()
+        debug_item["transport_error_message"] = str(details.get("transport_error_message") or "").strip()
+        debug_item["request_payload_sanitized"] = details.get("request_payload_sanitized") or debug_item.get(
+            "request_payload_sanitized"
+        ) or {}
+        debug_item["api_family_resolved"] = str(
+            details.get("api_family_resolved") or debug_item.get("api_family_resolved") or ""
+        ).strip()
+        debug_item["request_profile_resolved"] = str(
+            details.get("request_profile_resolved") or debug_item.get("request_profile_resolved") or ""
+        ).strip()
+        debug_item["token_limit_param_used"] = str(
+            details.get("token_limit_param_used") or debug_item.get("token_limit_param_used") or ""
+        ).strip()
+        debug_item["client_request_id"] = str(details.get("client_request_id") or debug_item.get("client_request_id") or "").strip()
+        debug_item["started_at"] = str(details.get("started_at") or debug_item.get("started_at") or "").strip()
+        debug_item["finished_at"] = str(details.get("finished_at") or debug_item.get("finished_at") or "").strip()
+        debug_item["request_url"] = str(details.get("request_url") or debug_item.get("request_url") or "").strip()
+        debug_item["endpoint_name"] = str(details.get("endpoint_name") or debug_item.get("endpoint_name") or "").strip()
+        debug_item["request_method"] = str(details.get("request_method") or debug_item.get("request_method") or "").strip()
+        timeout_value = details.get("request_timeout_seconds", debug_item.get("request_timeout_seconds"))
+        try:
+            debug_item["request_timeout_seconds"] = int(timeout_value) if timeout_value is not None else None
+        except (TypeError, ValueError):
+            debug_item["request_timeout_seconds"] = None
+        status_value = details.get("status_code", details.get("http_status_code"))
+        try:
+            debug_item["http_status_code"] = int(status_value) if status_value is not None else None
+        except (TypeError, ValueError):
+            debug_item["http_status_code"] = None
+        duration_value = details.get("duration_ms")
+        try:
+            debug_item["duration_ms"] = max(int(duration_value), 0) if duration_value is not None else debug_item.get("duration_ms")
+        except (TypeError, ValueError):
+            pass
+
+    def _log_provider_error(
+        self,
+        *,
+        execution_id: UUID,
+        row_index: int | None,
+        automation_id: UUID | None,
+        runtime: ProviderRuntimeSelection,
+        stage_of_failure: str,
+        exc: Exception,
+    ) -> None:
+        details = self._provider_error_details(exc)
+        error_type = self._classify_execution_error_type(
+            exc=exc,
+            stage_of_failure=stage_of_failure,
+        )
+        status_code = details.get("status_code") or details.get("http_status_code")
+        duration_ms = details.get("duration_ms")
+        request_id = details.get("provider_request_id")
+        client_request_id = details.get("client_request_id")
+        logger.warning(
+            "Provider call failed during execution.",
+            extra={
+                "event": "provider_call_failed",
+                "execution_id": str(execution_id),
+                "row_index": int(row_index) if row_index is not None else None,
+                "automation_id": str(automation_id) if automation_id is not None else None,
+                "provider": str(runtime.provider.slug or "").strip().lower(),
+                "model": str(runtime.model.model_slug or "").strip(),
+                "status_code": int(status_code) if isinstance(status_code, int) or str(status_code).isdigit() else None,
+                "error_type": error_type,
+                "request_id": str(request_id or "").strip() or None,
+                "client_request_id": str(client_request_id or "").strip() or None,
+                "duration_ms": int(duration_ms) if isinstance(duration_ms, int) or str(duration_ms).isdigit() else None,
+                "stage_of_failure": stage_of_failure,
+            },
+        )
+
+    @classmethod
+    def _normalize_tabular_debug_row(cls, *, debug_row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "row_index": int(debug_row.get("row_index") or 0),
+            "input_snapshot": cls._debug_json_cell(debug_row.get("input_snapshot")),
+            "canonical_fields": cls._debug_json_cell(debug_row.get("canonical_fields")),
+            "prompt_field_sources": cls._debug_json_cell(debug_row.get("prompt_field_sources")),
+            "placeholders_detected": cls._debug_json_cell(debug_row.get("placeholders_detected")),
+            "placeholders_resolved": cls._debug_json_cell(debug_row.get("placeholders_resolved")),
+            "placeholders_unresolved": cls._debug_json_cell(debug_row.get("placeholders_unresolved")),
+            "prompt_template": cls._debug_text_cell(debug_row.get("prompt_template")),
+            "prompt_final": cls._debug_text_cell(debug_row.get("prompt_final")),
+            "provider_name": cls._debug_text_cell(debug_row.get("provider_name")),
+            "provider_slug": cls._debug_text_cell(debug_row.get("provider_slug")),
+            "model_name": cls._debug_text_cell(debug_row.get("model_name")),
+            "model_slug": cls._debug_text_cell(debug_row.get("model_slug")),
+            "resolved_model_identifier": cls._debug_text_cell(debug_row.get("resolved_model_identifier")),
+            "request_url": cls._debug_text_cell(debug_row.get("request_url")),
+            "endpoint_name": cls._debug_text_cell(debug_row.get("endpoint_name")),
+            "request_method": cls._debug_text_cell(debug_row.get("request_method")),
+            "request_timeout_seconds": cls._debug_text_cell(debug_row.get("request_timeout_seconds")),
+            "api_family_resolved": cls._debug_text_cell(debug_row.get("api_family_resolved")),
+            "request_profile_resolved": cls._debug_text_cell(debug_row.get("request_profile_resolved")),
+            "token_limit_param_used": cls._debug_text_cell(debug_row.get("token_limit_param_used")),
+            "client_request_id": cls._debug_text_cell(debug_row.get("client_request_id")),
+            "request_payload_sanitized": cls._debug_json_cell(debug_row.get("request_payload_sanitized")),
+            "started_at": cls._debug_text_cell(debug_row.get("started_at")),
+            "finished_at": cls._debug_text_cell(debug_row.get("finished_at")),
+            "duration_ms": cls._debug_text_cell(debug_row.get("duration_ms")),
+            "http_status_code": cls._debug_text_cell(debug_row.get("http_status_code")),
+            "provider_error_message": cls._debug_text_cell(debug_row.get("provider_error_message")),
+            "provider_error_type": cls._debug_text_cell(debug_row.get("provider_error_type")),
+            "provider_error_code": cls._debug_text_cell(debug_row.get("provider_error_code")),
+            "provider_request_id": cls._debug_text_cell(debug_row.get("provider_request_id")),
+            "provider_trace_id": cls._debug_text_cell(debug_row.get("provider_trace_id")),
+            "response_headers_relevantes": cls._debug_json_cell(debug_row.get("response_headers_relevantes")),
+            "response_body_text": cls._debug_text_cell(debug_row.get("response_body_text")),
+            "response_body_json": cls._debug_json_cell(debug_row.get("response_body_json")),
+            "transport_error_class": cls._debug_text_cell(debug_row.get("transport_error_class")),
+            "transport_error_message": cls._debug_text_cell(debug_row.get("transport_error_message")),
+            "retry_count": cls._debug_text_cell(debug_row.get("retry_count")),
+            "retried": cls._debug_text_cell(debug_row.get("retried")),
+            "stage_of_failure": cls._debug_text_cell(debug_row.get("stage_of_failure")),
+            "error_type": cls._debug_text_cell(debug_row.get("error_type")),
+            "provider_parameters": cls._debug_json_cell(debug_row.get("provider_parameters")),
+            "response_raw_text": cls._debug_text_cell(debug_row.get("response_raw_text")),
+            "response_raw_payload": cls._debug_json_cell(debug_row.get("response_raw_payload")),
+            "json_payload_cleaned": cls._debug_text_cell(debug_row.get("json_payload_cleaned")),
+            "json_payload_parsed": cls._debug_json_cell(debug_row.get("json_payload_parsed")),
+            "parsed_output": cls._debug_json_cell(debug_row.get("parsed_output")),
+            "normalized_output": cls._debug_json_cell(debug_row.get("normalized_output")),
+            "projected_output_row": cls._debug_json_cell(debug_row.get("projected_output_row")),
+            "warnings": cls._debug_json_cell(debug_row.get("warnings")),
+            "errors": cls._debug_json_cell(debug_row.get("errors")),
+        }
+
+    def _build_tabular_debug_files(
+        self,
+        *,
+        execution_id: UUID,
+        runtime: ProviderRuntimeSelection,
+        parser_strategy: ExecutionParserStrategy,
+        formatter_strategy: ExecutionFormatterStrategy,
+        output_contract: ExecutionOutputContract,
+        debug_rows: list[dict[str, Any]],
+        retry_count: int = 0,
+    ) -> list[GeneratedExecutionFile]:
+        columns = [
+            "row_index",
+            "input_snapshot",
+            "canonical_fields",
+            "prompt_field_sources",
+            "placeholders_detected",
+            "placeholders_resolved",
+            "placeholders_unresolved",
+            "prompt_template",
+            "prompt_final",
+            "provider_name",
+            "provider_slug",
+            "model_name",
+            "model_slug",
+            "resolved_model_identifier",
+            "request_url",
+            "endpoint_name",
+            "request_method",
+            "request_timeout_seconds",
+            "api_family_resolved",
+            "request_profile_resolved",
+            "token_limit_param_used",
+            "client_request_id",
+            "request_payload_sanitized",
+            "started_at",
+            "finished_at",
+            "duration_ms",
+            "http_status_code",
+            "provider_error_message",
+            "provider_error_type",
+            "provider_error_code",
+            "provider_request_id",
+            "provider_trace_id",
+            "response_headers_relevantes",
+            "response_body_text",
+            "response_body_json",
+            "transport_error_class",
+            "transport_error_message",
+            "retry_count",
+            "retried",
+            "stage_of_failure",
+            "error_type",
+            "provider_parameters",
+            "response_raw_text",
+            "response_raw_payload",
+            "json_payload_cleaned",
+            "json_payload_parsed",
+            "parsed_output",
+            "normalized_output",
+            "projected_output_row",
+            "warnings",
+            "errors",
+        ]
+        endpoint_context = self._provider_endpoint_context(runtime=runtime)
+        meta_row = self._normalize_tabular_debug_row(
+            debug_row={
+                "row_index": 0,
+                "input_snapshot": {},
+                "canonical_fields": {},
+                "prompt_field_sources": {},
+                "placeholders_detected": [],
+                "placeholders_resolved": [],
+                "placeholders_unresolved": [],
+                "prompt_template": "",
+                "prompt_final": "",
+                "provider_name": str(getattr(runtime.provider, "name", "") or runtime.provider.slug),
+                "provider_slug": runtime.provider.slug,
+                "model_name": str(getattr(runtime.model, "model_name", "") or runtime.model.model_slug),
+                "model_slug": runtime.model.model_slug,
+                "resolved_model_identifier": runtime.model.model_slug,
+                "request_url": endpoint_context.get("request_url"),
+                "endpoint_name": endpoint_context.get("endpoint_name"),
+                "request_method": endpoint_context.get("request_method"),
+                "request_timeout_seconds": endpoint_context.get(
+                    "request_timeout_seconds",
+                    getattr(runtime.client, "timeout_seconds", settings.provider_timeout),
+                ),
+                "api_family_resolved": "",
+                "request_profile_resolved": "",
+                "token_limit_param_used": "",
+                "client_request_id": "",
+                "request_payload_sanitized": {},
+                "started_at": "",
+                "finished_at": "",
+                "duration_ms": 0,
+                "http_status_code": None,
+                "provider_error_message": "",
+                "provider_error_type": "",
+                "provider_error_code": "",
+                "provider_request_id": "",
+                "provider_trace_id": "",
+                "response_headers_relevantes": {},
+                "response_body_text": "",
+                "response_body_json": None,
+                "transport_error_class": "",
+                "transport_error_message": "",
+                "retry_count": max(int(retry_count or 0), 0),
+                "retried": bool((retry_count or 0) > 0),
+                "stage_of_failure": "",
+                "error_type": "",
+                "provider_parameters": {
+                    "temperature": getattr(settings, "temperature", None),
+                    "max_tokens": getattr(settings, "max_tokens", None),
+                    "parser_strategy": parser_strategy.value,
+                    "formatter_strategy": formatter_strategy.value,
+                    "output_contract_source": output_contract.source,
+                },
+                "response_raw_text": "",
+                "response_raw_payload": None,
+                "json_payload_cleaned": None,
+                "json_payload_parsed": None,
+                "parsed_output": None,
+                "normalized_output": None,
+                "projected_output_row": None,
+                "warnings": [],
+                "errors": [],
+            }
+        )
+        rows = [meta_row, *debug_rows]
+        content = self._build_tabular_workbook(
+            rows=rows,
+            columns=columns,
+            worksheet_name="debug_execucao",
+        )
+        return [
+            GeneratedExecutionFile(
+                file_type="debug",
+                file_name=f"debug_{execution_id}.xlsx",
+                mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                content=content,
+            )
+        ]
+
+    def _build_text_debug_files(
+        self,
+        *,
+        execution_id: UUID,
+        official_prompt: str,
+        runtime: ProviderRuntimeSelection,
+        parser_strategy: ExecutionParserStrategy,
+        formatter_strategy: ExecutionFormatterStrategy,
+        output_contract: ExecutionOutputContract,
+        debug_chunks: list[dict[str, Any]],
+        merged_output: str,
+    ) -> list[GeneratedExecutionFile]:
+        payload = {
+            "execution_id": str(execution_id),
+            "pipeline": "textual_single_pass",
+            "provider_name": str(getattr(runtime.provider, "name", "") or runtime.provider.slug),
+            "provider_slug": runtime.provider.slug,
+            "model_name": str(getattr(runtime.model, "model_name", "") or runtime.model.model_slug),
+            "model_slug": runtime.model.model_slug,
+            "resolved_model_identifier": runtime.model.model_slug,
+            "provider_parameters": {
+                "temperature": getattr(settings, "temperature", None),
+                "max_tokens": getattr(settings, "max_tokens", None),
+            },
+            "parser_strategy": parser_strategy.value,
+            "formatter_strategy": formatter_strategy.value,
+            "output_contract_source": output_contract.source,
+            "prompt_template": self._debug_text_cell(official_prompt, max_characters=12000),
+            "chunks": debug_chunks,
+            "merged_output_preview": self._debug_text_cell(merged_output, max_characters=12000),
+        }
+        content = json.dumps(payload, ensure_ascii=False, default=str, indent=2).encode("utf-8")
+        return [
+            GeneratedExecutionFile(
+                file_type="debug",
+                file_name=f"debug_{execution_id}.json",
+                mime_type="application/json",
+                content=content,
+            )
+        ]
+
+    @staticmethod
+    def _debug_text_cell(value: Any, *, max_characters: int = 30000) -> str:
+        if value is None:
+            return ""
+        normalized = str(value).strip()
+        if not normalized:
+            return ""
+        if len(normalized) <= max_characters:
+            return normalized
+        return f"{normalized[:max_characters].rstrip()}...[truncated]"
+
+    @classmethod
+    def _debug_json_cell(cls, value: Any, *, max_characters: int = 30000) -> str:
+        try:
+            serialized = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            serialized = str(value or "")
+        return cls._debug_text_cell(serialized, max_characters=max_characters)
+
+    @staticmethod
+    def _build_tabular_workbook(
+        *,
+        rows: list[dict[str, Any]],
+        columns: list[str],
+        worksheet_name: str = "resultado",
+    ) -> bytes:
         from openpyxl import Workbook
 
         workbook = Workbook()
         sheet = workbook.active
-        sheet.title = "resultado"
+        normalized_sheet_name = str(worksheet_name or "resultado").strip()
+        sheet.title = normalized_sheet_name[:31] or "resultado"
         sheet.append(columns)
         for row in rows:
             sheet.append([row.get(column, "") for column in columns])
@@ -2810,6 +3988,13 @@ class ExecutionService:
                 },
             )
         return truncated_prompt
+
+    @staticmethod
+    def _prompt_preview(prompt_text: str, *, max_characters: int = 280) -> str:
+        normalized = re.sub(r"\s+", " ", str(prompt_text or "")).strip()
+        if len(normalized) <= max_characters:
+            return normalized
+        return f"{normalized[:max_characters].rstrip()}..."
 
     def _build_global_context_text(
         self,
@@ -3053,7 +4238,16 @@ class ExecutionService:
         *,
         prompt_input: str,
         runtime: ProviderRuntimeSelection,
+        client_request_id: str | None = None,
     ) -> ProviderExecutionResult:
+        raw_model_metadata = getattr(runtime.model, "config_json", None)
+        model_metadata: dict[str, Any] = dict(raw_model_metadata) if isinstance(raw_model_metadata, dict) else {}
+        for key in ("api_family", "token_limit_param", "request_profile", "supports_reasoning"):
+            if key in model_metadata:
+                continue
+            raw_value = getattr(runtime.model, key, None)
+            if raw_value is not None:
+                model_metadata[key] = raw_value
         context_tokens = bind_log_context(
             provider=runtime.provider.slug,
             model=runtime.model.model_slug,
@@ -3064,6 +4258,8 @@ class ExecutionService:
                 model_name=runtime.model.model_slug,
                 max_tokens=settings.max_tokens,
                 temperature=settings.temperature,
+                model_metadata=model_metadata or None,
+                client_request_id=client_request_id,
             )
         finally:
             reset_log_context(context_tokens)
@@ -3209,6 +4405,10 @@ class ExecutionService:
     @staticmethod
     def _error_message(exc: Exception) -> str:
         if isinstance(exc, AppException):
+            if exc.payload.code in {"provider_http_error", "provider_timeout", "provider_network_error"}:
+                details = exc.payload.details if isinstance(exc.payload.details, dict) else {}
+                if details:
+                    return summarize_provider_error_message(details=details)
             return exc.payload.message
         return str(exc)
 

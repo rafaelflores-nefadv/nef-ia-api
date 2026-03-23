@@ -6,7 +6,7 @@
 
 <section class="panel-card">
     <p class="admin-note mb-3">
-        O provider sera sincronizado com a FastAPI no momento do salvamento, usando vinculo explicito por ID remoto.
+        O provider será sincronizado com a FastAPI no momento do salvamento, usando vínculo explícito por ID remoto.
     </p>
 
     {% if is_editing %}
@@ -20,18 +20,18 @@
                 {% if latest_connectivity_result.ok %}
                     <span class="status-pill status-success align-self-center">{{ latest_connectivity_result.status_label|default:"Conectado" }}</span>
                 {% elif latest_connectivity_result.status == "provider_not_synced" or latest_connectivity_result.status == "credential_not_found" or latest_connectivity_result.status == "credential_inactive" or latest_connectivity_result.status == "provider_inactive" or latest_connectivity_result.status == "provider_not_supported" %}
-                    <span class="status-pill status-warning align-self-center">{{ latest_connectivity_result.status_label|default:"Atencao" }}</span>
+                    <span class="status-pill status-warning align-self-center">{{ latest_connectivity_result.status_label|default:"Atenção" }}</span>
                 {% else %}
                     <span class="status-pill status-danger align-self-center">{{ latest_connectivity_result.status_label|default:"Falha" }}</span>
                 {% endif %}
             {% else %}
-                <span class="status-pill status-neutral align-self-center">Nao testado</span>
+                <span class="status-pill status-neutral align-self-center">Não testado</span>
             {% endif %}
         </div>
         {% if latest_connectivity_result %}
             <p class="admin-note mb-3">{{ latest_connectivity_result.message }}</p>
             {% if not latest_connectivity_result.ok and latest_connectivity_result.error_code %}
-                <p class="admin-note mb-3">Codigo tecnico: <code>{{ latest_connectivity_result.error_code }}</code></p>
+                <p class="admin-note mb-3">Código técnico: <code>{{ latest_connectivity_result.error_code }}</code></p>
             {% endif %}
         {% endif %}
     {% endif %}

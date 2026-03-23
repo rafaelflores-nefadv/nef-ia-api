@@ -60,6 +60,8 @@ class JsonLogFormatter(logging.Formatter):
             "processing_mode",
             "output_type",
             "parser_strategy",
+            "formatter_strategy",
+            "output_contract_source",
             "error_code",
             "error_category",
             "duration_seconds",

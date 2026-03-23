@@ -1,10 +1,10 @@
 import json
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import quote_plus
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     queue_name: str = "nef_ia.executions"
 
     log_level: str = "INFO"
-    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
     secret_key: str = "change-me"
     admin_jwt_algorithm: str = "HS256"
     admin_jwt_expire_minutes: int = 60
@@ -54,8 +54,8 @@ class Settings(BaseSettings):
     storage_path: str = "./storage"
     max_upload_size_mb: int = 1024
     upload_chunk_size_bytes: int = 1048576
-    allowed_file_extensions: list[str] = Field(default_factory=lambda: [".xlsx", ".csv", ".pdf"])
-    allowed_file_mime_types: list[str] = Field(
+    allowed_file_extensions: Annotated[list[str], NoDecode] = Field(default_factory=lambda: [".xlsx", ".csv", ".pdf"])
+    allowed_file_mime_types: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "application/vnd.ms-excel",
@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     max_concurrent_executions: int = 4
     chunk_size_characters: int = 8000
     execution_profile_default: str = "standard"
-    execution_profile_automation_overrides: dict[str, str] = Field(default_factory=dict)
+    execution_profile_automation_overrides: Annotated[dict[str, str], NoDecode] = Field(default_factory=dict)
     execution_profile_standard_max_execution_rows: int = 25000
     execution_profile_standard_max_provider_calls: int = 2500
     execution_profile_standard_max_text_chunks: int = 1200

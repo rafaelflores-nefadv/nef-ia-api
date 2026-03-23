@@ -4,6 +4,7 @@ from app.core.exceptions import AppException
 from app.services.execution_engine import (
     EngineExecutionInput,
     ExecutionFileKind,
+    ExecutionFormatterStrategy,
     ExecutionInputType,
     ExecutionOutputType,
     ExecutionParserStrategy,
@@ -90,6 +91,7 @@ def test_summarize_processing_plan_exposes_engine_dimensions() -> None:
     assert summary["processing_mode"] == "row_by_row_with_context"
     assert summary["output_type"] == "spreadsheet_output"
     assert summary["parser_strategy"] == "tabular_structured"
+    assert summary["formatter_strategy"] == "spreadsheet_tabular"
     assert summary["context_file_count"] == 1
 
 

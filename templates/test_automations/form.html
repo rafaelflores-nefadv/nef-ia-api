@@ -58,15 +58,81 @@
                 {% for error in form.credential_id.errors %}
                     <div class="invalid-feedback d-block">{{ error }}</div>
                 {% endfor %}
-                <div class="form-text">Opcional. Se vazio, a API usa a credencial ativa do provider no momento da execução.</div>
-            </div>
-            <div class="col-12">
-                <div class="form-check">
-                    {{ form.is_active }}
-                    <label class="form-check-label" for="{{ form.is_active.id_for_label }}">{{ form.is_active.label }}</label>
-                </div>
+                <div class="form-text">Opcional. Se vazio, a API usa a credencial ativa do provider na execução.</div>
             </div>
         </div>
+
+        <hr class="my-4">
+
+        <section>
+            <div class="panel-title-wrap mb-2">
+                <h3 class="panel-title">Contrato de saída</h3>
+            </div>
+            <p class="admin-note mb-3">
+                Esta configuração define o formato final usado pela execução da automação. Se ficar em branco, o sistema usa o padrão legado.
+            </p>
+
+            <div class="row g-3">
+                <div class="col-12 col-lg-4">
+                    <label for="{{ form.output_type.id_for_label }}" class="form-label fw-semibold">{{ form.output_type.label }}</label>
+                    {{ form.output_type }}
+                    {% for error in form.output_type.errors %}
+                        <div class="invalid-feedback d-block">{{ error }}</div>
+                    {% endfor %}
+                    <div class="form-text">Ex.: Planilha ou Texto.</div>
+                </div>
+
+                <div class="col-12 col-lg-4">
+                    <label for="{{ form.result_parser.id_for_label }}" class="form-label fw-semibold">{{ form.result_parser.label }}</label>
+                    {{ form.result_parser }}
+                    {% for error in form.result_parser.errors %}
+                        <div class="invalid-feedback d-block">{{ error }}</div>
+                    {% endfor %}
+                    <div class="form-text">Como interpretar a resposta da IA.</div>
+                </div>
+
+                <div class="col-12 col-lg-4">
+                    <label for="{{ form.result_formatter.id_for_label }}" class="form-label fw-semibold">{{ form.result_formatter.label }}</label>
+                    {{ form.result_formatter }}
+                    {% for error in form.result_formatter.errors %}
+                        <div class="invalid-feedback d-block">{{ error }}</div>
+                    {% endfor %}
+                    <div class="form-text">Como formatar o arquivo final.</div>
+                </div>
+
+                <div class="col-12">
+                    <label for="{{ form.output_schema.id_for_label }}" class="form-label fw-semibold">{{ form.output_schema.label }}</label>
+                    {{ form.output_schema }}
+                    {% for error in form.output_schema.errors %}
+                        <div class="invalid-feedback d-block">{{ error }}</div>
+                    {% endfor %}
+                    <div class="form-text">
+                        JSON opcional para colunas/campos/aliases/metadados da saída. Use `ai_output_columns` e `input_column_mappings` para separar colunas da IA e colunas mapeadas da entrada.
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <div class="col-12 mt-3">
+            <div class="form-check mb-2">
+                {{ form.debug_enabled }}
+                <label class="form-check-label" for="{{ form.debug_enabled.id_for_label }}">{{ form.debug_enabled.label }}</label>
+            </div>
+            <div class="form-text mb-2">
+                {{ form.debug_enabled.help_text }}
+            </div>
+            {% for error in form.debug_enabled.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+        </div>
+
+        <div class="col-12 mt-2">
+            <div class="form-check">
+                {{ form.is_active }}
+                <label class="form-check-label" for="{{ form.is_active.id_for_label }}">{{ form.is_active.label }}</label>
+            </div>
+        </div>
+
         <div class="d-flex gap-2 mt-4">
             <button type="submit" class="btn btn-dark">{{ submit_label }}</button>
             <a href="{{ list_url }}" class="btn btn-outline-secondary">Voltar</a>

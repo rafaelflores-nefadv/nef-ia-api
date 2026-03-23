@@ -2,13 +2,13 @@
 
 {% block content %}
 {% url "operations:execution_profiles" as profiles_list_url %}
-{% include "includes/page_header.html" with header_title="Editar perfil operacional" header_subtitle=page_subtitle breadcrumb_parent_label="Perfis por automacao" breadcrumb_parent_url=profiles_list_url breadcrumb_current="Editar perfil" %}
+{% include "includes/page_header.html" with header_title="Editar perfil operacional" header_subtitle=page_subtitle breadcrumb_parent_label="Perfis por automação" breadcrumb_parent_url=profiles_list_url breadcrumb_current="Editar perfil" %}
 
 <section class="panel-card">
     <div class="border rounded-3 p-3 bg-light-subtle mb-3">
         <div class="row g-2">
             <div class="col-12 col-lg-8">
-                <small class="text-secondary d-block">Automacao</small>
+                <small class="text-secondary d-block">Automação</small>
                 <strong>{{ setting.automation_name }}</strong>
                 <div class="admin-note"><code>{{ setting.automation_id }}</code></div>
             </div>
@@ -20,7 +20,7 @@
     </div>
 
     <div class="alert alert-info" role="alert">
-        Fallback por env/config permanece ativo quando nao houver configuracao persistida ativa para a automacao.
+        Fallback por env/config permanece ativo quando não houver configuração persistida ativa para a automação.
     </div>
 
     {% if form.non_field_errors %}
@@ -56,7 +56,7 @@
         <hr class="my-4">
         <h5 class="mb-3">Overrides operacionais (opcional)</h5>
         <p class="admin-note mb-3">
-            Campos vazios usam os limites base do perfil. Valores acima do hard limit global sao rejeitados.
+            Campos vazios usam os limites base do perfil. Valores acima do hard limit global são rejeitados.
         </p>
 
         <div class="row g-3">
@@ -95,7 +95,7 @@
         </div>
 
         <div class="d-flex gap-2 mt-4">
-            <button type="submit" class="btn btn-dark">Salvar configuracao</button>
+            <button type="submit" class="btn btn-dark">Salvar configuração</button>
             <a href="{{ profiles_list_url }}" class="btn btn-outline-secondary">Voltar</a>
         </div>
     </form>

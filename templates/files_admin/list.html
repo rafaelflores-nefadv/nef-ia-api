@@ -106,7 +106,9 @@
                             <td>{{ file_item.created_at|date:"d/m/Y H:i:s"|default:"-" }}</td>
                             <td class="text-end">
                                 <div class="table-actions">
-                                    <a href="{% url 'files_admin:detail' file_item.id %}" class="btn btn-sm btn-outline-secondary">Ver detalhe</a>
+                                    <a href="{% url 'files_admin:detail' file_item.id %}" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Ver detalhes" aria-label="Ver detalhes">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
                                 </div>
                             </td>
                         </tr>

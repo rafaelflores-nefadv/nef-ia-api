@@ -4,9 +4,47 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = "django-insecure-change-me"
-DEBUG = True
-ALLOWED_HOSTS: list[str] = ["*"]
+
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+
+        value = value.strip()
+        if value and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+
+        os.environ.setdefault(key, value)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_list(name: str, default: list[str]) -> list[str]:
+    raw_value = os.getenv(name, "")
+    if not raw_value.strip():
+        return default
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+_load_env_file(BASE_DIR / ".env")
+
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-change-me")
+DEBUG = _env_bool("DJANGO_DEBUG", True)
+ALLOWED_HOSTS: list[str] = _env_list("DJANGO_ALLOWED_HOSTS", ["*"])
 
 INSTALLED_APPS = [
     "django.contrib.auth",
@@ -58,19 +96,27 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
+DJANGO_DB_ENGINE = os.getenv("DJANGO_DB_ENGINE", "django.db.backends.postgresql").strip()
+
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": "nef_ia_api",
-        "USER": "nef_ia_api_user",
-        "PASSWORD": "Nef@2026!",
-        "HOST": "127.0.0.1",
-        "PORT": "3306",
-        "OPTIONS": {
-            "charset": "utf8mb4",
-        },
+        "ENGINE": DJANGO_DB_ENGINE or "django.db.backends.postgresql",
+        "NAME": os.getenv("DJANGO_DB_NAME", "nef_ia_django"),
+        "USER": os.getenv("DJANGO_DB_USER", "postgres"),
+        "PASSWORD": os.getenv("DJANGO_DB_PASSWORD", "postgres"),
+        "HOST": os.getenv("DJANGO_DB_HOST", "127.0.0.1"),
+        "PORT": os.getenv("DJANGO_DB_PORT", "5432"),
     }
 }
+
+if DATABASES["default"]["ENGINE"] == "django.db.backends.postgresql":
+    sslmode = os.getenv("DJANGO_DB_SSLMODE", "").strip()
+    if sslmode:
+        DATABASES["default"]["OPTIONS"] = {"sslmode": sslmode}
+elif DATABASES["default"]["ENGINE"] == "django.db.backends.mysql":
+    DATABASES["default"]["OPTIONS"] = {
+        "charset": os.getenv("DJANGO_DB_CHARSET", "utf8mb4"),
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -87,8 +133,8 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-LANGUAGE_CODE = "pt-br"
-TIME_ZONE = "America/Cuiaba"
+LANGUAGE_CODE = os.getenv("DJANGO_LANGUAGE_CODE", "pt-br")
+TIME_ZONE = os.getenv("DJANGO_TIME_ZONE", "America/Cuiaba")
 USE_I18N = True
 USE_TZ = True
 
@@ -106,6 +152,18 @@ STORAGES = {
 
 FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://127.0.0.1:8000")
 FASTAPI_TIMEOUT_SECONDS = float(os.getenv("FASTAPI_TIMEOUT_SECONDS", "2.5"))
+FASTAPI_PROMPT_TEST_CONNECT_TIMEOUT_SECONDS = float(
+    os.getenv("FASTAPI_PROMPT_TEST_CONNECT_TIMEOUT_SECONDS", str(FASTAPI_TIMEOUT_SECONDS))
+)
+FASTAPI_PROMPT_TEST_READ_TIMEOUT_SECONDS = float(
+    os.getenv("FASTAPI_PROMPT_TEST_READ_TIMEOUT_SECONDS", "240")
+)
+FASTAPI_PROMPT_TEST_WRITE_TIMEOUT_SECONDS = float(
+    os.getenv("FASTAPI_PROMPT_TEST_WRITE_TIMEOUT_SECONDS", "60")
+)
+FASTAPI_PROMPT_TEST_POOL_TIMEOUT_SECONDS = float(
+    os.getenv("FASTAPI_PROMPT_TEST_POOL_TIMEOUT_SECONDS", "30")
+)
 FASTAPI_ADMIN_TOKEN = os.getenv("FASTAPI_ADMIN_TOKEN", "")
 
 LOGIN_URL = "login"

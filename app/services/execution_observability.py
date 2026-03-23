@@ -17,6 +17,14 @@ class ExecutionErrorDiagnostic:
 _ERROR_CATEGORY_RULES: tuple[tuple[set[str], str], ...] = (
     (
         {
+            "execution_output_contract_invalid",
+            "execution_output_schema_invalid",
+            "execution_output_contract_incompatible",
+        },
+        "output_contract",
+    ),
+    (
+        {
             "execution_input_role_invalid",
             "execution_primary_input_invalid",
             "execution_input_type_unsupported",
@@ -63,7 +71,9 @@ _ERROR_CATEGORY_RULES: tuple[tuple[set[str], str], ...] = (
     (
         {
             "execution_parser_strategy_invalid",
+            "execution_formatter_strategy_invalid",
             "tabular_parser_invalid_output",
+            "prompt_placeholder_unresolved",
         },
         "response_parse",
     ),
@@ -135,6 +145,8 @@ def summarize_processing_plan(plan: EngineExecutionPlan) -> dict[str, Any]:
         "processing_mode": plan.processing_mode.value,
         "output_type": plan.output_type.value,
         "parser_strategy": plan.parser_strategy.value,
+        "formatter_strategy": plan.formatter_strategy.value,
+        "output_contract_source": plan.output_contract.source,
         "primary_request_file_id": str(plan.primary_input.request_file_id),
         "input_file_count": len(plan.ordered_inputs),
         "context_file_count": len(plan.context_inputs),

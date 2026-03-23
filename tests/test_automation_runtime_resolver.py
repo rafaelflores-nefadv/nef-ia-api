@@ -52,5 +52,10 @@ def test_runtime_resolver_uses_runtime_target_when_prompt_is_not_required() -> N
     assert result.prompt_version == 0
     assert result.provider_slug == "openai"
     assert result.model_slug == "gpt-5"
+    assert result.credential_id is None
+    assert result.output_type is None
+    assert result.result_parser is None
+    assert result.result_formatter is None
+    assert result.output_schema is None
 
 

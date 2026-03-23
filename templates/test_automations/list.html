@@ -12,7 +12,7 @@
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">As automações de teste ficam no MySQL da interface e só enviam provider/model/credencial para a API no momento da execução.</span>
+    <span class="admin-note">As automações de teste ficam no MySQL da interface e enviam runtime + contrato de saída para a API na execução.</span>
 </div>
 
 {% if integration_warnings %}
@@ -54,7 +54,7 @@
                     <tr>
                         <th>Nome</th>
                         <th>Runtime</th>
-                        <th>Credencial</th>
+                        <th>Contrato de saída</th>
                         <th>Status</th>
                         <th class="text-end">Ações</th>
                     </tr>
@@ -63,8 +63,24 @@
                     {% for item in test_automations %}
                         <tr>
                             <td class="fw-semibold">{{ item.name }}</td>
-                            <td>{{ item.provider_slug }} / {{ item.model_slug }}</td>
-                            <td>{{ item.credential_name|default:"Credencial ativa do provider" }}</td>
+                            <td>
+                                <div>{{ item.provider_slug }} / {{ item.model_slug }}</div>
+                                <small class="admin-note">{{ item.credential_name|default:"Credencial ativa do provider" }}</small>
+                            </td>
+                            <td>
+                                <span class="status-pill {{ item.output_contract_source_css }}">{{ item.output_contract_source_label }}</span>
+                                <div class="admin-note mt-1">
+                                    Modo debug:
+                                    <span class="status-pill {{ item.debug_mode_css }}">{{ item.debug_mode_label }}</span>
+                                </div>
+                                {% if item.has_explicit_output_contract %}
+                                    <div class="admin-note mt-1">Tipo: {{ item.output_type_label }}</div>
+                                    <div class="admin-note">Parser: {{ item.result_parser_label }}</div>
+                                    <div class="admin-note">Formatador: {{ item.result_formatter_label }}</div>
+                                {% else %}
+                                    <div class="admin-note mt-1">Sem contrato explícito. Será usado fallback por tipo de entrada.</div>
+                                {% endif %}
+                            </td>
                             <td>
                                 {% if item.is_active %}
                                     <span class="status-pill status-success">Ativa</span>
@@ -74,9 +90,18 @@
                             </td>
                             <td class="text-end">
                                 <div class="table-actions">
-                                    <a href="{% url 'test_automations:detail' item.id %}" class="btn btn-sm btn-outline-secondary">Ver</a>
-                                    <a href="{% url 'test_automations:edit' item.id %}" class="btn btn-sm btn-outline-primary">Editar</a>
-                                    <a href="{% url 'test_automations:delete' item.id %}" class="btn btn-sm btn-outline-danger">Excluir</a>
+                                    <a href="{% url 'test_automations:detail' item.id %}" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Ver detalhes" aria-label="Ver detalhes">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    <a href="{% url 'test_automations:copy_to_official' item.id %}" class="btn btn-sm btn-outline-dark btn-icon-action" title="Copiar para oficial" aria-label="Copiar para oficial">
+                                        <i class="bi bi-box-arrow-up-right"></i>
+                                    </a>
+                                    <a href="{% url 'test_automations:edit' item.id %}" class="btn btn-sm btn-outline-primary btn-icon-action" title="Editar" aria-label="Editar">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <a href="{% url 'test_automations:delete' item.id %}" class="btn btn-sm btn-outline-danger btn-icon-action" title="Excluir" aria-label="Excluir">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
                                 </div>
                             </td>
                         </tr>

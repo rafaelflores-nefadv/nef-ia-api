@@ -11,6 +11,8 @@ __all__ = [
     "FileService",
     "AuditService",
     "ExecutionService",
+    "ExternalCatalogService",
+    "ExternalExecutionService",
     "MetricsService",
     "UsageService",
 ]
@@ -57,6 +59,14 @@ def __getattr__(name: str):
         from app.services.execution_service import ExecutionService
 
         return ExecutionService
+    if name == "ExternalCatalogService":
+        from app.services.external_catalog_service import ExternalCatalogService
+
+        return ExternalCatalogService
+    if name == "ExternalExecutionService":
+        from app.services.external_execution_service import ExternalExecutionService
+
+        return ExternalExecutionService
     if name == "MetricsService":
         from app.services.metrics_service import MetricsService
 

@@ -40,6 +40,12 @@ class SharedExecutionRepository:
         )
         return list(self.session.execute(stmt).scalars().all())
 
+    def list_by_ids(self, execution_ids: list[UUID]) -> list[AnalysisExecution]:
+        if not execution_ids:
+            return []
+        stmt = select(AnalysisExecution).where(AnalysisExecution.id.in_(execution_ids))
+        return list(self.session.execute(stmt).scalars().all())
+
     def update_status(self, *, execution_id: UUID, status: str) -> AnalysisExecution | None:
         execution = self.get_by_id(execution_id)
         if execution is None:

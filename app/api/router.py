@@ -10,6 +10,8 @@ from app.api.routes import (
     admin_prompt_tests,
     admin_tokens,
     executions,
+    external_catalog,
+    external_executions,
     files,
     health,
     system,
@@ -31,3 +33,5 @@ api_router.include_router(admin_metrics.router, prefix=f"{settings.api_prefix}/a
 api_router.include_router(admin_prompt_tests.router, prefix=f"{settings.api_prefix}/admin")
 api_router.include_router(files.router)
 api_router.include_router(executions.router)
+api_router.include_router(external_executions.router)
+api_router.include_router(external_catalog.router)

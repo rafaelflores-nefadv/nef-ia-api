@@ -2,6 +2,10 @@
 
 from app.repositories.operational.automation_execution_settings_repository import AutomationExecutionSettingsRepository
 from app.repositories.operational.audit_repository import AuditLogRepository
+from app.repositories.operational.external_execution_context_repository import (
+    ExternalExecutionContextRecord,
+    ExternalExecutionContextRepository,
+)
 from app.repositories.operational.execution_file_repository import ExecutionFileRepository
 from app.repositories.operational.execution_input_file_repository import ExecutionInputFileRepository
 from app.repositories.operational.metrics_repository import MetricsRepository
@@ -26,6 +30,8 @@ __all__ = [
     "ExecutionInputFileRepository",
     "QueueJobRepository",
     "AuditLogRepository",
+    "ExternalExecutionContextRepository",
+    "ExternalExecutionContextRecord",
     "MetricsRepository",
     "ProviderUsageRepository",
     "AdminUserRepository",

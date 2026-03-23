@@ -91,9 +91,30 @@ tests/
 
 ## Configuracao
 1. Copie `.env.example` para `.env`.
-2. Ajuste variaveis sensiveis e conexoes.
-3. Preencha `django_ai_provider_credentials` com credencial ativa.
-4. Configure `CREDENTIALS_ENCRYPTION_KEY` com uma chave Fernet valida.
+2. Para ambiente local, a FastAPI e o worker usam o banco `nef_ia` no Postgres do Compose:
+   - `DB_HOST=postgres`
+   - `DB_PORT=5432`
+   - `DB_USER=postgres`
+   - `DB_PASSWORD=postgres`
+   - `DB_NAME=nef_ia`
+3. O painel Django local usa um banco separado no mesmo servidor Postgres:
+   - `DJANGO_DB_HOST=127.0.0.1`
+   - `DJANGO_DB_PORT=5432`
+   - `DJANGO_DB_NAME=nef_ia_django`
+   - `DJANGO_DB_USER=postgres`
+   - `DJANGO_DB_PASSWORD=postgres`
+4. Se outro ambiente precisar de engine diferente, ajuste `DJANGO_DB_ENGINE` explicitamente.
+5. Preencha `django_ai_provider_credentials` com credencial ativa quando precisar testar providers reais.
+6. Configure `CREDENTIALS_ENCRYPTION_KEY` com uma chave Fernet valida antes de criar ou editar credenciais de provider.
+
+Importante sobre `CREDENTIALS_ENCRYPTION_KEY`:
+- O valor `replace-with-fernet-key` presente no `.env.example` e apenas um placeholder invalido.
+- Ele nao deve ser usado em producao.
+- Gere uma chave valida com:
+
+```powershell
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
 
 Variaveis importantes da Etapa 6/7/8/9:
 - `MAX_TOKENS`
@@ -127,9 +148,22 @@ Variaveis importantes da Etapa 6/7/8/9:
 - `CHUNK_SIZE_CHARACTERS`
 - `CREDENTIALS_ENCRYPTION_KEY`
 
-## Rodando com Docker
-```bash
-docker compose up --build
+## Execucao local
+
+### Pre-requisitos
+- Docker e Docker Compose
+- Python 3.11+
+- `venv` habilitado no Python local
+
+### Arquitetura local esperada
+- FastAPI + worker + Redis + Postgres via Docker Compose
+- Banco `nef_ia` para FastAPI/worker
+- Banco `nef_ia_django` para o Django local
+- Django local fora do Docker, conectado ao Postgres do Compose pela porta `5432`
+
+### 1. Subir infraestrutura da FastAPI
+```powershell
+docker compose up --build -d
 ```
 
 Servicos:
@@ -137,6 +171,100 @@ Servicos:
 - Worker Dramatiq: `nef-ia-worker`
 - Postgres: `localhost:5432`
 - Redis: `localhost:6379`
+- Django local: `http://127.0.0.1:8001`
+
+O container Postgres inicializa automaticamente:
+- `nef_ia` para FastAPI e worker
+- `nef_ia_django` para o Django
+
+### 2. Conferir que os dois bancos existem
+```powershell
+docker compose exec postgres psql -U postgres -lqt
+```
+
+Voce deve ver pelo menos:
+- `nef_ia`
+- `nef_ia_django`
+
+Se voce ja tinha um volume antigo do Postgres antes dessa configuracao, os scripts de inicializacao nao sao reexecutados automaticamente. Nesse caso:
+
+```powershell
+docker compose down -v
+docker compose up --build -d
+```
+
+### 3. Rodar migrations da FastAPI
+```powershell
+docker compose exec api python -m alembic upgrade head
+```
+
+### 4. Rodar seed/bootstrap da FastAPI
+Seed basico:
+
+```powershell
+docker compose exec api python -m app.seed
+```
+
+Com atualizacao forcada dos dados padrao:
+
+```powershell
+docker compose exec api python -m app.seed --force
+```
+
+Com criacao do token bootstrap para integracao com Django:
+
+```powershell
+docker compose exec api python -m app.seed --with-bootstrap-token
+```
+
+Opcionalmente, para nomear o token bootstrap:
+
+```powershell
+docker compose exec api python -m app.seed --with-bootstrap-token --bootstrap-token-name django-bootstrap
+```
+
+Ao usar `--with-bootstrap-token`, o seed cria `django-bootstrap` (ou o nome informado) somente se ainda nao existir, salva apenas o hash no banco e exibe o plaintext apenas nessa execucao.
+
+### 5. Criar e ativar o venv do Django
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Observacao:
+- O fluxo local padrao usa PostgreSQL, nao SQLite.
+- O Django conecta em `nef_ia_django` por `127.0.0.1:5432`.
+
+### 6. Rodar migrations do Django local
+```powershell
+python manage.py migrate
+```
+
+### 7. Subir o painel Django local
+```powershell
+python manage.py runserver 8001
+```
+
+### 8. Bootstrap Django <-> FastAPI (sem JWT manual)
+1. Rode as migrations da FastAPI e do Django.
+2. Rode o seed da FastAPI com bootstrap:
+
+```powershell
+docker compose exec api python -m app.seed --with-bootstrap-token
+```
+
+3. Copie o token bootstrap exibido no terminal (exibicao unica).
+4. No Django, acesse `Configuracoes > Integracao FastAPI`.
+5. Em `Cadastrar token bootstrap`, informe nome e token plaintext copiado.
+6. Salve e use a mesma tela para:
+- criar novos tokens na FastAPI
+- listar tokens
+- revogar tokens
+- selecionar o token ativo usado pelo Django
+
+`FASTAPI_ADMIN_TOKEN` permanece apenas como fallback legado temporario quando nenhum token ativo estiver cadastrado na tela.
 
 ## Endpoints principais
 - `GET /health`
@@ -173,57 +301,8 @@ Servicos:
 - `PATCH /api/v1/admin/credentials/{credential_id}/deactivate`
 - `GET /api/v1/admin/catalog/status`
 
-## Migrations
-```bash
-python -m alembic upgrade head
-```
-
-## Seed inicial (FastAPI)
-```bash
-python -m app.seed
-```
-
-Com atualizacao forcada dos dados padrao:
-```bash
-python -m app.seed --force
-```
-
-Com criacao do token bootstrap para integracao com Django:
-```bash
-python -m app.seed --with-bootstrap-token
-```
-
-Opcionalmente, para nomear o token bootstrap:
-```bash
-python -m app.seed --with-bootstrap-token --bootstrap-token-name django-bootstrap
-```
-
-Ao usar `--with-bootstrap-token`, o seed cria `django-bootstrap` (ou o nome informado) somente se ainda nao existir, salva apenas o hash no banco e exibe o plaintext apenas nessa execucao.
-
-## Bootstrap Django <-> FastAPI (sem JWT manual)
-1. Instale dependencias e configure `.env`.
-2. Rode as migrations:
-```bash
-python -m alembic upgrade head
-python manage.py migrate
-```
-3. Rode o seed da FastAPI com bootstrap:
-```bash
-python -m app.seed --with-bootstrap-token
-```
-4. Copie o token bootstrap exibido no terminal (exibicao unica).
-5. No Django, acesse `Configuracoes > Integracao FastAPI`.
-6. Em `Cadastrar token bootstrap`, informe nome e token plaintext copiado.
-7. Salve e use a mesma tela para:
-- criar novos tokens na FastAPI
-- listar tokens
-- revogar tokens
-- selecionar o token ativo usado pelo Django
-
-`FASTAPI_ADMIN_TOKEN` permanece apenas como fallback legado temporario quando nenhum token ativo estiver cadastrado na tela.
-
 ## Testes
-```bash
+```powershell
 python -m pytest -q
 ```
 

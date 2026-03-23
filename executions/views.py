@@ -76,7 +76,7 @@ class ExecutionDetailView(LoginRequiredMixin, TemplateView):
                 request,
                 str(
                     payload.get("limitation_message")
-                    or "Execucao nao encontrada na consulta remota da API."
+                    or "Execução não encontrada na consulta remota da API."
                 ),
             )
             return redirect("executions:list")

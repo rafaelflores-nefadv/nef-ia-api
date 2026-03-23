@@ -1,7 +1,8 @@
 import logging
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import BinaryIO
+from typing import Any, BinaryIO
 from uuid import UUID
 
 from fastapi import UploadFile, status
@@ -101,27 +102,10 @@ class FileService:
             extra={"analysis_request_id": str(analysis_request_id), "token_id": str(api_token.id)},
         )
         self._validate_upload_file(upload_file)
-
-        shared_request = self.shared_analysis.get_request_by_id(analysis_request_id)
-        if shared_request is None:
-            raise AppException(
-                "analysis_request_id not found in shared system.",
-                status_code=404,
-                code="analysis_request_not_found",
-                details={"analysis_request_id": str(analysis_request_id)},
-            )
-
-        has_permission = check_token_permission(
-            permissions=token_permissions,
-            operation="file_upload",
-            automation_id=shared_request.automation_id,
+        self._get_scoped_analysis_request_for_upload(
+            analysis_request_id=analysis_request_id,
+            token_permissions=token_permissions,
         )
-        if not has_permission:
-            raise AppException(
-                "Token does not allow file upload for this automation.",
-                status_code=403,
-                code="file_upload_permission_denied",
-            )
 
         stored: StoredFile | None = None
         try:
@@ -146,6 +130,69 @@ class FileService:
                 details={"max_size_mb": settings.max_upload_size_mb},
             ) from exc
 
+        return self._persist_request_file_record(
+            analysis_request_id=analysis_request_id,
+            stored=stored,
+            api_token=api_token,
+            ip_address=ip_address,
+        )
+
+    def upload_request_json_payload(
+        self,
+        *,
+        analysis_request_id: UUID,
+        payload: Any,
+        api_token: DjangoAiApiToken,
+        token_permissions: list[DjangoAiApiTokenPermission],
+        ip_address: str | None = None,
+        file_name: str = "input_payload.json",
+    ) -> DjangoAiRequestFile:
+        self._get_scoped_analysis_request_for_upload(
+            analysis_request_id=analysis_request_id,
+            token_permissions=token_permissions,
+        )
+
+        try:
+            serialized = json.dumps(payload, ensure_ascii=False)
+        except (TypeError, ValueError) as exc:
+            raise AppException(
+                "JSON payload is not serializable.",
+                status_code=422,
+                code="invalid_input",
+            ) from exc
+
+        payload_bytes = serialized.encode("utf-8")
+        if len(payload_bytes) > self.max_size_bytes:
+            raise AppException(
+                "JSON payload exceeds configured maximum size.",
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                code="file_too_large",
+                details={"max_size_mb": settings.max_upload_size_mb},
+            )
+
+        stored = self.storage.save_generated_file(
+            content=payload_bytes,
+            category="requests",
+            entity_id=analysis_request_id,
+            subdir="json",
+            file_name=file_name,
+            mime_type="application/json",
+        )
+        return self._persist_request_file_record(
+            analysis_request_id=analysis_request_id,
+            stored=stored,
+            api_token=api_token,
+            ip_address=ip_address,
+        )
+
+    def _persist_request_file_record(
+        self,
+        *,
+        analysis_request_id: UUID,
+        stored: StoredFile,
+        api_token: DjangoAiApiToken,
+        ip_address: str | None,
+    ) -> DjangoAiRequestFile:
         try:
             request_file = DjangoAiRequestFile(
                 analysis_request_id=analysis_request_id,
@@ -190,6 +237,33 @@ class FileService:
             if isinstance(exc, AppException):
                 raise
             raise AppException("Failed to persist uploaded file metadata.", status_code=500, code="file_persist_failed") from exc
+
+    def _get_scoped_analysis_request_for_upload(
+        self,
+        *,
+        analysis_request_id: UUID,
+        token_permissions: list[DjangoAiApiTokenPermission],
+    ) -> None:
+        shared_request = self.shared_analysis.get_request_by_id(analysis_request_id)
+        if shared_request is None:
+            raise AppException(
+                "analysis_request_id not found in shared system.",
+                status_code=404,
+                code="analysis_request_not_found",
+                details={"analysis_request_id": str(analysis_request_id)},
+            )
+
+        has_permission = check_token_permission(
+            permissions=token_permissions,
+            operation="file_upload",
+            automation_id=shared_request.automation_id,
+        )
+        if not has_permission:
+            raise AppException(
+                "Token does not allow file upload for this automation.",
+                status_code=403,
+                code="file_upload_permission_denied",
+            )
 
     def register_generated_execution_file(
         self,

@@ -6,6 +6,7 @@ from .views import (
     TestPromptDetailView,
     TestPromptExecutionCreateView,
     TestPromptExecutionDetailView,
+    TestPromptExecutionStatusView,
     TestPromptExecutionOutputDownloadView,
     TestPromptListView,
     TestPromptUpdateView,
@@ -23,6 +24,11 @@ urlpatterns = [
     path("<int:pk>/excluir/", TestPromptDeleteView.as_view(), name="delete"),
     path("<int:pk>/executar/", TestPromptExecutionCreateView.as_view(), name="execute"),
     path("<int:pk>/execucoes/<str:execution_id>/", TestPromptExecutionDetailView.as_view(), name="execution_detail"),
+    path(
+        "<int:pk>/execucoes/<str:execution_id>/status/",
+        TestPromptExecutionStatusView.as_view(),
+        name="execution_status",
+    ),
     path(
         "<int:pk>/execucoes/<str:execution_id>/arquivo/",
         TestPromptExecutionOutputDownloadView.as_view(),

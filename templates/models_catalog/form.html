@@ -7,10 +7,10 @@
 <section class="panel-card">
     {% if is_create_mode %}
         <p class="admin-note mb-2">
-            O fluxo principal usa descoberta real via FastAPI/provider e cadastro no catalogo operacional remoto.
+            O fluxo principal usa descoberta real via FastAPI/provider e cadastro no catálogo operacional remoto.
         </p>
         <p class="admin-note mb-3">
-            O fallback local so aparece quando houver falha real de integracao e sera sinalizado explicitamente.
+            O fallback local só aparece quando houver falha real de integração e será sinalizado explicitamente.
         </p>
         <div class="d-flex align-items-center gap-2 mb-3">
             <span id="models-source-badge" class="status-pill
@@ -23,32 +23,32 @@
                 {% if form.available_models_source == "api_provider" %}
                     FastAPI / provider real
                 {% elif form.available_models_source == "api_catalog" %}
-                    FastAPI / catalogo
+                    FastAPI / catálogo
                 {% elif form.available_models_source == "fallback_local" %}
                     Fallback local
                 {% elif form.available_models_source == "provider_not_synced" %}
-                    Provider nao sincronizado
+                    Provider não sincronizado
                 {% else %}
-                    Integracao indisponivel
+                    Integração indisponível
                 {% endif %}
             </span>
             <small id="models-source-note" class="admin-note">
                 {% if form.available_models_source == "api_provider" %}
                     Origem atual: modelos descobertos no provider real via FastAPI.
                 {% elif form.available_models_source == "api_catalog" %}
-                    Origem atual: catalogo operacional da FastAPI.
+                    Origem atual: catálogo operacional da FastAPI.
                 {% elif form.available_models_source == "fallback_local" %}
-                    Origem atual: fallback local temporario por falha de integracao.
+                    Origem atual: fallback local temporário por falha de integração.
                 {% elif form.available_models_source == "provider_not_synced" %}
-                    Origem atual: provider sem vinculo remoto na FastAPI.
+                    Origem atual: provider sem vínculo remoto na FastAPI.
                 {% else %}
-                    Origem atual: integracao indisponivel.
+                    Origem atual: integração indisponível.
                 {% endif %}
             </small>
         </div>
     {% else %}
         <p class="admin-note mb-3">
-            Provider e identificacao do modelo estao bloqueados para preservar consistencia.
+            Provider e identificação do modelo estão bloqueados para preservar consistência.
         </p>
         {% if remote_model_id %}
             <div class="alert alert-info" role="alert">
@@ -109,7 +109,7 @@
                 <div class="col-12 col-lg-6">
                     <label for="{{ form.provider.id_for_label }}" class="form-label fw-semibold">{{ form.provider.label }}</label>
                     {{ form.provider }}
-                    <div class="form-text">Escolha o provider para carregar os modelos disponiveis.</div>
+                    <div class="form-text">Escolha o provider para carregar os modelos disponíveis.</div>
                     {% for error in form.provider.errors %}
                         <div class="invalid-feedback d-block">{{ error }}</div>
                     {% endfor %}
@@ -120,7 +120,7 @@
                     {{ form.known_model }}
                     <div id="catalog-help-text" class="form-text">{{ form.catalog_help_text }}</div>
                     <div id="selectable-model-count" class="form-text {% if not form.selectable_models_count %}d-none{% endif %}">
-                        {{ form.selectable_models_count }} modelo(s) disponivel(is) para cadastro.
+                        {{ form.selectable_models_count }} modelo(s) disponível(is) para cadastro.
                     </div>
                     {% for error in form.known_model.errors %}
                         <div class="invalid-feedback d-block">{{ error }}</div>
@@ -128,7 +128,7 @@
                 </div>
 
                 <div class="col-12 {% if not form.registered_models %}d-none{% endif %}" id="registered-models-wrapper">
-                    <small class="text-secondary d-block mb-2">Modelos ja cadastrados para este provider</small>
+                    <small class="text-secondary d-block mb-2">Modelos já cadastrados para este provider</small>
                     <div id="registered-models" class="d-flex flex-wrap gap-2">
                         {% for item in form.registered_models %}
                             <span class="status-pill status-neutral">{{ item.label|default:item.name }}</span>
@@ -162,7 +162,7 @@
                                     <strong id="preview-output">{{ form.selected_known_model.output_cost_per_1k|default:"-" }}</strong>
                                 </div>
                                 <div class="col-12">
-                                    <small class="text-secondary d-block">Descricao</small>
+                                    <small class="text-secondary d-block">Descrição</small>
                                     <span id="preview-description">{{ form.selected_known_model.description|default:"-" }}</span>
                                 </div>
                             </div>
@@ -372,28 +372,28 @@
                             helpText: "Modelos carregados da API do provider via FastAPI.",
                         },
                         api_catalog: {
-                            label: "FastAPI / catalogo",
-                            note: "Origem atual: catalogo operacional da FastAPI.",
+                            label: "FastAPI / catálogo",
+                            note: "Origem atual: catálogo operacional da FastAPI.",
                             className: "status-pill status-warning",
                             helpText: "Modelos carregados da FastAPI (catalogo administrativo).",
                         },
                         fallback_local: {
                             label: "Fallback local",
-                            note: "Origem atual: fallback local temporario por falha de integracao.",
+                            note: "Origem atual: fallback local temporário por falha de integração.",
                             className: "status-pill status-danger",
-                            helpText: "Fallback local ativado por falha real de integracao.",
+                            helpText: "Fallback local ativado por falha real de integração.",
                         },
                         provider_not_synced: {
-                            label: "Provider nao sincronizado",
-                            note: "Origem atual: provider sem vinculo remoto na FastAPI.",
+                            label: "Provider não sincronizado",
+                            note: "Origem atual: provider sem vínculo remoto na FastAPI.",
                             className: "status-pill status-danger",
-                            helpText: "Provider sem vinculo remoto na FastAPI.",
+                            helpText: "Provider sem vínculo remoto na FastAPI.",
                         },
                         unavailable: {
-                            label: "Integracao indisponivel",
-                            note: "Origem atual: integracao indisponivel.",
+                            label: "Integração indisponível",
+                            note: "Origem atual: integração indisponível.",
                             className: "status-pill status-neutral",
-                            helpText: "Integracao indisponivel. Revise mensagens de erro.",
+                            helpText: "Integração indisponível. Revise mensagens de erro.",
                         },
                     };
                     const item = mapping[source] || mapping.unavailable;
@@ -446,7 +446,7 @@
                     if (!Array.isArray(items) || !items.length) {
                         const option = document.createElement("option");
                         option.value = "";
-                        option.textContent = "Nenhum modelo disponivel para este provider";
+                        option.textContent = "Nenhum modelo disponível para este provider";
                         modelField.appendChild(option);
                         if (selectableModelCount) {
                             selectableModelCount.classList.add("d-none");
@@ -474,7 +474,7 @@
                         option.value = key;
                         let label = String(item.label || item.name || key);
                         if (item.is_registered) {
-                            label += " (ja cadastrado)";
+                            label += " (já cadastrado)";
                             option.disabled = true;
                             registered.push(item);
                         } else {
@@ -496,7 +496,7 @@
                             selectableModelCount.textContent = "";
                         } else {
                             selectableModelCount.classList.remove("d-none");
-                            selectableModelCount.textContent = selectable.length + " modelo(s) disponivel(is) para cadastro.";
+                            selectableModelCount.textContent = selectable.length + " modelo(s) disponível(is) para cadastro.";
                         }
                     }
 
@@ -561,17 +561,17 @@
                         setSourceUi(source);
                         setWarnings(warnings);
                         if (source === "provider_not_synced") {
-                            setCatalogWarning("Provider sem vinculo remoto na FastAPI. Sincronize o provider antes de cadastrar modelos.");
+                            setCatalogWarning("Provider sem vínculo remoto na FastAPI. Sincronize o provider antes de cadastrar modelos.");
                         } else if (!items.length) {
-                            setCatalogWarning("Nenhum modelo disponivel foi retornado para este provider.");
+                            setCatalogWarning("Nenhum modelo disponível foi retornado para este provider.");
                         } else {
                             setCatalogWarning("");
                         }
                         renderOptions(items, selectedKey);
                     } catch (error) {
                         setSourceUi("unavailable");
-                        setWarnings(["Falha ao carregar modelos disponiveis via integracao FastAPI."]);
-                        setCatalogWarning("Falha de integracao. Tente novamente.");
+                        setWarnings(["Falha ao carregar modelos disponíveis via integração FastAPI."]);
+                        setCatalogWarning("Falha de integração. Tente novamente.");
                         renderOptions([], "");
                     }
                 }

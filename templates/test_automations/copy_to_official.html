@@ -1,0 +1,75 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block content %}
+{% url "test_automations:detail" automation.id as detail_url %}
+{% include "includes/page_header.html" with header_title="Copiar para oficial" header_subtitle="Promove uma copia da automacao de teste para o catalogo oficial externo" breadcrumb_parent_label="Automacoes de teste" breadcrumb_parent_url=detail_url breadcrumb_current="Copiar para oficial" %}
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    {% include "includes/data_origin_badge.html" with source=integration_source %}
+    <span class="admin-note">A automacao de teste original nao sera alterada. A copia oficial sera criada no token escolhido.</span>
+</div>
+
+{% if integration_warnings %}
+    <div class="alert alert-warning" role="alert">
+        <ul class="mb-0 ps-3">
+            {% for warning in integration_warnings %}
+                <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
+<section class="panel-card mb-3">
+    <div class="panel-title-wrap">
+        <h3 class="panel-title">Automacao de teste de origem</h3>
+    </div>
+    <dl class="row mb-0">
+        <dt class="col-sm-3 text-secondary">Nome</dt>
+        <dd class="col-sm-9">{{ automation.name }}</dd>
+        <dt class="col-sm-3 text-secondary">Provider/Model</dt>
+        <dd class="col-sm-9">{{ automation.provider_slug }} / {{ automation.model_slug }}</dd>
+        <dt class="col-sm-3 text-secondary">Contrato</dt>
+        <dd class="col-sm-9">{{ automation.output_contract_source_label }}</dd>
+        <dt class="col-sm-3 text-secondary">Prompt vinculado</dt>
+        <dd class="col-sm-9">
+            {% if linked_prompt %}
+                {{ linked_prompt.name }} (ID local {{ linked_prompt.id }})
+            {% else %}
+                -
+            {% endif %}
+        </dd>
+    </dl>
+</section>
+
+<section class="panel-card">
+    {% if form.non_field_errors %}
+        <div class="alert alert-danger" role="alert">
+            {% for error in form.non_field_errors %}
+                {{ error }}
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <form method="post" novalidate>
+        {% csrf_token %}
+        <div class="mb-3">
+            <label for="{{ form.owner_token_id.id_for_label }}" class="form-label fw-semibold">{{ form.owner_token_id.label }}</label>
+            {{ form.owner_token_id }}
+            {% for error in form.owner_token_id.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+            <div class="form-text">Selecione o token oficial que sera owner da nova automacao criada.</div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Preview do prompt que sera copiado</label>
+            <pre class="bg-light p-3 rounded border mb-0" style="white-space: pre-wrap;">{{ linked_prompt.prompt_text|default:""|slice:":1200" }}</pre>
+        </div>
+
+        <div class="d-flex gap-2 mt-4">
+            <button type="submit" class="btn btn-dark">Copiar para oficial</button>
+            <a href="{{ detail_url }}" class="btn btn-outline-secondary">Cancelar</a>
+        </div>
+    </form>
+</section>
+{% endblock %}

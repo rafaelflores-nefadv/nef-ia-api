@@ -6,48 +6,100 @@
 
 <div class="d-flex align-items-center gap-2 mb-3">
     {% include "includes/data_origin_badge.html" with source=integration_source %}
-    <span class="admin-note">Entidade local usada para selecionar provider, modelo e credencial na execução de teste.</span>
+    <span class="admin-note">Entidade local usada para definir runtime e contrato de saída na execução de teste.</span>
 </div>
 
 <section class="panel-card mb-3">
     <div class="d-flex gap-2 justify-content-end">
+        <a href="{% url 'test_automations:copy_to_official' automation.id %}" class="btn btn-outline-dark">Copiar para oficial</a>
         <a href="{% url 'test_automations:edit' automation.id %}" class="btn btn-outline-primary">Editar</a>
         <a href="{% url 'test_automations:delete' automation.id %}" class="btn btn-outline-danger">Excluir</a>
     </div>
 </section>
 
+<section class="row g-3 mb-3">
+    <div class="col-12 col-xl-6">
+        <article class="panel-card h-100">
+            <div class="panel-title-wrap">
+                <h3 class="panel-title">Runtime</h3>
+            </div>
+            <dl class="row mb-0">
+                <dt class="col-sm-4 text-secondary">ID local</dt>
+                <dd class="col-sm-8"><code>{{ automation.id }}</code></dd>
+
+                <dt class="col-sm-4 text-secondary">Slug</dt>
+                <dd class="col-sm-8"><code>{{ automation.slug }}</code></dd>
+
+                <dt class="col-sm-4 text-secondary">Provider</dt>
+                <dd class="col-sm-8">{{ automation.provider_slug }} (<code>{{ automation.provider_id }}</code>)</dd>
+
+                <dt class="col-sm-4 text-secondary">Model</dt>
+                <dd class="col-sm-8">{{ automation.model_slug }} (<code>{{ automation.model_id }}</code>)</dd>
+
+                <dt class="col-sm-4 text-secondary">Credencial</dt>
+                <dd class="col-sm-8">
+                    {% if automation.credential_id %}
+                        {{ automation.credential_name|default:"Credencial selecionada" }} (<code>{{ automation.credential_id }}</code>)
+                    {% else %}
+                        Credencial ativa do provider no momento da execução
+                    {% endif %}
+                </dd>
+
+                <dt class="col-sm-4 text-secondary">Status</dt>
+                <dd class="col-sm-8">
+                    {% if automation.is_active %}
+                        <span class="status-pill status-success">Ativa</span>
+                    {% else %}
+                        <span class="status-pill status-neutral">Inativa</span>
+                    {% endif %}
+                </dd>
+            </dl>
+        </article>
+    </div>
+
+    <div class="col-12 col-xl-6">
+        <article class="panel-card h-100">
+            <div class="panel-title-wrap">
+                <h3 class="panel-title">Contrato de saída</h3>
+            </div>
+            <p class="mb-2">
+                <span class="status-pill {{ automation.output_contract_source_css }}">{{ automation.output_contract_source_label }}</span>
+            </p>
+
+            {% if automation.has_explicit_output_contract %}
+                <dl class="row mb-0">
+                    <dt class="col-sm-4 text-secondary">Tipo de saída</dt>
+                    <dd class="col-sm-8">{{ automation.output_type_label }}</dd>
+
+                    <dt class="col-sm-4 text-secondary">Parser</dt>
+                    <dd class="col-sm-8">{{ automation.result_parser_label }}</dd>
+
+                    <dt class="col-sm-4 text-secondary">Formatador</dt>
+                    <dd class="col-sm-8">{{ automation.result_formatter_label }}</dd>
+
+                    <dt class="col-sm-4 text-secondary">Schema</dt>
+                    <dd class="col-sm-8">{{ automation.output_schema_summary_label }}</dd>
+
+                    <dt class="col-sm-4 text-secondary">Modo debug da automação</dt>
+                    <dd class="col-sm-8">
+                        <span class="status-pill {{ automation.debug_mode_css }}">{{ automation.debug_mode_label }}</span>
+                    </dd>
+                </dl>
+            {% else %}
+                <p class="admin-note mb-0">
+                    Esta automação ainda usa o comportamento legado/default. Configure o contrato explícito para controlar tipo, parser, formatador e schema.
+                </p>
+                <p class="admin-note mt-2 mb-0">
+                    Modo debug da automação:
+                    <span class="status-pill {{ automation.debug_mode_css }}">{{ automation.debug_mode_label }}</span>
+                </p>
+            {% endif %}
+        </article>
+    </div>
+</section>
+
 <section class="panel-card">
     <dl class="row mb-0">
-        <dt class="col-sm-4 text-secondary">ID local</dt>
-        <dd class="col-sm-8"><code>{{ automation.id }}</code></dd>
-
-        <dt class="col-sm-4 text-secondary">Slug</dt>
-        <dd class="col-sm-8"><code>{{ automation.slug }}</code></dd>
-
-        <dt class="col-sm-4 text-secondary">Provider</dt>
-        <dd class="col-sm-8">{{ automation.provider_slug }} (<code>{{ automation.provider_id }}</code>)</dd>
-
-        <dt class="col-sm-4 text-secondary">Model</dt>
-        <dd class="col-sm-8">{{ automation.model_slug }} (<code>{{ automation.model_id }}</code>)</dd>
-
-        <dt class="col-sm-4 text-secondary">Credencial</dt>
-        <dd class="col-sm-8">
-            {% if automation.credential_id %}
-                {{ automation.credential_name|default:"Credencial selecionada" }} (<code>{{ automation.credential_id }}</code>)
-            {% else %}
-                Credencial ativa do provider no momento da execução
-            {% endif %}
-        </dd>
-
-        <dt class="col-sm-4 text-secondary">Status</dt>
-        <dd class="col-sm-8">
-            {% if automation.is_active %}
-                <span class="status-pill status-success">Ativa</span>
-            {% else %}
-                <span class="status-pill status-neutral">Inativa</span>
-            {% endif %}
-        </dd>
-
         <dt class="col-sm-4 text-secondary">Criada em</dt>
         <dd class="col-sm-8">{{ automation.created_at|date:"d/m/Y H:i:s" }}</dd>
 

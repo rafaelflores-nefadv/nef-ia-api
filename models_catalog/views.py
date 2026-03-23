@@ -95,7 +95,7 @@ class ProviderModelCreateView(LoginRequiredMixin, FormView):
                 kwargs["available_models_payload"] = {
                     "items": [],
                     "source": "unavailable",
-                    "warnings": ["Provider informado e invalido."],
+                    "warnings": ["Provider informado é inválido."],
                 }
         return kwargs
 
@@ -106,7 +106,7 @@ class ProviderModelCreateView(LoginRequiredMixin, FormView):
                 "page_title": "Novo modelo",
                 "form_title": "Novo modelo",
                 "form_subtitle": (
-                    "Selecione um modelo disponivel do provider via FastAPI para manter o catalogo consistente."
+                    "Selecione um modelo disponível do provider via FastAPI para manter o catálogo consistente."
                 ),
                 "active_menu": "modelos",
                 "submit_label": "Salvar modelo",
@@ -122,14 +122,14 @@ class ProviderModelCreateView(LoginRequiredMixin, FormView):
         model_name = str(selected_model.get("name") or "").strip()
         model_slug = str(selected_model.get("slug") or "").strip().lower()
         if not model_name or not model_slug:
-            form.add_error("known_model", "Modelo selecionado invalido para cadastro remoto.")
+            form.add_error("known_model", "Modelo selecionado inválido para cadastro remoto.")
             return self.form_invalid(form)
 
         provider_remote_id_raw = str(form.cleaned_data.get("provider") or "").strip()
         try:
             provider_remote_id = UUID(provider_remote_id_raw)
         except ValueError:
-            form.add_error("provider", "Provider remoto invalido.")
+            form.add_error("provider", "Provider remoto inválido.")
             return self.form_invalid(form)
 
         try:
@@ -165,7 +165,7 @@ class ProviderModelUpdateView(LoginRequiredMixin, FormView):
             )
         except ProviderModelsAPIServiceError as exc:
             if exc.code == "provider_model_not_found":
-                raise Http404("Modelo remoto nao encontrado.") from exc
+                raise Http404("Modelo remoto não encontrado.") from exc
             messages.error(request, str(exc))
             return redirect("models_catalog:list")
         return super().dispatch(request, *args, **kwargs)
@@ -193,7 +193,7 @@ class ProviderModelUpdateView(LoginRequiredMixin, FormView):
                     "Provider e identificacao do modelo ficam bloqueados para preservar consistencia."
                 ),
                 "active_menu": "modelos",
-                "submit_label": "Salvar alteracoes",
+                "submit_label": "Salvar alterações",
                 "is_create_mode": False,
                 "locked_provider_name": self.model_item.provider.name,
                 "locked_model_name": self.model_item.name,
@@ -236,7 +236,7 @@ def provider_model_toggle_status(request, remote_id: UUID):
             target_active=not bool(current.is_active),
         )
     except ProviderModelsAPIServiceError as exc:
-        messages.error(request, f"Nao foi possivel sincronizar status do modelo na FastAPI: {exc}")
+        messages.error(request, f"Não foi possível sincronizar status do modelo na FastAPI: {exc}")
         return redirect("models_catalog:list")
 
     if updated.is_active:
@@ -265,7 +265,7 @@ def provider_model_delete(request, remote_id: UUID):
     except ProviderModelsAPIServiceError as exc:
         messages.error(
             request,
-            "Nao foi possivel excluir o modelo no catalogo remoto da FastAPI: "
+            "Não foi possível excluir o modelo no catálogo remoto da FastAPI: "
             f"{exc}",
         )
         return redirect("models_catalog:list")
@@ -291,7 +291,7 @@ def provider_available_models(request):
             {
                 "items": [],
                 "source": "unavailable",
-                "warnings": ["Provider informado e invalido."],
+                "warnings": ["Provider informado é inválido."],
                 "provider_remote_id": None,
             },
             status=400,

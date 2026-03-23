@@ -9,7 +9,7 @@
     {% if integration_source == "api" %}
         <span class="admin-note">Leitura principal via FastAPI.</span>
     {% else %}
-        <span class="admin-note">Fallback local temporario.</span>
+        <span class="admin-note">Fallback local temporário.</span>
     {% endif %}
 </div>
 
@@ -31,12 +31,12 @@
                     <tr>
                         <th>Nome</th>
                         <th>Slug</th>
-                        <th>Vinculo FastAPI</th>
+                        <th>Vínculo FastAPI</th>
                         <th>Conectividade</th>
-                        <th>Descricao</th>
+                        <th>Descrição</th>
                         <th>Status</th>
                         <th>Atualizado em</th>
-                        <th class="text-end">Acoes</th>
+                        <th class="text-end">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -48,7 +48,7 @@
                                 {% if provider.fastapi_provider_id and provider.id %}
                                     <span class="status-pill status-success">Sincronizado</span>
                                 {% elif provider.fastapi_provider_id %}
-                                    <span class="status-pill status-warning">Remoto sem vinculo local</span>
+                                    <span class="status-pill status-warning">Remoto sem vínculo local</span>
                                 {% else %}
                                     <span class="status-pill status-warning">Pendente</span>
                                 {% endif %}
@@ -58,16 +58,16 @@
                                     {% if provider.connectivity_result.ok %}
                                         <span class="status-pill status-success">{{ provider.connectivity_result.status_label|default:"Conectado" }}</span>
                                     {% elif provider.connectivity_result.status == "provider_not_synced" or provider.connectivity_result.status == "credential_not_found" or provider.connectivity_result.status == "credential_inactive" or provider.connectivity_result.status == "provider_inactive" or provider.connectivity_result.status == "provider_not_supported" %}
-                                        <span class="status-pill status-warning">{{ provider.connectivity_result.status_label|default:"Atencao" }}</span>
+                                        <span class="status-pill status-warning">{{ provider.connectivity_result.status_label|default:"Atenção" }}</span>
                                     {% else %}
                                         <span class="status-pill status-danger">{{ provider.connectivity_result.status_label|default:"Falha" }}</span>
                                     {% endif %}
                                     <div class="admin-note mt-1">{{ provider.connectivity_result.message }}</div>
                                     {% if not provider.connectivity_result.ok and provider.connectivity_result.error_code %}
-                                        <div class="admin-note">Codigo tecnico: <code>{{ provider.connectivity_result.error_code }}</code></div>
+                                        <div class="admin-note">Código técnico: <code>{{ provider.connectivity_result.error_code }}</code></div>
                                     {% endif %}
                                 {% else %}
-                                    <span class="status-pill status-neutral">Nao testado</span>
+                                    <span class="status-pill status-neutral">Não testado</span>
                                 {% endif %}
                             </td>
                             <td class="text-muted">{{ provider.description|default:"-"|truncatechars:90 }}</td>
@@ -85,15 +85,23 @@
                                         <form method="post" action="{% url 'providers:test_connectivity' provider.fastapi_provider_id %}">
                                             {% csrf_token %}
                                             <input type="hidden" name="next" value="{% url 'providers:list' %}">
-                                            <button type="submit" class="btn btn-sm btn-outline-primary">Testar conectividade</button>
+                                            <button type="submit" class="btn btn-sm btn-outline-primary btn-icon-action" title="Testar conectividade" aria-label="Testar conectividade">
+                                                <i class="bi bi-wifi"></i>
+                                            </button>
                                         </form>
-                                        <a href="{% url 'providers:edit' provider.fastapi_provider_id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
+                                        <a href="{% url 'providers:edit' provider.fastapi_provider_id %}" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Editar" aria-label="Editar">
+                                            <i class="bi bi-pencil"></i>
+                                        </a>
                                         <form method="post" action="{% url 'providers:toggle_status' provider.fastapi_provider_id %}">
                                             {% csrf_token %}
                                             {% if provider.is_active %}
-                                                <button type="submit" class="btn btn-sm btn-outline-danger">Desativar</button>
+                                                <button type="submit" class="btn btn-sm btn-outline-danger btn-icon-action" title="Desativar" aria-label="Desativar">
+                                                    <i class="bi bi-slash-circle"></i>
+                                                </button>
                                             {% else %}
-                                                <button type="submit" class="btn btn-sm btn-outline-success">Ativar</button>
+                                                <button type="submit" class="btn btn-sm btn-outline-success btn-icon-action" title="Ativar" aria-label="Ativar">
+                                                    <i class="bi bi-check-circle"></i>
+                                                </button>
                                             {% endif %}
                                         </form>
                                     {% else %}

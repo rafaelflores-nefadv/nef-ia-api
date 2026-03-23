@@ -2,7 +2,7 @@
 
 {% block content %}
 {% url "fastapi_integration_settings" as integration_settings_url %}
-{% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Configuracoes" breadcrumb_parent_url=integration_settings_url breadcrumb_current="Integracao FastAPI" %}
+{% include "includes/page_header.html" with header_title=form_title header_subtitle=form_subtitle breadcrumb_parent_label="Configurações" breadcrumb_parent_url=integration_settings_url breadcrumb_current="Integração FastAPI" %}
 
 <section class="panel-card mb-3">
     <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
@@ -10,7 +10,7 @@
             Status: {{ connection_summary.status_label }}
         </span>
         {% if config.last_validated_at %}
-            <small class="text-secondary">Ultima validacao: {{ config.last_validated_at|date:"d/m/Y H:i:s" }}</small>
+            <small class="text-secondary">Última validação: {{ config.last_validated_at|date:"d/m/Y H:i:s" }}</small>
         {% endif %}
         {% if selected_token %}
             <small class="text-secondary">Token selecionado: <strong>{{ selected_token.name }}</strong></small>
@@ -23,13 +23,13 @@
     <section class="panel-card mb-3 border border-success-subtle">
         <p class="mb-2"><strong>Novo token gerado (exibido apenas uma vez):</strong></p>
         <code class="d-block p-2 rounded bg-light">{{ created_token_value }}</code>
-        <p class="admin-note mt-2 mb-0">Armazene este valor em local seguro. Depois desta resposta, ele nao volta a ser exibido na tela.</p>
+        <p class="admin-note mt-2 mb-0">Armazene este valor em local seguro. Depois desta resposta, ele não volta a ser exibido na tela.</p>
     </section>
 {% endif %}
 
 <section class="panel-card mb-3">
     <p class="admin-note mb-3">
-        Configure os dados gerais de integracao com a FastAPI. O cliente administrativo usa o token ativo selecionado.
+        Configure os dados gerais de integração com a FastAPI. O cliente administrativo usa o token ativo selecionado.
     </p>
 
     {% if form.non_field_errors %}
@@ -78,8 +78,8 @@
         </div>
 
         <div class="d-flex gap-2">
-            <button type="submit" name="action" value="save" class="btn btn-dark">Salvar configuracoes</button>
-            <button type="submit" name="action" value="test" class="btn btn-outline-primary">Testar conexao</button>
+            <button type="submit" name="action" value="save" class="btn btn-dark">Salvar configurações</button>
+            <button type="submit" name="action" value="test" class="btn btn-outline-primary">Testar conexão</button>
         </div>
     </form>
 </section>
@@ -87,8 +87,8 @@
 <section class="panel-card mb-3">
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div>
-            <h3 class="panel-title mb-1">Tokens de integracao</h3>
-            <p class="admin-note mb-0">Listagem principal via FastAPI. O Django guarda plaintext apenas quando estritamente necessario para autenticacao local.</p>
+            <h3 class="panel-title mb-1">Tokens de integração</h3>
+            <p class="admin-note mb-0">Listagem principal via FastAPI. O Django guarda plaintext apenas quando estritamente necessário para autenticação local.</p>
         </div>
         <div>
             <a class="btn btn-sm btn-outline-warning" href="{% url 'fastapi_integration_bootstrap' %}">
@@ -122,7 +122,7 @@
                         <th>Segredo local</th>
                         <th>Selecionado</th>
                         <th>Atualizado em</th>
-                        <th class="text-end">Acoes</th>
+                        <th class="text-end">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -139,9 +139,9 @@
                             </td>
                             <td>
                                 {% if token.has_local_secret %}
-                                    <span class="status-pill status-success">Disponivel</span>
+                                    <span class="status-pill status-success">Disponível</span>
                                 {% else %}
-                                    <span class="status-pill status-warning">Nao armazenado</span>
+                                    <span class="status-pill status-warning">Não armazenado</span>
                                 {% endif %}
                             </td>
                             <td>
@@ -159,7 +159,9 @@
                                             <form method="post">
                                                 {% csrf_token %}
                                                 <input type="hidden" name="token_id" value="{{ token.external_token_id|default:token.id }}">
-                                                <button type="submit" name="action" value="select_token" class="btn btn-sm btn-outline-secondary">Selecionar</button>
+                                                <button type="submit" name="action" value="select_token" class="btn btn-sm btn-outline-secondary btn-icon-action" title="Selecionar" aria-label="Selecionar">
+                                                    <i class="bi bi-check2-circle"></i>
+                                                </button>
                                             </form>
                                         {% endif %}
                                     {% endif %}
@@ -168,10 +170,12 @@
                                         <form method="post">
                                             {% csrf_token %}
                                             <input type="hidden" name="token_id" value="{{ token.external_token_id|default:token.id }}">
-                                            <button type="submit" name="action" value="revoke_token" class="btn btn-sm btn-outline-danger">Revogar token</button>
+                                            <button type="submit" name="action" value="revoke_token" class="btn btn-sm btn-outline-danger btn-icon-action" title="Revogar token" aria-label="Revogar token">
+                                                <i class="bi bi-slash-circle"></i>
+                                            </button>
                                         </form>
                                     {% else %}
-                                        <span class="admin-note">Reativacao nao suportada pela API</span>
+                                        <span class="admin-note">Reativação não suportada pela API</span>
                                     {% endif %}
                                 </div>
                             </td>
@@ -185,7 +189,7 @@
             <span class="empty-state-icon"><i class="bi bi-key"></i></span>
             <h3 class="empty-state-title">Nenhum token cadastrado</h3>
             <p class="empty-state-message mb-0">
-                Realize o bootstrap inicial e depois crie tokens por aqui para operacao diaria.
+                Realize o bootstrap inicial e depois crie tokens por aqui para operação diária.
             </p>
         </div>
     {% endif %}

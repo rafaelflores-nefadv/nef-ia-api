@@ -6,7 +6,10 @@ from app.core.exceptions import AppException
 from app.services.execution_engine import (
     EngineExecutionInput,
     ExecutionFileKind,
+    ExecutionFormatterStrategy,
     ExecutionInputType,
+    ExecutionOutputContract,
+    ExecutionOutputSchema,
     ExecutionOutputPolicy,
     ExecutionOutputType,
     ExecutionParserStrategy,
@@ -49,6 +52,7 @@ def test_strategy_engine_resolves_single_text_plan() -> None:
     assert plan.processing_mode == ExecutionProcessingMode.SINGLE_PASS
     assert plan.output_type == ExecutionOutputType.TEXT_OUTPUT
     assert plan.parser_strategy == ExecutionParserStrategy.TEXT_RAW
+    assert plan.formatter_strategy == ExecutionFormatterStrategy.TEXT_PLAIN
 
 
 def test_strategy_engine_resolves_tabular_with_context_plan() -> None:
@@ -63,6 +67,7 @@ def test_strategy_engine_resolves_tabular_with_context_plan() -> None:
     assert plan.processing_mode == ExecutionProcessingMode.ROW_BY_ROW_WITH_CONTEXT
     assert plan.output_type == ExecutionOutputType.SPREADSHEET_OUTPUT
     assert plan.parser_strategy == ExecutionParserStrategy.TABULAR_STRUCTURED
+    assert plan.formatter_strategy == ExecutionFormatterStrategy.SPREADSHEET_TABULAR
 
 
 def test_strategy_engine_rejects_multiple_tabular_inputs() -> None:
@@ -97,6 +102,54 @@ def test_response_parser_structured_tabular_has_fallback() -> None:
     assert parsed["classificacao_correta"] == ""
 
 
+def test_response_parser_structured_tabular_parses_json_and_fences() -> None:
+    parser = ExecutionResponseParser(
+        structured_output_aliases={
+            "categoria": {"categoria"},
+            "prazo": {"prazo"},
+            "necessitaRevisao": {"necessitaRevisao", "necessita revisao"},
+        }
+    )
+    parsed = parser.parse(
+        parser_strategy=ExecutionParserStrategy.TABULAR_STRUCTURED,
+        output_text=(
+            "```json\n"
+            '{\n'
+            '  "categoria": "ANÁLISE",\n'
+            '  "prazo": "Sem prazo",\n'
+            '  "necessitaRevisao": true\n'
+            "}\n"
+            "```"
+        ),
+    )
+
+    assert isinstance(parsed, dict)
+    assert parsed["categoria"] == "ANÁLISE"
+    assert parsed["prazo"] == "Sem prazo"
+    assert parsed["necessitaRevisao"] is True
+
+
+def test_response_parser_structured_tabular_falls_back_to_text_when_json_invalid() -> None:
+    parser = ExecutionResponseParser(
+        structured_output_aliases={
+            "categoria": {"categoria"},
+            "resumo_do_andamento": {"resumo do andamento", "resumo_do_andamento"},
+        }
+    )
+    parsed = parser.parse(
+        parser_strategy=ExecutionParserStrategy.TABULAR_STRUCTURED,
+        output_text=(
+            '{"categoria": "X",\n'
+            "categoria: Trabalhista\n"
+            "resumo_do_andamento: Linha final\n"
+        ),
+    )
+
+    assert isinstance(parsed, dict)
+    assert parsed["categoria"] == "Trabalhista"
+    assert parsed["resumo_do_andamento"] == "Linha final"
+
+
 def test_output_policy_explicit_file_types() -> None:
     policy = ExecutionOutputPolicy()
     execution_id = uuid4()
@@ -107,3 +160,23 @@ def test_output_policy_explicit_file_types() -> None:
     assert text_file.mime_type == "text/plain"
     assert sheet_file.file_name.endswith(".xlsx")
     assert "spreadsheetml.sheet" in sheet_file.mime_type
+
+
+def test_output_policy_honors_contract_schema_metadata() -> None:
+    policy = ExecutionOutputPolicy()
+    execution_id = uuid4()
+    contract = ExecutionOutputContract(
+        output_type=ExecutionOutputType.SPREADSHEET_OUTPUT,
+        parser_strategy=ExecutionParserStrategy.TABULAR_STRUCTURED,
+        formatter_strategy=ExecutionFormatterStrategy.SPREADSHEET_TABULAR,
+        output_schema=ExecutionOutputSchema(
+            file_name_template="custom_{execution_id}.csv",
+            mime_type="text/csv",
+        ),
+    )
+
+    output_file = policy.build_output_file(execution_id=execution_id, output_contract=contract)
+
+    assert output_file.file_name.startswith("custom_")
+    assert output_file.file_name.endswith(".csv")
+    assert output_file.mime_type == "text/csv"

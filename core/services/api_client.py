@@ -274,6 +274,7 @@ class FastAPIClient:
         data: dict[str, Any] | None = None,
         files: dict[str, tuple[str, bytes, str]] | None = None,
         headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response | ApiResponse:
         if not self.integration_active:
             return ApiResponse(
@@ -286,9 +287,10 @@ class FastAPIClient:
         url = f"{self.base_url}{normalized_path}"
         resolved_headers = self._resolve_headers(path=normalized_path, headers=headers)
         normalized_method = str(method or "GET").upper()
+        resolved_timeout: float | httpx.Timeout = self.timeout if timeout is None else timeout
 
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            with httpx.Client(timeout=resolved_timeout) as client:
                 response = client.request(
                     normalized_method,
                     url,
@@ -298,6 +300,30 @@ class FastAPIClient:
                     files=files,
                     headers=resolved_headers,
                 )
+        except httpx.ConnectTimeout:
+            return ApiResponse(
+                status_code=None,
+                data=None,
+                error="Tempo limite de conexao com a FastAPI.",
+            )
+        except httpx.ReadTimeout:
+            return ApiResponse(
+                status_code=None,
+                data=None,
+                error="Tempo limite de leitura/resposta da FastAPI.",
+            )
+        except httpx.WriteTimeout:
+            return ApiResponse(
+                status_code=None,
+                data=None,
+                error="Tempo limite ao enviar dados para a FastAPI.",
+            )
+        except httpx.PoolTimeout:
+            return ApiResponse(
+                status_code=None,
+                data=None,
+                error="Tempo limite ao obter conexao HTTP para a FastAPI.",
+            )
         except httpx.TimeoutException:
             return ApiResponse(
                 status_code=None,
@@ -326,10 +352,15 @@ class FastAPIClient:
         try:
             decoded = response.json()
         except ValueError:
+            content_type = str(response.headers.get("content-type") or "").strip() or "unknown"
+            body_preview = self._response_body_preview(response)
             return ApiResponse(
                 status_code=response.status_code,
                 data=None,
-                error=f"Resposta nao JSON da FastAPI em {path}.",
+                error=(
+                    f"Resposta nao JSON da FastAPI em {path}. "
+                    f"HTTP={response.status_code}, content-type={content_type}, body_preview={body_preview}"
+                ),
             )
 
         if expect_dict and not isinstance(decoded, dict):
@@ -360,6 +391,15 @@ class FastAPIClient:
 
         return ApiResponse(status_code=response.status_code, data=payload, error=None)
 
+    @staticmethod
+    def _response_body_preview(response: httpx.Response, *, max_chars: int = 240) -> str:
+        raw_text = str(response.text or "").strip().replace("\r", "\\r").replace("\n", "\\n")
+        if not raw_text:
+            return "(empty)"
+        if len(raw_text) <= max_chars:
+            return raw_text
+        return f"{raw_text[:max_chars]}..."
+
     def request_json(
         self,
         *,
@@ -369,6 +409,7 @@ class FastAPIClient:
         json_body: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         expect_dict: bool = True,
+        timeout: float | httpx.Timeout | None = None,
     ) -> ApiResponse:
         normalized_path = "/" + str(path or "").lstrip("/")
         request_result = self._perform_http_request(
@@ -377,6 +418,7 @@ class FastAPIClient:
             params=params,
             json_body=json_body,
             headers=headers,
+            timeout=timeout,
         )
         if isinstance(request_result, ApiResponse):
             return request_result
@@ -396,6 +438,7 @@ class FastAPIClient:
         files: dict[str, tuple[str, bytes, str]] | None = None,
         headers: dict[str, str] | None = None,
         expect_dict: bool = True,
+        timeout: float | httpx.Timeout | None = None,
     ) -> ApiResponse:
         normalized_path = "/" + str(path or "").lstrip("/")
         request_result = self._perform_http_request(
@@ -404,6 +447,7 @@ class FastAPIClient:
             data=data,
             files=files,
             headers=headers,
+            timeout=timeout,
         )
         if isinstance(request_result, ApiResponse):
             return request_result
@@ -421,6 +465,7 @@ class FastAPIClient:
         path: str,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> RawApiResponse:
         normalized_path = "/" + str(path or "").lstrip("/")
         request_result = self._perform_http_request(
@@ -428,6 +473,7 @@ class FastAPIClient:
             path=normalized_path,
             params=params,
             headers=headers,
+            timeout=timeout,
         )
         if isinstance(request_result, ApiResponse):
             return RawApiResponse(

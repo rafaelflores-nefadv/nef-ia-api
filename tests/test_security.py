@@ -4,9 +4,10 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from app.core.config import get_settings
 from app.core.jwt import create_admin_jwt
 from app.core.security import hash_token
-from app.models.operational import DjangoAiApiToken, DjangoAiApiTokenPermission
+from app.models.operational import DjangoAiApiToken, DjangoAiApiTokenPermission, DjangoAiIntegrationToken
 from app.services.auth_service import AdminLoginResult, AuthService
 from app.services.token_service import ApiTokenService, check_token_permission
 from app.main import app
@@ -127,7 +128,8 @@ def test_api_token_generation_stores_hash_only() -> None:
         ],
     )
 
-    assert plaintext_token.startswith("ia_live_")
+    settings = get_settings()
+    assert plaintext_token.startswith(f"{settings.api_token_prefix}_")
     assert token_model.token_hash != plaintext_token
     assert len(fake_repo.get_permissions(token_model.id)) == 1
     assert session.commit_calls == 1
@@ -187,3 +189,83 @@ def test_api_token_revocation() -> None:
     revoked = service.revoke_token(token_id=token_model.id, actor_user_id=uuid4())
     assert revoked.is_active is False
     assert session.commit_calls == 1
+
+
+def test_api_token_validation_normalizes_wrapped_values() -> None:
+    session = FakeSession()
+    service = ApiTokenService(session)  # type: ignore[arg-type]
+    fake_repo = FakeTokenRepository()
+    service.tokens = fake_repo  # type: ignore[assignment]
+    service.audit = FakeAuditRepository()  # type: ignore[assignment]
+
+    raw_token = "ia_live_testtoken"
+    token_model = DjangoAiApiToken(
+        name="token",
+        token_hash=hash_token(raw_token),
+        is_active=True,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        created_by_user_id=uuid4(),
+    )
+    fake_repo.add(token_model)
+
+    validation_with_quotes = service.validate_token(f'"{raw_token}"')
+    assert validation_with_quotes.token.id == token_model.id
+
+    validation_with_bearer = service.validate_token(f"Bearer {raw_token}")
+    assert validation_with_bearer.token.id == token_model.id
+
+
+def test_api_token_validation_accepts_integration_tokens_with_ia_int_prefix(monkeypatch) -> None:
+    session = FakeSession()
+    service = ApiTokenService(session)  # type: ignore[arg-type]
+    fake_repo = FakeTokenRepository()
+    service.tokens = fake_repo  # type: ignore[assignment]
+    service.audit = FakeAuditRepository()  # type: ignore[assignment]
+
+    raw_token = "ia_int_only_integration_token"
+    token_hash = hash_token(raw_token)
+    integration_token = DjangoAiIntegrationToken(
+        name="django-integration",
+        token_hash=token_hash,
+        is_active=True,
+        created_by_user_id=uuid4(),
+    )
+    integration_token.id = uuid4()
+
+    monkeypatch.setattr(
+        "app.services.token_service.IntegrationTokenRepository.get_by_hash",
+        lambda self, lookup_hash: integration_token if lookup_hash == token_hash else None,
+    )
+
+    validation = service.validate_token(raw_token)
+    assert validation.token.id == integration_token.id
+    mirrored = fake_repo.get_by_hash(token_hash)
+    assert mirrored is not None
+    assert mirrored.name.startswith("integration::")
+    assert session.commit_calls == 1
+
+
+def test_api_token_validation_fallbacks_to_api_tokens_when_ia_int_not_found_on_integration(monkeypatch) -> None:
+    session = FakeSession()
+    service = ApiTokenService(session)  # type: ignore[arg-type]
+    fake_repo = FakeTokenRepository()
+    service.tokens = fake_repo  # type: ignore[assignment]
+    service.audit = FakeAuditRepository()  # type: ignore[assignment]
+
+    raw_token = "ia_int_api_token"
+    token_model = DjangoAiApiToken(
+        name="token",
+        token_hash=hash_token(raw_token),
+        is_active=True,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        created_by_user_id=uuid4(),
+    )
+    fake_repo.add(token_model)
+
+    monkeypatch.setattr(
+        "app.services.token_service.IntegrationTokenRepository.get_by_hash",
+        lambda self, token_hash: None,
+    )
+
+    validation = service.validate_token(raw_token)
+    assert validation.token.id == token_model.id
