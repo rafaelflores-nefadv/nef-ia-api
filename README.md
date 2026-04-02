@@ -300,6 +300,29 @@ docker compose exec api python -m app.seed --with-bootstrap-token
 - `PATCH /api/v1/admin/credentials/{credential_id}/activate`
 - `PATCH /api/v1/admin/credentials/{credential_id}/deactivate`
 - `GET /api/v1/admin/catalog/status`
+- `POST /api/v1/external/assistants/prompt-refinement/preview`
+- `POST /api/v1/external/assistants/prompt-refinement/apply`
+- `POST /api/v1/external/assistants/prompt-refinement/advanced-preview`
+- `POST /api/v1/external/assistants/prompt-refinement/advanced-apply`
+
+## Assistente de refinamento (simple vs advanced)
+- Modo simples (`preview`/`apply`):
+  - linguagem orientada a usuario external (campos de resultado, pode executar agora, acao necessaria)
+  - proposta conservadora de schema sem exposicao tecnica detalhada
+  - apply controlado para prompt e/ou schema com confirmacao explicita
+- Modo avancado (`advanced-preview`/`advanced-apply`):
+  - exposicao tecnica adicional: schema bruto atual/proposto, diff estruturado, analise de placeholders e mappings
+  - nivel de confianca (`high`/`medium`/`low`), warnings e recomendacoes para revisao interna
+  - opcoes seguras de apply com confirmacao manual adicional quando necessario
+
+## Politica de seguranca (advanced apply)
+- Revisao manual de schema e permitida apenas para listas de campos de resultado:
+  - `columns`
+  - `output_columns`
+  - `ai_output_columns`
+- Quaisquer outras chaves no `reviewed_output_schema` sao bloqueadas.
+- `output_type`, `result_parser` e `result_formatter` nao sao alterados por esse fluxo.
+- O restante do schema atual e preservado automaticamente.
 
 ## Testes
 ```powershell

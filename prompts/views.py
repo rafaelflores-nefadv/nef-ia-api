@@ -654,6 +654,187 @@ class OfficialAutomationProviderCredentialsView(LoginRequiredMixin, View):
         )
 
 
+def _parse_json_request_payload(request) -> dict[str, object]:
+    raw_body = request.body.decode("utf-8") if request.body else ""
+    if not raw_body.strip():
+        return {}
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Payload JSON invalido.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Payload JSON deve ser um objeto.")
+    return payload
+
+
+def _payload_bool(value: object, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "sim"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "nao", "não"}:
+        return False
+    return default
+
+
+def _assistant_error_response(exc: Exception) -> JsonResponse:
+    if isinstance(exc, AutomationPromptsExecutionServiceError):
+        status_code = int(exc.status_code) if exc.status_code is not None else 502
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": str(exc),
+                "code": str(exc.code or ""),
+            },
+            status=max(status_code, 400),
+        )
+    return JsonResponse(
+        {
+            "ok": False,
+            "error": str(exc) or "Falha inesperada ao processar solicitacao.",
+        },
+        status=400,
+    )
+
+
+class OfficialExpectedResultAssistantView(LoginRequiredMixin, TemplateView):
+    template_name = "prompts/expected_result_assistant.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        payload = AutomationPromptsExecutionService().list_automations_runtime()
+        integration_source = payload.get("source") or "unavailable"
+        integration_warnings = payload.get("warnings") or []
+        items = payload.get("items") or []
+        automations = [
+            item
+            for item in items
+            if isinstance(item, AutomationRuntimeReadItem) and not bool(getattr(item, "is_test_automation", False))
+        ]
+        automations.sort(key=lambda item: str(item.automation_name or "").lower())
+        context.update(
+            {
+                "page_title": "Assistente de resultado esperado",
+                "active_menu": "assistente_resultado_esperado",
+                "integration_source": integration_source,
+                "integration_warnings": integration_warnings,
+                "automations": automations,
+                "list_counter_label": f"{len(automations)} automacao(oes) oficial(is) disponivel(is)",
+                "assistant_notice": (
+                    "Se o resultado esperado exigir inclusao ou remocao de campos, confirme primeiro a atualizacao "
+                    "dos campos de saida da automacao antes da execucao. Se nao houver alteracao estrutural, "
+                    "a automacao pode ser executada com a configuracao atual."
+                ),
+            }
+        )
+        return context
+
+
+class OfficialExpectedResultAssistantSimplePreviewApiView(LoginRequiredMixin, View):
+    def post(self, request):
+        try:
+            payload = _parse_json_request_payload(request)
+            automation_id = _resolve_uuid(payload.get("automation_id"))
+            raw_prompt = str(payload.get("raw_prompt") or "").strip()
+            expected_result_description = str(payload.get("expected_result_description") or "").strip() or None
+            if automation_id is None:
+                raise ValueError("Selecione uma automacao oficial valida.")
+            if not raw_prompt:
+                raise ValueError("Informe o prompt para analise.")
+            data = AutomationPromptsExecutionService().prompt_refinement_preview(
+                automation_id=automation_id,
+                raw_prompt=raw_prompt,
+                expected_result_description=expected_result_description,
+            )
+            return JsonResponse({"ok": True, "data": data})
+        except Exception as exc:
+            return _assistant_error_response(exc)
+
+
+class OfficialExpectedResultAssistantSimpleApplyApiView(LoginRequiredMixin, View):
+    def post(self, request):
+        try:
+            payload = _parse_json_request_payload(request)
+            automation_id = _resolve_uuid(payload.get("automation_id"))
+            if automation_id is None:
+                raise ValueError("Selecione uma automacao oficial valida.")
+            corrected_prompt = str(payload.get("corrected_prompt") or "").strip() or None
+            apply_prompt_update = _payload_bool(payload.get("apply_prompt_update"), default=False)
+            apply_schema_update = _payload_bool(payload.get("apply_schema_update"), default=False)
+            create_new_prompt_version = _payload_bool(payload.get("create_new_prompt_version"), default=False)
+            proposed_output_schema = payload.get("proposed_output_schema")
+            if proposed_output_schema is not None and not isinstance(proposed_output_schema, dict):
+                raise ValueError("proposed_output_schema deve ser um objeto JSON.")
+            data = AutomationPromptsExecutionService().prompt_refinement_apply(
+                automation_id=automation_id,
+                corrected_prompt=corrected_prompt,
+                apply_prompt_update=apply_prompt_update,
+                apply_schema_update=apply_schema_update,
+                proposed_output_schema=proposed_output_schema,
+                create_new_prompt_version=create_new_prompt_version,
+            )
+            return JsonResponse({"ok": True, "data": data})
+        except Exception as exc:
+            return _assistant_error_response(exc)
+
+
+class OfficialExpectedResultAssistantAdvancedPreviewApiView(LoginRequiredMixin, View):
+    def post(self, request):
+        try:
+            payload = _parse_json_request_payload(request)
+            automation_id = _resolve_uuid(payload.get("automation_id"))
+            raw_prompt = str(payload.get("raw_prompt") or "").strip()
+            expected_result_description = str(payload.get("expected_result_description") or "").strip() or None
+            if automation_id is None:
+                raise ValueError("Selecione uma automacao oficial valida.")
+            if not raw_prompt:
+                raise ValueError("Informe o prompt para analise avancada.")
+            data = AutomationPromptsExecutionService().prompt_refinement_advanced_preview(
+                automation_id=automation_id,
+                raw_prompt=raw_prompt,
+                expected_result_description=expected_result_description,
+            )
+            return JsonResponse({"ok": True, "data": data})
+        except Exception as exc:
+            return _assistant_error_response(exc)
+
+
+class OfficialExpectedResultAssistantAdvancedApplyApiView(LoginRequiredMixin, View):
+    def post(self, request):
+        try:
+            payload = _parse_json_request_payload(request)
+            automation_id = _resolve_uuid(payload.get("automation_id"))
+            if automation_id is None:
+                raise ValueError("Selecione uma automacao oficial valida.")
+            corrected_prompt = str(payload.get("corrected_prompt") or "").strip() or None
+            expected_result_description = str(payload.get("expected_result_description") or "").strip() or None
+            apply_prompt_update = _payload_bool(payload.get("apply_prompt_update"), default=False)
+            apply_schema_update = _payload_bool(payload.get("apply_schema_update"), default=False)
+            create_new_prompt_version = _payload_bool(payload.get("create_new_prompt_version"), default=False)
+            confirm_manual_review = _payload_bool(payload.get("confirm_manual_review"), default=False)
+            allow_field_removals = _payload_bool(payload.get("allow_field_removals"), default=True)
+            reviewed_output_schema = payload.get("reviewed_output_schema")
+            if reviewed_output_schema is not None and not isinstance(reviewed_output_schema, dict):
+                raise ValueError("reviewed_output_schema deve ser um objeto JSON.")
+            data = AutomationPromptsExecutionService().prompt_refinement_advanced_apply(
+                automation_id=automation_id,
+                corrected_prompt=corrected_prompt,
+                expected_result_description=expected_result_description,
+                apply_prompt_update=apply_prompt_update,
+                apply_schema_update=apply_schema_update,
+                reviewed_output_schema=reviewed_output_schema,
+                create_new_prompt_version=create_new_prompt_version,
+                confirm_manual_review=confirm_manual_review,
+                allow_field_removals=allow_field_removals,
+            )
+            return JsonResponse({"ok": True, "data": data})
+        except Exception as exc:
+            return _assistant_error_response(exc)
+
+
 def _execution_status_meta(status: str) -> dict[str, str]:
     table = {
         "queued": {"label": "Na fila", "css_class": "status-neutral"},

@@ -1,0 +1,275 @@
+{% extends "layouts/base_admin.html" %}
+
+{% block extra_css %}
+{{ block.super }}
+<style>
+.assistant-grid { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); }
+.assistant-card { border: 1px solid var(--border-color); border-radius: 12px; padding: .75rem; background: #fff; }
+.assistant-empty { border: 1px dashed var(--border-color); border-radius: 12px; padding: 1rem; color: var(--text-muted); }
+.assistant-json { border: 1px solid var(--border-color); border-radius: 10px; background: #f8fafc; padding: .7rem; max-height: 300px; overflow: auto; margin: 0; font-size: .79rem; }
+.assistant-pills { display: flex; flex-wrap: wrap; gap: .4rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% url "prompts:list" as prompts_list_url %}
+{% include "includes/page_header.html" with header_title="Assistente de resultado esperado" header_subtitle="Modo simples e avançado para refinar prompt e revisar campos de resultado." breadcrumb_parent_label="Automações" breadcrumb_parent_url=prompts_list_url breadcrumb_current="Assistente de resultado esperado" header_side_text=list_counter_label %}
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    {% include "includes/data_origin_badge.html" with source=integration_source %}
+    <span class="admin-note">A lógica de refinamento, diff e validação permanece exclusivamente no backend.</span>
+</div>
+
+{% if integration_warnings %}
+<div class="alert alert-warning" role="alert">
+    <ul class="mb-0 ps-3">{% for warning in integration_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<section class="panel-card mb-3">
+    <div class="alert alert-warning mb-0" role="alert">
+        <strong>Aviso importante:</strong> {{ assistant_notice }}
+    </div>
+</section>
+
+<section class="panel-card">
+    <ul class="nav nav-tabs" id="assistantTabs" role="tablist">
+        <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#assistant-simple" type="button">Simples</button></li>
+        <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#assistant-advanced" type="button">Avançado</button></li>
+    </ul>
+
+    <div class="tab-content pt-3">
+        <section class="tab-pane fade show active" id="assistant-simple">
+            <div class="row g-3">
+                <div class="col-12 col-xl-5">
+                    <article class="assistant-card">
+                        <h3 class="panel-title mb-3">Entrada simples</h3>
+                        <label class="form-label fw-semibold" for="simpleAutomationId">Automação oficial</label>
+                        <select id="simpleAutomationId" class="form-select mb-3">
+                            <option value="">Selecione uma automação</option>
+                            {% for automation in automations %}
+                                <option value="{{ automation.automation_id }}">{{ automation.automation_name }}</option>
+                            {% endfor %}
+                        </select>
+                        <label class="form-label fw-semibold" for="simpleRawPrompt">Prompt atual ou mal escrito</label>
+                        <textarea id="simpleRawPrompt" class="form-control mb-3" rows="6"></textarea>
+                        <label class="form-label fw-semibold" for="simpleExpectedDescription">Descreva o resultado esperado (opcional)</label>
+                        <textarea id="simpleExpectedDescription" class="form-control mb-3" rows="3"></textarea>
+                        <div class="d-flex align-items-center gap-2">
+                            <button id="simpleAnalyzeButton" type="button" class="btn btn-dark">Analisar</button>
+                            <span id="simpleAnalyzeState" class="admin-note"></span>
+                        </div>
+                        <div id="simpleErrorBox" class="alert alert-danger mt-3 d-none"></div>
+                        <div id="simpleSuccessBox" class="alert alert-success mt-3 d-none"></div>
+                    </article>
+                </div>
+
+                <div class="col-12 col-xl-7">
+                    <article class="assistant-card">
+                        <h3 class="panel-title mb-3">Resultado simples</h3>
+                        <div id="simplePreviewEmpty" class="assistant-empty">Sem preview. Preencha os campos e clique em <strong>Analisar</strong>.</div>
+                        <div id="simplePreviewContent" class="d-none">
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <span id="simpleCompatibilityPill" class="status-pill status-neutral">-</span>
+                                <span id="simpleExecutionHint" class="admin-note"></span>
+                            </div>
+                            <p id="simpleActionMessage" class="admin-note"></p>
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <label class="form-label fw-semibold mb-0">Prompt refinado</label>
+                                <button id="simpleCopyPromptButton" type="button" class="btn btn-sm btn-outline-secondary">Copiar prompt</button>
+                            </div>
+                            <pre id="simpleRefinedPrompt" class="assistant-json mb-3"></pre>
+
+                            <div class="assistant-grid mb-3">
+                                <div><strong>Campos atuais</strong><div id="simpleCurrentFields" class="assistant-pills mt-2"></div></div>
+                                <div><strong>Campos sugeridos</strong><div id="simpleSuggestedFields" class="assistant-pills mt-2"></div></div>
+                                <div><strong>Adicionar</strong><div id="simpleFieldsToAdd" class="assistant-pills mt-2"></div></div>
+                                <div><strong>Remover</strong><div id="simpleFieldsToRemove" class="assistant-pills mt-2"></div></div>
+                            </div>
+
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <button id="simpleApplyPromptOnlyButton" type="button" class="btn btn-outline-primary" disabled>Aplicar só prompt</button>
+                                <button id="simpleApplyPromptAndSchemaButton" type="button" class="btn btn-dark" disabled>Aplicar prompt e campos de resultado</button>
+                                <span id="simpleApplyState" class="admin-note"></span>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <section class="tab-pane fade" id="assistant-advanced">
+            <div class="row g-3">
+                <div class="col-12 col-xl-4">
+                    <article class="assistant-card">
+                        <h3 class="panel-title mb-3">Entrada avançada</h3>
+                        <label class="form-label fw-semibold" for="advancedAutomationId">Automação oficial</label>
+                        <select id="advancedAutomationId" class="form-select mb-3">
+                            <option value="">Selecione uma automação</option>
+                            {% for automation in automations %}
+                                <option value="{{ automation.automation_id }}">{{ automation.automation_name }}</option>
+                            {% endfor %}
+                        </select>
+                        <label class="form-label fw-semibold" for="advancedRawPrompt">Prompt bruto</label>
+                        <textarea id="advancedRawPrompt" class="form-control mb-3" rows="6"></textarea>
+                        <label class="form-label fw-semibold" for="advancedExpectedDescription">Resultado esperado (opcional)</label>
+                        <textarea id="advancedExpectedDescription" class="form-control mb-3" rows="3"></textarea>
+                        <div class="d-flex align-items-center gap-2 mb-3">
+                            <button id="advancedAnalyzeButton" type="button" class="btn btn-dark">Analisar (avançado)</button>
+                            <span id="advancedAnalyzeState" class="admin-note"></span>
+                        </div>
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" id="advancedManualReviewConfirmation">
+                            <label class="form-check-label" for="advancedManualReviewConfirmation">Confirmar revisão manual (quando exigido)</label>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="advancedAllowFieldRemovals" checked>
+                            <label class="form-check-label" for="advancedAllowFieldRemovals">Permitir remoção de campos no apply</label>
+                        </div>
+                        <div id="advancedErrorBox" class="alert alert-danger d-none"></div>
+                        <div id="advancedSuccessBox" class="alert alert-success d-none"></div>
+                    </article>
+                </div>
+
+                <div class="col-12 col-xl-8">
+                    <article class="assistant-card">
+                        <h3 class="panel-title mb-3">Resultado avançado</h3>
+                        <div id="advancedPreviewEmpty" class="assistant-empty">Sem preview avançado.</div>
+                        <div id="advancedPreviewContent" class="d-none">
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <span id="advancedCompatibilityPill" class="status-pill status-neutral">-</span>
+                                <span id="advancedConfidencePill" class="status-pill status-neutral">Confiança: -</span>
+                            </div>
+                            <p id="advancedActionMessage" class="admin-note"></p>
+                            <p id="advancedPromptChangeSummary" class="admin-note"></p>
+
+                            <div class="assistant-grid mb-3">
+                                <div><strong>Prompt original</strong><pre id="advancedPromptOriginal" class="assistant-json mt-2"></pre></div>
+                                <div>
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <strong>Prompt refinado</strong>
+                                        <button id="advancedCopyPromptButton" type="button" class="btn btn-sm btn-outline-secondary">Copiar</button>
+                                    </div>
+                                    <pre id="advancedCorrectedPrompt" class="assistant-json mt-2"></pre>
+                                </div>
+                            </div>
+
+                            <div class="assistant-grid mb-3">
+                                <div><strong>Campos atuais</strong><div id="advancedCurrentFields" class="assistant-pills mt-2"></div></div>
+                                <div><strong>Campos sugeridos</strong><div id="advancedSuggestedFields" class="assistant-pills mt-2"></div></div>
+                                <div><strong>Adicionar</strong><div id="advancedFieldsToAdd" class="assistant-pills mt-2"></div></div>
+                                <div><strong>Remover</strong><div id="advancedFieldsToRemove" class="assistant-pills mt-2"></div></div>
+                            </div>
+
+                            <div class="assistant-grid mb-3">
+                                <div><strong>Schema atual bruto</strong><pre id="advancedCurrentSchema" class="assistant-json mt-2"></pre></div>
+                                <div><strong>Schema sugerido bruto</strong><pre id="advancedProposedSchema" class="assistant-json mt-2"></pre></div>
+                            </div>
+
+                            <div class="assistant-grid mb-3">
+                                <div><strong>Schema diff</strong><pre id="advancedSchemaDiff" class="assistant-json mt-2"></pre></div>
+                                <div><strong>Placeholder analysis</strong><pre id="advancedPlaceholderAnalysis" class="assistant-json mt-2"></pre></div>
+                                <div><strong>Mapping analysis</strong><pre id="advancedMappingAnalysis" class="assistant-json mt-2"></pre></div>
+                                <div><strong>Safe apply options</strong><pre id="advancedSafeApplyOptions" class="assistant-json mt-2"></pre></div>
+                            </div>
+
+                            <div class="assistant-grid mb-3">
+                                <div><strong>Warnings técnicos</strong><div id="advancedWarnings" class="assistant-empty mt-2"></div></div>
+                                <div><strong>Recomendações de revisão</strong><div id="advancedRecommendations" class="assistant-empty mt-2"></div></div>
+                            </div>
+
+                            <section class="assistant-card mb-3">
+                                <h4 class="panel-title mb-2">reviewed_output_schema (edição controlada)</h4>
+                                <p class="admin-note mb-2">Ajuste visual apenas de <code>columns</code>, <code>output_columns</code> e <code>ai_output_columns</code>.</p>
+                                <div class="row g-2">
+                                    <div class="col-12 col-lg-4"><label class="form-label fw-semibold" for="advancedReviewedColumns">columns</label><textarea id="advancedReviewedColumns" class="form-control" rows="5"></textarea></div>
+                                    <div class="col-12 col-lg-4"><label class="form-label fw-semibold" for="advancedReviewedOutputColumns">output_columns</label><textarea id="advancedReviewedOutputColumns" class="form-control" rows="5"></textarea></div>
+                                    <div class="col-12 col-lg-4"><label class="form-label fw-semibold" for="advancedReviewedAiOutputColumns">ai_output_columns</label><textarea id="advancedReviewedAiOutputColumns" class="form-control" rows="5"></textarea></div>
+                                </div>
+                            </section>
+
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <button id="advancedApplyPromptOnlyButton" type="button" class="btn btn-outline-primary" disabled>Aplicar só prompt</button>
+                                <button id="advancedApplySchemaOnlyButton" type="button" class="btn btn-outline-secondary" disabled>Aplicar só schema</button>
+                                <button id="advancedApplyPromptAndSchemaButton" type="button" class="btn btn-dark" disabled>Aplicar prompt e schema</button>
+                                <span id="advancedApplyState" class="admin-note"></span>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </div>
+        </section>
+    </div>
+</section>
+
+<script type="application/json" id="assistantEndpoints">{"simplePreview":"{% url 'prompts:expected_result_assistant_simple_preview_api' %}","simpleApply":"{% url 'prompts:expected_result_assistant_simple_apply_api' %}","advancedPreview":"{% url 'prompts:expected_result_assistant_advanced_preview_api' %}","advancedApply":"{% url 'prompts:expected_result_assistant_advanced_apply_api' %}"}</script>
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script>
+(function(){
+  const endpointsNode=document.getElementById("assistantEndpoints"); if(!endpointsNode){return;}
+  const endpoints=JSON.parse(endpointsNode.textContent||"{}");
+  const simple={preview:null}; const advanced={preview:null};
+  const statusCss={ready_without_schema_changes:"status-success",ready_with_schema_update_required:"status-warning",needs_manual_review:"status-danger"};
+  const confidenceCss={high:"status-success",medium:"status-warning",low:"status-danger"};
+  function getCookie(name){const v=`; ${document.cookie}`;const p=v.split(`; ${name}=`);if(p.length===2){return p.pop().split(";").shift()||"";}return"";}
+  const csrfToken=getCookie("csrftoken");
+  const toArr=(v)=>Array.isArray(v)?v.map((i)=>String(i||"").trim()).filter(Boolean):[];
+  const fmtJson=(v)=>{try{return JSON.stringify(v==null?{}:v,null,2);}catch(e){return String(v||"");}};
+  const setText=(id,v)=>{const n=document.getElementById(id);if(n){n.textContent=String(v==null?"":v);}};
+  const show=(id,on)=>{const n=document.getElementById(id);if(n){n.classList.toggle("d-none",!on);}};
+  const message=(id,text,on)=>{const n=document.getElementById(id);if(!n){return;} if(!on){n.classList.add("d-none");n.textContent="";return;} n.classList.remove("d-none");n.textContent=String(text||"");};
+  const list=(id,items,empty,css)=>{const n=document.getElementById(id); if(!n){return;} const a=toArr(items); n.innerHTML=""; if(!a.length){n.innerHTML=`<span class="admin-note">${empty}</span>`; return;} a.forEach((i)=>{const s=document.createElement("span"); s.className="status-pill "+(css||"status-neutral"); s.textContent=i; n.appendChild(s);});};
+  const listHtml=(id,items,empty)=>{const n=document.getElementById(id); if(!n){return;} const a=toArr(items); n.innerHTML=a.length?`<ul class="mb-0 ps-3">${a.map((i)=>`<li>${i}</li>`).join("")}</ul>`:`<span class="admin-note">${empty}</span>`;};
+  async function post(url,payload){const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","X-CSRFToken":csrfToken,"X-Requested-With":"XMLHttpRequest"},body:JSON.stringify(payload||{})}); const p=await r.json().catch(()=>({ok:false,error:"Resposta inválida."})); if(!r.ok||!p.ok){throw new Error(p.error||"Falha na requisição.");} return p.data||{};}
+  function copyText(text,target){if(!navigator.clipboard||!String(text||"").trim()){return;} navigator.clipboard.writeText(String(text||"")).then(()=>{setText(target,"Prompt copiado.");setTimeout(()=>setText(target,""),1800);});}
+  function parseLines(v){return String(v||"").split(/\r?\n/).map((i)=>i.trim()).filter(Boolean);}
+  function fillReviewed(schema){const s=(schema&&typeof schema==="object")?schema:{}; const lines=(k)=>toArr(s[k]).join("\n"); const c=document.getElementById("advancedReviewedColumns"),o=document.getElementById("advancedReviewedOutputColumns"),a=document.getElementById("advancedReviewedAiOutputColumns"); if(c){c.value=lines("columns");} if(o){o.value=lines("output_columns");} if(a){a.value=lines("ai_output_columns");}}
+  function collectReviewed(base){const b=(base&&typeof base==="object")?base:{}; const out={}; const c=document.getElementById("advancedReviewedColumns"),o=document.getElementById("advancedReviewedOutputColumns"),a=document.getElementById("advancedReviewedAiOutputColumns"); if(Object.prototype.hasOwnProperty.call(b,"columns")&&c){out.columns=parseLines(c.value);} if(Object.prototype.hasOwnProperty.call(b,"output_columns")&&o){out.output_columns=parseLines(o.value);} if(Object.prototype.hasOwnProperty.call(b,"ai_output_columns")&&a){out.ai_output_columns=parseLines(a.value);} return out;}
+  function setSimpleLoading(on,label){const a=document.getElementById("simpleAnalyzeButton"),p=document.getElementById("simpleApplyPromptOnlyButton"),s=document.getElementById("simpleApplyPromptAndSchemaButton"); if(a){a.disabled=on;} if(p){p.disabled=on||!simple.preview;} if(s){s.disabled=on||!simple.preview;} setText("simpleAnalyzeState",label||"");}
+  function setAdvancedLoading(on,label){const a=document.getElementById("advancedAnalyzeButton"),p=document.getElementById("advancedApplyPromptOnlyButton"),s=document.getElementById("advancedApplySchemaOnlyButton"),b=document.getElementById("advancedApplyPromptAndSchemaButton"); if(a){a.disabled=on;} if(p){p.disabled=on||!advanced.preview;} if(s){s.disabled=on||!advanced.preview;} if(b){b.disabled=on||!advanced.preview;} setText("advancedAnalyzeState",label||"");}
+  function renderSimple(d){simple.preview=d; show("simplePreviewEmpty",false); show("simplePreviewContent",true); const c=String(d.compatibility_status||""); const pill=document.getElementById("simpleCompatibilityPill"); if(pill){pill.className="status-pill "+(statusCss[c]||"status-neutral"); pill.textContent=c||"-";} setText("simpleExecutionHint",d.can_execute_now?"Já pode executar com a configuração atual.":"Necessário aplicar atualização antes de executar."); setText("simpleActionMessage",d.action_required_message||""); setText("simpleRefinedPrompt",d.refined_prompt||"");
+    list("simpleCurrentFields",d.current_result_fields, "Sem campos atuais.","status-neutral");
+    list("simpleSuggestedFields",d.suggested_result_fields,"Sem campos sugeridos.","status-warning");
+    list("simpleFieldsToAdd",d.fields_to_add,"Nenhum campo para adicionar.","status-success");
+    list("simpleFieldsToRemove",d.fields_to_remove,"Nenhum campo para remover.","status-danger");
+    const p=document.getElementById("simpleApplyPromptOnlyButton"),b=document.getElementById("simpleApplyPromptAndSchemaButton"); if(p){p.disabled=false;} if(b){b.disabled=c==="needs_manual_review";}
+  }
+  function renderAdvanced(d){advanced.preview=d; show("advancedPreviewEmpty",false); show("advancedPreviewContent",true); const c=String(d.compatibility_status||""),k=String(d.confidence_level||"").toLowerCase(); const cp=document.getElementById("advancedCompatibilityPill"),kp=document.getElementById("advancedConfidencePill"); if(cp){cp.className="status-pill "+(statusCss[c]||"status-neutral");cp.textContent=c||"-";} if(kp){kp.className="status-pill "+(confidenceCss[k]||"status-neutral");kp.textContent="Confiança: "+(k||"-");}
+    setText("advancedActionMessage",d.action_required_message||""); setText("advancedPromptChangeSummary",d.prompt_change_summary||""); setText("advancedPromptOriginal",d.prompt_original||"-"); setText("advancedCorrectedPrompt",d.corrected_prompt||"");
+    list("advancedCurrentFields",d.current_result_fields,"Sem campos atuais.","status-neutral");
+    list("advancedSuggestedFields",d.suggested_result_fields,"Sem campos sugeridos.","status-warning");
+    list("advancedFieldsToAdd",d.fields_to_add,"Nenhum campo para adicionar.","status-success");
+    list("advancedFieldsToRemove",d.fields_to_remove,"Nenhum campo para remover.","status-danger");
+    setText("advancedCurrentSchema",fmtJson(d.current_output_schema||{})); setText("advancedProposedSchema",fmtJson(d.proposed_output_schema||{})); setText("advancedSchemaDiff",fmtJson(d.schema_diff||{})); setText("advancedPlaceholderAnalysis",fmtJson(d.placeholder_analysis||{})); setText("advancedMappingAnalysis",fmtJson(d.mapping_analysis||{})); setText("advancedSafeApplyOptions",fmtJson(d.safe_apply_options||{}));
+    listHtml("advancedWarnings",d.technical_warnings||[],"Sem warnings técnicos."); listHtml("advancedRecommendations",d.review_recommendations||[],"Sem recomendações adicionais.");
+    fillReviewed(d.proposed_output_schema||{});
+    const safe=d.safe_apply_options||{},p=document.getElementById("advancedApplyPromptOnlyButton"),s=document.getElementById("advancedApplySchemaOnlyButton"),b=document.getElementById("advancedApplyPromptAndSchemaButton"); if(p){p.disabled=!Boolean(safe.can_apply_prompt_only);} if(s){s.disabled=!Boolean(safe.can_apply_schema_only);} if(b){b.disabled=!Boolean(safe.can_apply_prompt_and_schema);}
+  }
+  async function runSimplePreview(){message("simpleErrorBox","",false);message("simpleSuccessBox","",false);const aid=String(document.getElementById("simpleAutomationId")?.value||"").trim(),rp=String(document.getElementById("simpleRawPrompt")?.value||"").trim(),ed=String(document.getElementById("simpleExpectedDescription")?.value||"").trim(); if(!aid){message("simpleErrorBox","Selecione uma automação oficial.",true);return;} if(!rp){message("simpleErrorBox","Informe o prompt para análise.",true);return;} setSimpleLoading(true,"Analisando..."); try{renderSimple(await post(endpoints.simplePreview,{automation_id:aid,raw_prompt:rp,expected_result_description:ed||null}));}catch(e){message("simpleErrorBox",e.message||"Falha ao analisar.",true);}finally{setSimpleLoading(false,"");}}
+  async function runSimpleApply(applySchema){if(!simple.preview){message("simpleErrorBox","Faça uma análise antes do apply.",true);return;} message("simpleErrorBox","",false); message("simpleSuccessBox","",false); setSimpleLoading(true,"Aplicando..."); try{const d=await post(endpoints.simpleApply,{automation_id:simple.preview.automation_id,corrected_prompt:simple.preview.refined_prompt,apply_prompt_update:true,apply_schema_update:Boolean(applySchema),proposed_output_schema:applySchema?(simple.preview.proposed_output_schema||null):null,create_new_prompt_version:false}); message("simpleSuccessBox",d.change_summary||"Apply concluído com sucesso.",true); setText("simpleApplyState","Apply concluído.");}catch(e){message("simpleErrorBox",e.message||"Falha no apply.",true);}finally{setSimpleLoading(false,"");}}
+  async function runAdvancedPreview(){message("advancedErrorBox","",false);message("advancedSuccessBox","",false);const aid=String(document.getElementById("advancedAutomationId")?.value||"").trim(),rp=String(document.getElementById("advancedRawPrompt")?.value||"").trim(),ed=String(document.getElementById("advancedExpectedDescription")?.value||"").trim(); if(!aid){message("advancedErrorBox","Selecione uma automação oficial.",true);return;} if(!rp){message("advancedErrorBox","Informe o prompt para análise avançada.",true);return;} setAdvancedLoading(true,"Analisando..."); try{renderAdvanced(await post(endpoints.advancedPreview,{automation_id:aid,raw_prompt:rp,expected_result_description:ed||null}));}catch(e){message("advancedErrorBox",e.message||"Falha na análise avançada.",true);}finally{setAdvancedLoading(false,"");}}
+  async function runAdvancedApply(flags){if(!advanced.preview){message("advancedErrorBox","Faça uma análise avançada antes do apply.",true);return;} message("advancedErrorBox","",false); message("advancedSuccessBox","",false);
+    const safe=advanced.preview.safe_apply_options||{},manualReq=Boolean(safe.requires_manual_review_confirmation),manualChecked=Boolean(document.getElementById("advancedManualReviewConfirmation")?.checked);
+    if(manualReq&&flags.apply_schema_update&&!manualChecked){message("advancedErrorBox","A API exige confirmação manual para apply estrutural.",true);return;}
+    setAdvancedLoading(true,"Aplicando...");
+    try{
+      const reviewed=flags.apply_schema_update?collectReviewed(advanced.preview.proposed_output_schema||{}):null;
+      const d=await post(endpoints.advancedApply,{automation_id:advanced.preview.automation_id,corrected_prompt:advanced.preview.corrected_prompt,expected_result_description:String(document.getElementById("advancedExpectedDescription")?.value||"").trim()||null,apply_prompt_update:Boolean(flags.apply_prompt_update),apply_schema_update:Boolean(flags.apply_schema_update),reviewed_output_schema:reviewed,create_new_prompt_version:false,confirm_manual_review:manualChecked,allow_field_removals:Boolean(document.getElementById("advancedAllowFieldRemovals")?.checked)});
+      message("advancedSuccessBox",d.change_summary||"Apply avançado concluído com sucesso.",true); setText("advancedApplyState","Apply concluído.");
+    }catch(e){message("advancedErrorBox",e.message||"Falha no apply avançado.",true);}finally{setAdvancedLoading(false,"");}
+  }
+  document.getElementById("simpleAnalyzeButton")?.addEventListener("click",runSimplePreview);
+  document.getElementById("simpleApplyPromptOnlyButton")?.addEventListener("click",()=>runSimpleApply(false));
+  document.getElementById("simpleApplyPromptAndSchemaButton")?.addEventListener("click",()=>runSimpleApply(true));
+  document.getElementById("simpleCopyPromptButton")?.addEventListener("click",()=>copyText(simple.preview?.refined_prompt||"","simpleApplyState"));
+  document.getElementById("advancedAnalyzeButton")?.addEventListener("click",runAdvancedPreview);
+  document.getElementById("advancedApplyPromptOnlyButton")?.addEventListener("click",()=>runAdvancedApply({apply_prompt_update:true,apply_schema_update:false}));
+  document.getElementById("advancedApplySchemaOnlyButton")?.addEventListener("click",()=>runAdvancedApply({apply_prompt_update:false,apply_schema_update:true}));
+  document.getElementById("advancedApplyPromptAndSchemaButton")?.addEventListener("click",()=>runAdvancedApply({apply_prompt_update:true,apply_schema_update:true}));
+  document.getElementById("advancedCopyPromptButton")?.addEventListener("click",()=>copyText(advanced.preview?.corrected_prompt||"","advancedApplyState"));
+})();
+</script>
+{% endblock %}

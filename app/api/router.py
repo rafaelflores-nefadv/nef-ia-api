@@ -10,6 +10,7 @@ from app.api.routes import (
     admin_prompt_tests,
     admin_tokens,
     executions,
+    external_assistants,
     external_catalog,
     external_executions,
     files,
@@ -35,3 +36,4 @@ api_router.include_router(files.router)
 api_router.include_router(executions.router)
 api_router.include_router(external_executions.router)
 api_router.include_router(external_catalog.router)
+api_router.include_router(external_assistants.router)

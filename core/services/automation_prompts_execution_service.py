@@ -359,6 +359,20 @@ class AutomationPromptsExecutionService:
             return "Schema de saida invalido para a automacao."
         if code == "execution_output_contract_incompatible":
             return "Contrato de saida incompativel com o tipo de arquivo de entrada."
+        if code == "prompt_refinement_apply_confirmation_required":
+            return "Confirmacao explicita obrigatoria para aplicar alteracoes do assistente."
+        if code == "prompt_refinement_apply_empty":
+            return "Selecione ao menos uma acao de apply (prompt e/ou campos de resultado)."
+        if code == "prompt_refinement_manual_review_required":
+            return "A API exige revisao manual antes de aplicar alteracoes estruturais."
+        if code == "prompt_refinement_manual_review_confirmation_required":
+            return "Confirme revisao manual para aplicar alteracoes estruturais com baixa confianca."
+        if code == "prompt_refinement_schema_update_not_allowed":
+            return "Atualizacao de schema fora do escopo seguro permitido para este assistente."
+        if code == "prompt_refinement_reviewed_schema_out_of_scope":
+            return "A revisao enviada alterou campos tecnicos fora do escopo permitido."
+        if code == "prompt_refinement_field_removal_blocked":
+            return "A remocao de campos foi bloqueada pela configuracao de seguranca atual."
         if code == "prompt_placeholder_unresolved":
             return "Nao foi possivel hidratar todos os placeholders obrigatorios do prompt com os dados da entrada."
         if code == "missing_file_name":
@@ -1000,6 +1014,135 @@ class AutomationPromptsExecutionService:
                 items.append(normalized)
         items.sort(key=lambda item: item.name.lower())
         return items
+
+    def prompt_refinement_preview(
+        self,
+        *,
+        automation_id: UUID,
+        raw_prompt: str,
+        expected_result_description: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "automation_id": str(automation_id),
+            "raw_prompt": str(raw_prompt or "").strip(),
+        }
+        if str(expected_result_description or "").strip():
+            payload["expected_result_description"] = str(expected_result_description).strip()
+        return self._post_external_assistant(
+            path="/api/v1/external/assistants/prompt-refinement/preview",
+            payload=payload,
+            action="analisar prompt (modo simples)",
+        )
+
+    def prompt_refinement_apply(
+        self,
+        *,
+        automation_id: UUID,
+        corrected_prompt: str | None,
+        apply_prompt_update: bool,
+        apply_schema_update: bool,
+        proposed_output_schema: dict[str, Any] | None,
+        create_new_prompt_version: bool = False,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "automation_id": str(automation_id),
+            "apply_prompt_update": bool(apply_prompt_update),
+            "apply_schema_update": bool(apply_schema_update),
+            "create_new_prompt_version": bool(create_new_prompt_version),
+            "confirm_apply": True,
+        }
+        normalized_prompt = str(corrected_prompt or "").strip()
+        if normalized_prompt:
+            payload["corrected_prompt"] = normalized_prompt
+        if isinstance(proposed_output_schema, dict):
+            payload["proposed_output_schema"] = proposed_output_schema
+        return self._post_external_assistant(
+            path="/api/v1/external/assistants/prompt-refinement/apply",
+            payload=payload,
+            action="aplicar ajustes do assistente (modo simples)",
+        )
+
+    def prompt_refinement_advanced_preview(
+        self,
+        *,
+        automation_id: UUID,
+        raw_prompt: str,
+        expected_result_description: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "automation_id": str(automation_id),
+            "raw_prompt": str(raw_prompt or "").strip(),
+        }
+        if str(expected_result_description or "").strip():
+            payload["expected_result_description"] = str(expected_result_description).strip()
+        return self._post_external_assistant(
+            path="/api/v1/external/assistants/prompt-refinement/advanced-preview",
+            payload=payload,
+            action="analisar prompt (modo avancado)",
+        )
+
+    def prompt_refinement_advanced_apply(
+        self,
+        *,
+        automation_id: UUID,
+        corrected_prompt: str | None,
+        expected_result_description: str | None,
+        apply_prompt_update: bool,
+        apply_schema_update: bool,
+        reviewed_output_schema: dict[str, Any] | None,
+        create_new_prompt_version: bool = False,
+        confirm_manual_review: bool = False,
+        allow_field_removals: bool = True,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "automation_id": str(automation_id),
+            "apply_prompt_update": bool(apply_prompt_update),
+            "apply_schema_update": bool(apply_schema_update),
+            "create_new_prompt_version": bool(create_new_prompt_version),
+            "confirm_apply": True,
+            "confirm_manual_review": bool(confirm_manual_review),
+            "allow_field_removals": bool(allow_field_removals),
+        }
+        normalized_prompt = str(corrected_prompt or "").strip()
+        if normalized_prompt:
+            payload["corrected_prompt"] = normalized_prompt
+        normalized_expected = str(expected_result_description or "").strip()
+        if normalized_expected:
+            payload["expected_result_description"] = normalized_expected
+        if isinstance(reviewed_output_schema, dict):
+            payload["reviewed_output_schema"] = reviewed_output_schema
+        return self._post_external_assistant(
+            path="/api/v1/external/assistants/prompt-refinement/advanced-apply",
+            payload=payload,
+            action="aplicar ajustes do assistente (modo avancado)",
+        )
+
+    def _post_external_assistant(
+        self,
+        *,
+        path: str,
+        payload: dict[str, Any],
+        action: str,
+    ) -> dict[str, Any]:
+        result = self.client.post(
+            path,
+            json_body=payload,
+            headers=self.client.get_admin_headers(),
+            expect_dict=True,
+        )
+        if not result.is_success or not isinstance(result.data, dict):
+            code, message = self._extract_error_meta(result)
+            raise AutomationPromptsExecutionServiceError(
+                self._friendly_error(
+                    code=code,
+                    status_code=result.status_code,
+                    fallback_message=message,
+                    action=action,
+                ),
+                code=code,
+                status_code=result.status_code,
+            )
+        return result.data
 
     def copy_test_automation_to_official(
         self,
