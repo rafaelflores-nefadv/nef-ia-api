@@ -149,6 +149,32 @@ def test_upload_valid_file(tmp_path) -> None:  # type: ignore[no-untyped-def]
     assert (tmp_path / saved.file_path).exists()
 
 
+def test_upload_multiple_mixed_files(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    service = build_service(tmp_path, analysis_request_id, automation_id)
+    token, permissions = build_token_with_permissions(automation_id)
+    uploads = [
+        build_upload("contrato.pdf", b"%PDF texto", "application/pdf"),
+        build_upload("planilha.xlsx", b"xlsx-data", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        build_upload(
+            "relatorio.docx",
+            b"docx-data",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+    ]
+
+    saved = service.upload_request_files(
+        analysis_request_id=analysis_request_id,
+        upload_files=uploads,
+        api_token=token,
+        token_permissions=permissions,
+    )
+
+    assert [item.file_name for item in saved] == ["contrato.pdf", "planilha.xlsx", "relatorio.docx"]
+    assert all((tmp_path / item.file_path).exists() for item in saved)
+
+
 def test_reject_invalid_extension(tmp_path) -> None:  # type: ignore[no-untyped-def]
     analysis_request_id = uuid4()
     automation_id = uuid4()

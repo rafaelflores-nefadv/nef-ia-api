@@ -54,7 +54,9 @@ class Settings(BaseSettings):
     storage_path: str = "./storage"
     max_upload_size_mb: int = 1024
     upload_chunk_size_bytes: int = 1048576
-    allowed_file_extensions: Annotated[list[str], NoDecode] = Field(default_factory=lambda: [".xlsx", ".csv", ".pdf"])
+    allowed_file_extensions: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [".xlsx", ".csv", ".pdf", ".docx", ".doc"]
+    )
     allowed_file_mime_types: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -63,6 +65,8 @@ class Settings(BaseSettings):
             "application/csv",
             "text/plain",
             "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/msword",
             "application/octet-stream",
         ]
     )

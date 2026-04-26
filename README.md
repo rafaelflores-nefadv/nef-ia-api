@@ -272,6 +272,7 @@ docker compose exec api python -m app.seed --with-bootstrap-token
 - `GET /health/ready`
 - `POST /api/v1/admin/auth/login`
 - `POST /api/v1/files/request-upload`
+- `POST /api/v1/files/request-uploads`
 - `POST /api/v1/executions`
 - `GET /api/v1/executions/{execution_id}`
 - `GET /api/v1/executions/{execution_id}/files`
@@ -304,6 +305,36 @@ docker compose exec api python -m app.seed --with-bootstrap-token
 - `POST /api/v1/external/assistants/prompt-refinement/apply`
 - `POST /api/v1/external/assistants/prompt-refinement/advanced-preview`
 - `POST /api/v1/external/assistants/prompt-refinement/advanced-apply`
+
+## Arquivos de entrada multiplos
+O upload administrativo aceita um ou varios arquivos por solicitacao:
+
+```powershell
+curl -X POST http://127.0.0.1:8000/api/v1/files/request-uploads `
+  -H "Authorization: Bearer <TOKEN>" `
+  -F "analysis_request_id=<ANALYSIS_REQUEST_ID>" `
+  -F "files=@contrato.pdf" `
+  -F "files=@planilha.xlsx" `
+  -F "files=@relatorio.docx"
+```
+
+Depois de enviar os arquivos, crie a execucao usando `request_file_ids` com os ids retornados:
+
+```json
+{
+  "analysis_request_id": "<ANALYSIS_REQUEST_ID>",
+  "request_file_ids": [
+    "<FILE_ID_1>",
+    "<FILE_ID_2>"
+  ]
+}
+```
+
+Para combinacoes com planilha, informe a planilha como primeiro arquivo ou use `input_files`
+marcando a planilha como `primary` e PDFs/DOCX/DOC como `context`.
+Arquivos de entrada e saida podem ser listados em `GET /api/v1/executions/{execution_id}/files`
+e baixados por `GET /api/v1/files/request-files/{file_id}/download` ou
+`GET /api/v1/files/execution-files/{file_id}/download`.
 
 ## Assistente de refinamento (simple vs advanced)
 - Modo simples (`preview`/`apply`):

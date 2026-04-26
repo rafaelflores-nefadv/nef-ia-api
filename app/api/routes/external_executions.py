@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import zipfile
+from io import BytesIO
 from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import ValidationError
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import TokenScope, get_current_token_scope
@@ -250,6 +252,53 @@ def download_file(
     )
 
 
+@router.get("/executions/{execution_id}/files/download")
+def download_execution_files_archive(
+    execution_id: UUID,
+    token_scope: TokenScope = Depends(get_current_token_scope),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> Response:
+    service = ExternalExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    items = service.get_execution_files_in_scope(
+        token_id=token_scope.token_id,
+        execution_id=execution_id,
+    )
+    if not items:
+        raise AppException(
+            "Execution does not have files available for download.",
+            status_code=404,
+            code="execution_files_not_found",
+        )
+
+    archive = BytesIO()
+    used_names: set[str] = set()
+    with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        for item in items:
+            _, downloadable = service.download_file_in_scope(
+                token_id=token_scope.token_id,
+                token=token_scope.token,
+                file_id=item.file_id,
+            )
+            archive_name = _unique_archive_name(
+                used_names=used_names,
+                logical_type=item.logical_type,
+                file_name=downloadable.file_name,
+            )
+            zip_file.write(downloadable.absolute_path, arcname=archive_name)
+
+    archive.seek(0)
+    file_name = f"execution_{execution_id}_files.zip"
+    return Response(
+        content=archive.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+    )
+
+
 @router.get("/executions/{execution_id}/result", response_model=ExternalExecutionResultResponse)
 def get_execution_result(
     execution_id: UUID,
@@ -272,6 +321,29 @@ def get_execution_result(
         source_file_id=result.source_file_id,
         source_mime_type=result.source_mime_type,
     )
+
+
+def _unique_archive_name(*, used_names: set[str], logical_type: str, file_name: str) -> str:
+    safe_type = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in str(logical_type or "file"))
+    safe_name = str(file_name or "file").replace("\\", "/").split("/")[-1].strip() or "file"
+    candidate = f"{safe_type}/{safe_name}"
+    if candidate not in used_names:
+        used_names.add(candidate)
+        return candidate
+
+    stem, dot, suffix = safe_name.rpartition(".")
+    if not stem:
+        stem = safe_name
+        dot = ""
+        suffix = ""
+    index = 2
+    while True:
+        numbered_name = f"{stem}_{index}{dot}{suffix}" if dot else f"{stem}_{index}"
+        candidate = f"{safe_type}/{numbered_name}"
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        index += 1
 
 
 @router.post("/prompts/{prompt_id}/execute", response_model=ExternalExecutionResponse, status_code=status.HTTP_201_CREATED)

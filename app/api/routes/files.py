@@ -8,7 +8,7 @@ from app.api.dependencies.security import get_current_token
 from app.db.session import get_operational_session
 from app.db.shared_session import get_shared_session
 from app.models.operational import DjangoAiApiToken
-from app.schemas.file import FileUploadResponse, RequestFileMetadataResponse
+from app.schemas.file import FileUploadResponse, MultiFileUploadResponse, RequestFileMetadataResponse
 from app.services.file_service import FileService
 
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
@@ -48,6 +48,46 @@ def upload_request_file(
             checksum=request_file.checksum,
             uploaded_at=request_file.uploaded_at,
         )
+    )
+
+
+@router.post("/request-uploads", response_model=MultiFileUploadResponse)
+def upload_request_files(
+    request: Request,
+    analysis_request_id: UUID = Form(...),
+    files: list[UploadFile] = File(...),
+    api_token: DjangoAiApiToken = Depends(get_current_token),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> MultiFileUploadResponse:
+    token_permissions = getattr(request.state, "token_permissions", [])
+    ip_address = request.client.host if request.client else None
+
+    service = FileService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    uploaded_files = service.upload_request_files(
+        analysis_request_id=analysis_request_id,
+        upload_files=files,
+        api_token=api_token,
+        token_permissions=token_permissions,
+        ip_address=ip_address,
+    )
+    return MultiFileUploadResponse(
+        files=[
+            RequestFileMetadataResponse(
+                id=request_file.id,
+                analysis_request_id=request_file.analysis_request_id,
+                file_name=request_file.file_name,
+                file_path=request_file.file_path,
+                file_size=request_file.file_size,
+                mime_type=request_file.mime_type,
+                checksum=request_file.checksum,
+                uploaded_at=request_file.uploaded_at,
+            )
+            for request_file in uploaded_files
+        ]
     )
 
 

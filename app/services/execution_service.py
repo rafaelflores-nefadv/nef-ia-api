@@ -76,7 +76,21 @@ logger = logging.getLogger(__name__)
 RETRYABLE_PROVIDER_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 RETRYABLE_ERROR_CODES = {"provider_timeout", "provider_network_error"}
 TABULAR_EXTENSIONS = {".xlsx", ".xls", ".csv"}
-TEXTUAL_EXTENSIONS = {".pdf", ".txt", ".md", ".json", ".xml", ".html", ".htm", ".rtf", ".log", ".yaml", ".yml"}
+TEXTUAL_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".doc",
+    ".txt",
+    ".md",
+    ".json",
+    ".xml",
+    ".html",
+    ".htm",
+    ".rtf",
+    ".log",
+    ".yaml",
+    ".yml",
+}
 TABULAR_MIME_HINTS = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.ms-excel",
@@ -85,6 +99,8 @@ TABULAR_MIME_HINTS = {
 }
 TEXTUAL_MIME_HINTS = {
     "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
     "application/json",
     "application/xml",
 }
@@ -113,7 +129,7 @@ FATAL_TABULAR_ERROR_CODES = {
 }
 
 CONTEXT_STRUCTURED_EXTENSIONS = {".json", ".xml", ".yaml", ".yml", ".csv", ".tsv"}
-CONTEXT_RAW_EXTENSIONS = {".txt", ".md", ".log", ".pdf", ".html", ".htm", ".rtf"}
+CONTEXT_RAW_EXTENSIONS = {".txt", ".md", ".log", ".pdf", ".docx", ".doc", ".html", ".htm", ".rtf"}
 PROMPT_SECTION_INSTRUCTION = "[INSTRUCAO]"
 PROMPT_SECTION_ROW_DATA = "[DADOS DA LINHA]"
 PROMPT_SECTION_CONTEXT = "[CONTEXTO]"
@@ -3793,9 +3809,15 @@ class ExecutionService:
     def _read_input_file_content(self, *, file_path: str, file_name: str) -> str:
         extension = Path(file_name).suffix.lower()
         with self.file_service.storage.open_file(file_path) as handle:
-            if extension == ".pdf":
-                return self._extract_pdf_text(handle.read())
             raw_bytes = handle.read()
+            if extension == ".pdf":
+                return self._extract_pdf_text(raw_bytes)
+            if extension == ".xlsx":
+                return self._extract_xlsx_text(raw_bytes)
+            if extension == ".docx":
+                return self._extract_docx_text(raw_bytes)
+            if extension == ".doc":
+                return self._extract_legacy_doc_text(raw_bytes)
             return raw_bytes.decode("utf-8", errors="ignore")
 
     @staticmethod
@@ -3822,6 +3844,52 @@ class ExecutionService:
             from openpyxl import load_workbook
         except Exception:
             return content[:8000].decode("utf-8", errors="ignore")
+
+    @staticmethod
+    def _extract_docx_text(content: bytes) -> str:
+        try:
+            from docx import Document
+        except Exception:
+            return content[:8000].decode("utf-8", errors="ignore")
+
+        try:
+            document = Document(io.BytesIO(content))
+            blocks: list[str] = []
+            for paragraph in document.paragraphs:
+                text = paragraph.text.strip()
+                if text:
+                    blocks.append(text)
+            for table in document.tables:
+                for row in table.rows:
+                    values = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if values:
+                        blocks.append(" | ".join(values))
+            return "\n".join(blocks).strip()
+        except Exception:
+            return content[:8000].decode("utf-8", errors="ignore")
+
+    @staticmethod
+    def _extract_legacy_doc_text(content: bytes) -> str:
+        candidates: list[str] = []
+        for encoding in ("utf-16-le", "cp1252", "latin-1"):
+            try:
+                decoded = content.decode(encoding, errors="ignore")
+            except Exception:
+                continue
+            chunks = re.findall(r"[^\x00-\x1f\x7f-\x9f]{4,}", decoded)
+            candidates.extend(chunk.strip() for chunk in chunks if chunk.strip())
+
+        seen: set[str] = set()
+        lines: list[str] = []
+        for candidate in candidates:
+            normalized = re.sub(r"\s+", " ", candidate).strip()
+            if len(normalized) < 4 or normalized in seen:
+                continue
+            seen.add(normalized)
+            lines.append(normalized)
+            if len(lines) >= 1000:
+                break
+        return "\n".join(lines).strip()
 
         try:
             import io

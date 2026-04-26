@@ -31,6 +31,10 @@ class FileUploadResponse(BaseModel):
     file: RequestFileMetadataResponse
 
 
+class MultiFileUploadResponse(BaseModel):
+    files: list[RequestFileMetadataResponse]
+
+
 class ExecutionFileListResponse(BaseModel):
     items: list[ExecutionFileMetadataResponse]
 

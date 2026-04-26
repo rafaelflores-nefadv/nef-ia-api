@@ -137,6 +137,38 @@ class FileService:
             ip_address=ip_address,
         )
 
+    def upload_request_files(
+        self,
+        *,
+        analysis_request_id: UUID,
+        upload_files: list[UploadFile],
+        api_token: DjangoAiApiToken,
+        token_permissions: list[DjangoAiApiTokenPermission],
+        ip_address: str | None = None,
+    ) -> list[DjangoAiRequestFile]:
+        files = [item for item in upload_files if getattr(item, "filename", None)]
+        if not files:
+            raise AppException(
+                "At least one file is required.",
+                status_code=422,
+                code="missing_input_file",
+            )
+        for upload_file in files:
+            self._validate_upload_file(upload_file)
+
+        uploaded: list[DjangoAiRequestFile] = []
+        for upload_file in files:
+            uploaded.append(
+                self.upload_request_file(
+                    analysis_request_id=analysis_request_id,
+                    upload_file=upload_file,
+                    api_token=api_token,
+                    token_permissions=token_permissions,
+                    ip_address=ip_address,
+                )
+            )
+        return uploaded
+
     def upload_request_json_payload(
         self,
         *,
