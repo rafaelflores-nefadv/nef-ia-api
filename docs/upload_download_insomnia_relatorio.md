@@ -452,6 +452,184 @@ O pacote gerado e ZIP, nao RAR.
   - ausencia de `analysis_request_id`;
   - token fora do escopo da automacao.
 
+## Analise de impacto das mudancas
+
+Foi feita uma verificacao para avaliar se as mudancas e testes prejudicaram outras funcoes do projeto.
+
+### Validacoes executadas
+
+Servicos Docker:
+
+```text
+postgres        healthy
+redis           healthy
+nef-ia-api      healthy
+nef-ia-worker   running
+```
+
+Healthcheck da API:
+
+```text
+GET http://127.0.0.1:8000/health/live
+Resultado: 200 OK
+Resposta: {"status":"ok","service":"nef-ia-api"}
+```
+
+Check do Django:
+
+```text
+python manage.py check
+Resultado: System check identified no issues (0 silenced).
+```
+
+Migrations Alembic:
+
+```text
+python -m alembic current
+Resultado: 20260323_0013 (head)
+```
+
+Chave de criptografia:
+
+```text
+CREDENTIALS_ENCRYPTION_KEY validada localmente e dentro do container da API.
+Resultado: Fernet OK.
+```
+
+Rotas testadas novamente:
+
+```text
+POST /api/v1/files/request-uploads
+Resultado: upload OK
+
+GET /api/v1/files/request-files/{file_id}/download
+Resultado: 200 OK
+
+GET /api/v1/external/executions/{execution_id}/files/download
+Resultado: 200 OK
+```
+
+### Pontos que nao indicaram quebra
+
+- API continuou saudavel apos as configuracoes.
+- Django carregou as configuracoes sem erros.
+- Worker continuou rodando.
+- Redis continuou saudavel.
+- Postgres continuou saudavel.
+- Upload padronizado em `/request-uploads` continuou funcionando.
+- Download individual por `file_id` continuou funcionando.
+- Download ZIP por `execution_id` continuou funcionando.
+- Alembic permaneceu no head.
+- A chave Fernet atual e valida.
+
+### Pontos de atencao identificados
+
+#### Porta do Postgres no host
+
+O `docker-compose.yml` esta expondo o Postgres em:
+
+```text
+5433:5432
+```
+
+Motivo:
+
+```text
+O host Windows ja tinha um Postgres local usando a porta 5432.
+```
+
+Impacto:
+
+- Dentro dos containers, nada muda: `DB_HOST=postgres` e `DB_PORT=5432` continuam corretos.
+- Para o Django local fora do Docker, foi usado `DJANGO_DB_PORT=5433`.
+- Em outro ambiente, conferir se a porta `5433` faz sentido ou se deve voltar para `5432`.
+
+#### CREDENTIALS_ENCRYPTION_KEY
+
+A chave Fernet foi corrigida e validada.
+
+Impacto:
+
+- Novas credenciais podem ser criptografadas corretamente.
+- Se existirem credenciais antigas criptografadas com outra chave, elas nao serao descriptografadas pela chave nova.
+- Para producao, a chave deve ser definitiva, segura, armazenada em variavel de ambiente e nunca trocada sem processo de rotacao.
+
+#### Dados de teste criados
+
+Durante os testes, foram criados tokens, requests, uploads e execucoes artificiais.
+
+Tokens de teste encontrados:
+
+```text
+integration::automacao-teste-insomnia
+insomnia-upload-download-test
+insomnia-teste-multiplos-arquivos
+insomnia-teste-multiplos-arquivos-v2
+```
+
+Execucoes artificiais criadas para validar ZIP:
+
+```text
+6750e013-4622-4062-878b-9858e606605a
+7c0fe287-3bec-40a1-b8b9-1abcbcdc6889
+```
+
+Request de teste principal:
+
+```text
+analysis_request_id=ebaf9398-7d10-41ef-8cd2-90a6f9e59ac0
+```
+
+Quantidade observada:
+
+```text
+27 arquivos vinculados ao request de teste.
+```
+
+Impacto:
+
+- Nao quebra a API.
+- Pode poluir telas administrativas, metricas, listagens e historico.
+- Antes de producao, recomenda-se remover ou revogar os tokens e registros de teste.
+
+#### Automacao artificial antiga
+
+Foi criada uma automacao de teste inicial:
+
+```text
+Insomnia Upload Download Test
+```
+
+Ela serviu apenas para testar upload/download inicial e apareceu sem runtime/prompt oficial completo.
+
+Impacto:
+
+- Nao deve ser usada para execucao real.
+- Pode aparecer em telas/listagens como automacao incompleta.
+- Recomenda-se limpar antes de producao.
+
+### Conclusao da analise de impacto
+
+Nao foi encontrada evidencia de quebra funcional causada pelas mudancas feitas para upload/download.
+
+Estado validado:
+
+- Upload OK.
+- Download individual OK.
+- Download ZIP OK.
+- API OK.
+- Django check OK.
+- Worker/Redis/Postgres OK.
+- Migrations OK.
+- Fernet OK.
+
+Recomendacao:
+
+```text
+As rotas de arquivo estao aptas para homologacao/staging.
+Antes de producao, limpar dados de teste, revogar tokens de teste, manter chave Fernet definitiva e validar uma execucao real completa com provider.
+```
+
 ## Tipos de arquivo
 
 Pelo `.env`, as extensoes permitidas estao em:
