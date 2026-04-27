@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
       DJANGO_DB_NAME: ${DJANGO_DB_NAME:-nef_ia_django}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - nef_postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
