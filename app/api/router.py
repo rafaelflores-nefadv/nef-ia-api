@@ -16,6 +16,7 @@ from app.api.routes import (
     files,
     health,
     system,
+    talent_bank,
 )
 from app.core.config import get_settings
 
@@ -37,3 +38,4 @@ api_router.include_router(executions.router)
 api_router.include_router(external_executions.router)
 api_router.include_router(external_catalog.router)
 api_router.include_router(external_assistants.router)
+api_router.include_router(talent_bank.router)

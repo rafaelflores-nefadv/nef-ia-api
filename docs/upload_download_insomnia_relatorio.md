@@ -689,3 +689,376 @@ curl.exe -L `
 - A rota recomendada para clientes e `/api/v1/files/request-uploads`.
 - O cliente deve sempre enviar `multipart/form-data` gerado automaticamente pela ferramenta HTTP.
 - Para automacoes do tipo planilha, o arquivo principal da execucao deve ser `.csv` ou `.xlsx`; PDFs/DOCX podem ser usados como contexto conforme o fluxo de execucao.
+
+## Nova funcionalidade adicionada: Banco de Talentos
+
+Foi adicionada uma nova funcionalidade na FastAPI para leitura e estruturacao de curriculos.
+
+Objetivo:
+
+```text
+Receber curriculos em PDF, DOCX ou texto puro e retornar um JSON estruturado com os dados extraidos do candidato.
+```
+
+Essa funcionalidade foi integrada na API existente, sem criar nova aplicacao e sem alterar a arquitetura principal.
+
+## Rotas criadas
+
+As novas rotas foram adicionadas no router principal da FastAPI.
+
+Prefixo:
+
+```text
+/api/v1/talentos
+```
+
+### Parse de curriculo por texto puro
+
+Rota:
+
+```text
+POST /api/v1/talentos/curriculos/parse-text
+```
+
+Autenticacao:
+
+```text
+Authorization: Bearer <TOKEN_VALIDO>
+```
+
+Body:
+
+```json
+{
+  "texto": "conteudo do curriculo"
+}
+```
+
+Comportamento:
+
+- Recebe texto puro.
+- Normaliza o conteudo.
+- Extrai campos estruturados via regex e heuristicas locais.
+- Retorna tambem o texto completo em `texto_extraido`.
+
+### Parse de curriculo por arquivo
+
+Rota:
+
+```text
+POST /api/v1/talentos/curriculos/parse
+```
+
+Autenticacao:
+
+```text
+Authorization: Bearer <TOKEN_VALIDO>
+```
+
+Body:
+
+```text
+Multipart Form
+```
+
+Campos:
+
+```text
+file   File   curriculo.pdf
+```
+
+ou
+
+```text
+file   File   curriculo.docx
+```
+
+Comportamento:
+
+- Aceita apenas `.pdf` e `.docx`.
+- Extrai texto do arquivo.
+- Rejeita arquivo vazio.
+- Rejeita extensao invalida.
+- Retorna o mesmo JSON estruturado da rota `parse-text`.
+
+## Estrutura de resposta
+
+As duas rotas retornam uma resposta no formato:
+
+```json
+{
+  "dados_pessoais": {
+    "nome": null,
+    "email": null,
+    "telefone": null,
+    "cidade": null,
+    "estado": null,
+    "linkedin": null,
+    "github": null
+  },
+  "objetivo": null,
+  "resumo_profissional": null,
+  "experiencias": [],
+  "formacao": [],
+  "cursos": [],
+  "habilidades": [],
+  "idiomas": [],
+  "certificacoes": [],
+  "texto_extraido": "texto bruto extraido"
+}
+```
+
+## Campos extraidos pelo parser
+
+O parser atual foi preparado para uso local por heuristica e para futura troca por IA, se necessario.
+
+Campos atualmente extraidos:
+
+- `nome`
+- `email`
+- `telefone`
+- `cidade`
+- `estado`
+- `linkedin`
+- `github`
+- `objetivo`
+- `resumo_profissional`
+- `experiencias`
+- `formacao`
+- `cursos`
+- `habilidades`
+- `idiomas`
+- `certificacoes`
+
+Regras atuais:
+
+- Campos nao encontrados retornam `null` ou lista vazia.
+- O texto completo permanece disponivel em `texto_extraido`.
+- Links de LinkedIn e GitHub sao normalizados para URL.
+- Telefone brasileiro e normalizado para formato legivel quando possivel.
+
+## Servicos adicionados
+
+Para suportar a funcionalidade, foram criados os seguintes componentes:
+
+Arquivo:
+
+```text
+app/api/routes/talent_bank.py
+```
+
+Responsabilidade:
+
+- expor as rotas do Banco de Talentos
+- manter a rota fina
+- delegar extracao e parsing para servicos
+
+Arquivo:
+
+```text
+app/services/file_text_extractor.py
+```
+
+Responsabilidade:
+
+- extrair texto de PDF com `pypdf`
+- extrair texto de DOCX com `python-docx`
+- validar extensao
+- validar arquivo vazio
+- retornar erro claro para falha de extracao
+
+Arquivo:
+
+```text
+app/services/resume_parser_service.py
+```
+
+Responsabilidade:
+
+- limpar e normalizar o texto
+- aplicar regex e heuristicas locais
+- montar a resposta estruturada do curriculo
+
+Arquivo:
+
+```text
+app/schemas/resume.py
+```
+
+Responsabilidade:
+
+- definir os schemas Pydantic da funcionalidade
+
+## Dependencias utilizadas
+
+As dependencias necessarias para a funcionalidade ja estavam disponiveis no projeto:
+
+```text
+python-multipart
+pypdf
+python-docx
+```
+
+Nao foi necessario criar projeto novo nem duplicar router principal.
+
+## Fluxo correto de autenticacao para testes no Insomnia
+
+Para testar o Banco de Talentos no Insomnia, foi validado o seguinte fluxo:
+
+### 1. Login administrativo
+
+Rota:
+
+```text
+POST /api/v1/admin/auth/login
+```
+
+Body:
+
+```json
+{
+  "email": "admin@nef.local",
+  "password": "123456"
+}
+```
+
+Resposta:
+
+```json
+{
+  "access_token": "...",
+  "token_type": "bearer",
+  "expires_at": "..."
+}
+```
+
+### 2. Criar token de integracao
+
+Rota:
+
+```text
+POST /api/v1/admin/integration-tokens
+```
+
+Header:
+
+```text
+Authorization: Bearer <ACCESS_TOKEN_JWT_ADMIN>
+```
+
+Body:
+
+```json
+{
+  "name": "talent-bank-insomnia"
+}
+```
+
+Exemplo validado:
+
+```json
+{
+  "id": "bd17d78b-5eaf-4c5f-bbde-144afd57997d",
+  "name": "talent-bank-insomnia",
+  "token": "ia_int_uWaVazIL4Gp0WB0RXSDCMgO7jGvjnO6Km8US6DYbE5AcHWDtqmEcmx3TApt5t",
+  "is_active": true,
+  "created_by_user_id": "12304569-58a3-4731-b145-7c543d36b34d",
+  "created_at": "2026-04-28T14:16:09.539017Z"
+}
+```
+
+### 3. Usar o token criado nas rotas do Banco de Talentos
+
+Header:
+
+```text
+Authorization: Bearer <TOKEN_IA_INT_OU_TOKEN_VALIDO>
+```
+
+Observacao importante:
+
+- Para as rotas administrativas, usar o `access_token` JWT retornado no login admin.
+- Para as rotas do Banco de Talentos, foi validado o uso do token `ia_int_...` criado via `/admin/integration-tokens`.
+- Token operacional antigo invalido pode retornar erro de autenticacao.
+
+## Teste validado no Insomnia: parse-text
+
+Rota:
+
+```text
+POST http://127.0.0.1:8000/api/v1/talentos/curriculos/parse-text
+```
+
+Headers:
+
+```text
+Authorization: Bearer <TOKEN_VALIDO>
+Content-Type: application/json
+```
+
+Body usado no teste:
+
+```json
+{
+  "texto": "Maria Silva\nSao Paulo / SP\nmaria.silva@email.com\n(11) 98765-4321\nhttps://linkedin.com/in/mariasilva\nhttps://github.com/mariasilva\nObjetivo\nAtuar como desenvolvedora backend.\nHabilidades\n- Python\n- FastAPI\nIdiomas\n- Ingles - Fluente"
+}
+```
+
+Resultado observado:
+
+```json
+{
+  "nome": "Maria Silva",
+  "email": "maria.silva@email.com",
+  "telefone": "(11) 98765-4321",
+  "linkedin": "https://linkedin.com/in/mariasilva",
+  "github": "https://github.com/mariasilva",
+  "objetivo": "Atuar como desenvolvedora backend.",
+  "habilidades": ["Python", "FastAPI"],
+  "idiomas": ["Ingles:Fluente"]
+}
+```
+
+## Teste validado no Insomnia: arquivo invalido
+
+Rota:
+
+```text
+POST http://127.0.0.1:8000/api/v1/talentos/curriculos/parse
+```
+
+Resultado observado ao enviar arquivo com extensao nao permitida:
+
+```json
+{
+  "error": {
+    "code": "invalid_resume_file_extension",
+    "message": "Unsupported resume file extension.",
+    "details": {
+      "allowed_extensions": [".docx", ".pdf"]
+    }
+  }
+}
+```
+
+## Erros previstos da nova funcionalidade
+
+Erros esperados nas rotas do Banco de Talentos:
+
+- `missing_file`
+- `invalid_resume_file_extension`
+- `empty_resume_file`
+- `resume_text_not_extractable`
+- `empty_resume_text`
+- `invalid_admin_token` quando token administrativo for usado incorretamente
+
+## Status da funcionalidade
+
+Estado validado:
+
+- rota integrada no router principal
+- `parse-text` funcionando
+- autenticacao funcionando
+- tratamento de extensao invalida funcionando
+- testes automatizados passando localmente
+- stack Docker da API, worker, Redis e Postgres ativa durante a validacao

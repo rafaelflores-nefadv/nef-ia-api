@@ -16,6 +16,7 @@ from . import (
     files,
     health,
     system,
+    talent_bank,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "executions",
     "files",
     "admin_execution_files",
+    "talent_bank",
 ]
