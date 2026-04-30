@@ -1062,3 +1062,149 @@ Estado validado:
 - tratamento de extensao invalida funcionando
 - testes automatizados passando localmente
 - stack Docker da API, worker, Redis e Postgres ativa durante a validacao
+
+## Incidente: Erro 500 no Django em producao (2026-04-29)
+
+### Sintoma
+
+O Django retornava erro 500 em todas as paginas apos deploy no servidor de producao (`/opt/nef-ia-api`).
+
+### Causa raiz
+
+O arquivo `.env` no servidor tinha variaveis duplicadas e conflitantes para banco de dados.
+
+Problemas encontrados:
+
+```text
+DB_HOST aparecia duas vezes:
+  - DB_HOST=postgres       (correto para containers Docker)
+  - DB_HOST=host.docker.internal  (errado, causava falha de conexao da API)
+
+DJANGO_DB_HOST aparecia duas vezes:
+  - DJANGO_DB_HOST=127.0.0.1  (correto para Django no host)
+  - DJANGO_DB_HOST=postgres   (errado, Django no host nao enxerga hostname Docker)
+
+DJANGO_DB_PORT=5432 em vez de 5433
+  - O Postgres no Docker estava mapeado para 5433 no host
+  - Django tentava conectar na 5432 e falhava
+
+Faltavam variaveis obrigatorias do Django:
+  - DJANGO_DB_USER
+  - DJANGO_DB_PASSWORD
+  - DJANGO_DB_ENGINE
+  - DJANGO_ALLOWED_HOSTS
+  - FASTAPI_BASE_URL
+```
+
+### Por que isso acontece
+
+O Django roda fora do Docker (direto no host via `venv311` + Gunicorn).
+A API FastAPI e o worker rodam dentro do Docker Compose.
+
+Isso significa que cada um precisa de configuracoes diferentes para acessar o Postgres:
+
+```text
+API/worker (dentro do Docker):
+  DB_HOST=postgres        <- nome do servico Docker
+  DB_PORT=5432            <- porta interna do container
+
+Django (fora do Docker, no host):
+  DJANGO_DB_HOST=127.0.0.1  <- localhost do servidor
+  DJANGO_DB_PORT=5433        <- porta mapeada pelo Docker para o host
+```
+
+Se o `.env` misturar esses valores ou tiver duplicatas, o Django ou a API conectam no banco errado ou nao conectam.
+
+### Solucao aplicada
+
+**Passo 1: Expor o Postgres para o host no docker-compose.yml**
+
+Adicionado o bloco `ports` no servico `postgres`:
+
+```yaml
+postgres:
+  ports:
+    - "5433:5432"
+```
+
+Isso faz o Postgres do Docker ficar acessivel em `127.0.0.1:5433` no servidor host.
+
+**Passo 2: Limpar e corrigir o `.env`**
+
+O arquivo foi reescrito sem duplicatas, separando claramente as variaveis da API e do Django:
+
+```env
+# Banco da API (containers Docker)
+DB_HOST=postgres
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=Nef@2026!
+DB_NAME=nef-ia-api
+
+# Banco do Django (host)
+DJANGO_DB_HOST=127.0.0.1
+DJANGO_DB_PORT=5433
+DJANGO_DB_USER=postgres
+DJANGO_DB_PASSWORD=Nef@2026!
+DJANGO_DB_NAME=nef-ia-web
+DJANGO_DB_ENGINE=django.db.backends.postgresql
+DJANGO_ALLOWED_HOSTS=*
+
+# Integracao
+FASTAPI_BASE_URL=http://127.0.0.1:8000
+```
+
+**Passo 3: Reiniciar containers e servico Django**
+
+```bash
+docker compose up -d --build
+systemctl restart nef-ia-django.service
+```
+
+**Passo 4: Validar conexao do Django**
+
+```bash
+python manage.py check
+python manage.py shell -c "from django.db import connection; connection.ensure_connection(); print('db ok')"
+```
+
+Resultado:
+
+```text
+System check identified no issues (0 silenced).
+db ok
+```
+
+### Como reescrever o .env via terminal sem editor
+
+Se o arquivo estiver com conflitos e precisar ser substituido inteiro, usar heredoc no terminal:
+
+```bash
+cat > /opt/nef-ia-api/.env << 'EOF'
+... conteudo correto ...
+EOF
+```
+
+Copiar o bloco inteiro (do `cat` ate o `EOF` final) e colar de uma vez no terminal. O shell grava o arquivo sem abrir editor.
+
+### Onde o Gunicorn do Django e gerenciado
+
+O Django em producao roda via `systemd`, nao via Docker:
+
+```bash
+systemctl status nef-ia-django.service
+systemctl restart nef-ia-django.service
+journalctl -u nef-ia-django.service -n 50 --no-pager
+```
+
+Apos correcao do `.env`, e obrigatorio reiniciar o servico. O `kill -HUP` nao recarrega variaveis de ambiente — ele so recria workers herdando o ambiente antigo do processo master.
+
+### Resumo do que causa erro 500 no Django neste ambiente
+
+| Causa | Efeito |
+|---|---|
+| `DJANGO_DB_HOST=postgres` no host | Django nao resolve hostname Docker |
+| `DJANGO_DB_PORT=5432` sem mapeamento | Porta nao acessivel no host |
+| `DB_HOST=host.docker.internal` no Linux | Containers nao resolvem, API falha |
+| Variaveis duplicadas no `.env` | Valor errado pode prevalecer |
+| Reiniciar com `kill -HUP` | Nao recarrega `.env`, mantem config antiga |

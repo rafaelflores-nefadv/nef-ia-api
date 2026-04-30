@@ -3,7 +3,6 @@ version: "3.9"
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: postgres
     environment:
       POSTGRES_DB: ${DB_NAME:-nef_ia}
       POSTGRES_USER: ${DB_USER:-postgres}
@@ -25,7 +24,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: nef-ia-api
     env_file:
       - .env
     volumes:
@@ -49,7 +47,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: nef-ia-worker
     command: ["dramatiq", "app.workers.tasks", "--processes", "1", "--threads", "2"]
     env_file:
       - .env
@@ -64,9 +61,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: nef-ia-redis
-    ports:
-      - "6379:6379"
     volumes:
       - nef_redis_data:/data
     healthcheck:

@@ -117,6 +117,13 @@ def create_integration_token(
         created_by_user_id=current_user.id,
         ip_address=ip_address,
     )
+    ApiTokenService(session).create_token(
+        name=payload.name,
+        created_by_user_id=current_user.id,
+        expires_at=None,
+        permissions=[],
+        ip_address=ip_address,
+    )
     return IntegrationTokenCreateResponse(
         id=token_model.id,
         name=token_model.name,

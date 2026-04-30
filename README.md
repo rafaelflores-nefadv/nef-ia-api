@@ -159,7 +159,7 @@ Variaveis importantes da Etapa 6/7/8/9:
 - FastAPI + worker + Redis + Postgres via Docker Compose
 - Banco `nef_ia` para FastAPI/worker
 - Banco `nef_ia_django` para o Django local
-- Django local fora do Docker, conectado ao Postgres do Compose pela porta `5432`
+- Django local fora do Docker, conectado ao Postgres do Compose pela porta `5433`
 
 ### 1. Subir infraestrutura da FastAPI
 ```powershell
@@ -169,7 +169,7 @@ docker compose up --build -d
 Servicos:
 - API: `http://localhost:8000`
 - Worker Dramatiq: `nef-ia-worker`
-- Postgres: `localhost:5432`
+- Postgres: `localhost:5433`
 - Redis: `localhost:6379`
 - Django local: `http://127.0.0.1:8001`
 
@@ -247,6 +247,21 @@ python manage.py migrate
 python manage.py runserver 8001
 ```
 
+### 7.1. Se o Django der erro 500
+Checklist rapido:
+- confirme que o Django esta apontando para `DJANGO_DB_HOST`/`DJANGO_DB_PORT` corretos
+- neste repositorio o Postgres do Compose exposto no host usa `5433`, nao `5432`
+- rode `python manage.py migrate`
+- se `DJANGO_DEBUG=false`, rode tambem:
+
+```powershell
+python manage.py collectstatic --noinput
+```
+
+Observacao importante:
+- este projeto usa `WhiteNoise` com `CompressedManifestStaticFilesStorage`
+- em ambiente com `DJANGO_DEBUG=false`, faltar `collectstatic` pode causar erro 500 ao renderizar paginas do Django
+
 ### 8. Bootstrap Django <-> FastAPI (sem JWT manual)
 1. Rode as migrations da FastAPI e do Django.
 2. Rode o seed da FastAPI com bootstrap:
@@ -263,6 +278,52 @@ docker compose exec api python -m app.seed --with-bootstrap-token
 - listar tokens
 - revogar tokens
 - selecionar o token ativo usado pelo Django
+
+## Redeploy limpo no servidor
+Quando voce for apagar a instalacao anterior e subir do zero, a sequencia mais segura e:
+
+1. Fazer backup do `.env` e de qualquer volume/dado que precise manter.
+2. Apagar a pasta antiga do projeto no servidor.
+3. Subir o projeto novo.
+4. Garantir que o `.env` do servidor tenha:
+   - `DB_HOST=postgres`
+   - `DB_PORT=5432`
+   - `DJANGO_DB_HOST=127.0.0.1` ou IP/host real do Postgres acessivel pelo Django
+   - `DJANGO_DB_PORT=5433` quando o Django rodar fora do Docker e usar a porta publicada do Compose
+   - `FASTAPI_BASE_URL` apontando para a FastAPI correta
+   - `DJANGO_ALLOWED_HOSTS` com dominio/IP do servidor
+   - `CREDENTIALS_ENCRYPTION_KEY` valida e igual a usada no ambiente que ja possui credenciais salvas
+5. Subir a infraestrutura:
+
+```powershell
+docker compose up --build -d
+```
+
+6. Rodar migrations da FastAPI:
+
+```powershell
+docker compose exec api python -m alembic upgrade head
+```
+
+7. Rodar seed/bootstrap da FastAPI:
+
+```powershell
+docker compose exec api python -m app.seed --with-bootstrap-token
+```
+
+8. No Django local/servidor:
+
+```powershell
+python manage.py migrate
+python manage.py collectstatic --noinput
+```
+
+9. Subir o Django.
+
+Se a FastAPI estiver funcionando e o Django nao:
+- verifique primeiro o banco `nef_ia_django`
+- depois verifique `collectstatic`
+- depois valide `FASTAPI_BASE_URL` e o token de integracao na tela `Configuracoes > Integracao FastAPI`
 
 `FASTAPI_ADMIN_TOKEN` permanece apenas como fallback legado temporario quando nenhum token ativo estiver cadastrado na tela.
 
