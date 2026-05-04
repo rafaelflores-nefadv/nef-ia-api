@@ -362,6 +362,9 @@ class ExecutionOutputContractResolver:
             fallback=default_schema.prompt_placeholders,
             strict=strict and "prompt_placeholders" in overrides,
         )
+        if strict and "prompt_field_columns" not in overrides and prompt_placeholders:
+            for field_name in prompt_placeholders:
+                prompt_field_columns.setdefault(field_name, field_name)
         merged_schema = ExecutionOutputSchema(
             columns=columns,
             structured_output_aliases=structured_output_aliases,

@@ -19,7 +19,11 @@ from app.models.operational import (
 )
 from app.models.shared import AnalysisExecution
 from app.services import execution_service as execution_module
-from app.services.execution_engine import EngineExecutionInput, ExecutionFileKind
+from app.services.execution_engine import (
+    EngineExecutionInput,
+    ExecutionFileKind,
+    build_legacy_tabular_output_contract,
+)
 from app.services.execution_service import ExecutionService
 
 
@@ -221,6 +225,41 @@ class FakeFileService:
         return SimpleNamespace(id=uuid4())
 
 
+def _legacy_tabular_runtime_kwargs() -> dict[str, object]:
+    contract = build_legacy_tabular_output_contract()
+    schema = contract.output_schema
+    payload: dict[str, object] = {
+        "output_type": contract.output_type.value,
+        "result_parser": contract.parser_strategy.value,
+        "result_formatter": contract.formatter_strategy.value,
+        "output_schema": {
+            "columns": list(schema.columns),
+            "structured_output_aliases": {
+                field_name: list(aliases)
+                for field_name, aliases in schema.structured_output_aliases.items()
+            },
+            "prompt_field_columns": dict(schema.prompt_field_columns),
+            "prompt_field_aliases": {
+                field_name: list(aliases)
+                for field_name, aliases in schema.prompt_field_aliases.items()
+            },
+            "prompt_placeholders": dict(schema.prompt_placeholders),
+            "row_origin_column": schema.row_origin_column,
+            "status_column": schema.status_column,
+            "error_column": schema.error_column,
+            "include_input_columns": schema.include_input_columns,
+            "input_collision_prefix": schema.input_collision_prefix,
+            "worksheet_name": schema.worksheet_name,
+            "file_name_template": schema.file_name_template,
+            "mime_type": schema.mime_type,
+        },
+    }
+    output_schema = payload["output_schema"]
+    if isinstance(output_schema, dict) and schema.ai_output_columns:
+        output_schema["ai_output_columns"] = list(schema.ai_output_columns)
+    return payload
+
+
 class FakeProviderClient:
     def __init__(
         self,
@@ -289,7 +328,13 @@ class FakeProviderService:
         self.provider_id = uuid4()
         self.model_id = uuid4()
 
-    def resolve_runtime(self, *, provider_slug: str, model_slug: str):  # type: ignore[no-untyped-def]
+    def resolve_runtime(
+        self,
+        *,
+        provider_slug: str,
+        model_slug: str,
+        credential_id=None,
+    ):  # type: ignore[no-untyped-def]
         self.resolve_calls.append((provider_slug, model_slug))
         if self.resolve_error is not None:
             raise self.resolve_error
@@ -865,7 +910,8 @@ def test_tabular_csv_processes_each_row_and_generates_xlsx(monkeypatch) -> None:
             "Prazo: {{PRAZO_AGENDADO}}\n"
             "Valor: {{VALOR_DA_CAUSA}}\n"
             "Acao: {{TIPO_DE_ACAO}}"
-        )
+        ),
+        **_legacy_tabular_runtime_kwargs(),
     )
 
     csv_payload = (
@@ -925,6 +971,7 @@ def test_tabular_csv_debug_mode_registers_output_and_debug_files(monkeypatch) ->
     service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
         prompt_text="Conteudo: {{CONTEUDO}}",
         debug_enabled=True,
+        **_legacy_tabular_runtime_kwargs(),
     )
     csv_payload = (
         "conteudo,prazo agendado\n"
@@ -1001,6 +1048,7 @@ def test_tabular_csv_debug_mode_captures_empty_provider_response_context(monkeyp
     service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
         prompt_text="Conteudo: {{CONTEUDO}}",
         debug_enabled=True,
+        **_legacy_tabular_runtime_kwargs(),
     )
     csv_payload = "conteudo\nLinha vazia de retorno\n".encode("utf-8")
     monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
@@ -1051,6 +1099,7 @@ def test_tabular_debug_classifies_openai_unsupported_parameter_without_model_mis
         debug_enabled=True,
         provider_slug="openai",
         model_slug="gpt-5-mini",
+        **_legacy_tabular_runtime_kwargs(),
     )
     csv_payload = "conteudo\nLinha teste\n".encode("utf-8")
     monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
@@ -1088,6 +1137,8 @@ def test_tabular_csv_row_error_does_not_abort_execution(monkeypatch) -> None:
     service.provider_service = provider_service  # type: ignore[assignment]
     service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
         prompt_text="Conteudo: {{CONTEUDO}}"
+        ,
+        **_legacy_tabular_runtime_kwargs(),
     )
 
     csv_payload = (
@@ -1163,6 +1214,8 @@ def test_tabular_json_output_is_parsed(monkeypatch) -> None:
     service.provider_service = provider_service  # type: ignore[assignment]
     service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
         prompt_text="Conteudo: {{CONTEUDO}}"
+        ,
+        **_legacy_tabular_runtime_kwargs(),
     )
 
     csv_payload = "conteudo\nLinha unica\n".encode("utf-8")
@@ -1281,6 +1334,7 @@ def test_tabular_explicit_schema_projects_exact_columns_and_maps_input(monkeypat
         "responsavel",
         "categoria",
         "pensamento",
+        "reclassificacao",
         "prazo",
         "compromissoAnalista",
         "necessitaRevisao",
@@ -1296,6 +1350,7 @@ def test_tabular_explicit_schema_projects_exact_columns_and_maps_input(monkeypat
             "structured_output_aliases": {
                 "categoria": ["categoria"],
                 "pensamento": ["pensamento"],
+                "reclassificacao": ["reclassificacao"],
                 "prazo": ["prazo"],
                 "compromissoAnalista": ["compromissoAnalista"],
                 "necessitaRevisao": ["necessitaRevisao"],
@@ -1304,6 +1359,7 @@ def test_tabular_explicit_schema_projects_exact_columns_and_maps_input(monkeypat
             "ai_output_columns": [
                 "categoria",
                 "pensamento",
+                "reclassificacao",
                 "prazo",
                 "compromissoAnalista",
                 "necessitaRevisao",
@@ -1343,7 +1399,7 @@ def test_tabular_explicit_schema_projects_exact_columns_and_maps_input(monkeypat
     row = list(workbook.active.iter_rows(min_row=2, max_row=2, values_only=True))[0]
 
     assert header == expected_columns
-    assert len(header) == 14
+    assert len(header) == 15
     assert row[header.index("numero_processo")] == "0001234-56.2026.8.11.0001"
     assert row[header.index("id_processo")] == "42"
     assert row[header.index("descricao")] == "Descricao importada"
@@ -1354,6 +1410,7 @@ def test_tabular_explicit_schema_projects_exact_columns_and_maps_input(monkeypat
     assert row[header.index("responsavel")] == "Equipe A"
     assert row[header.index("categoria")] == "Trabalhista"
     assert row[header.index("pensamento")] == "Texto de analise"
+    assert row[header.index("reclassificacao")] in {"", None}
     assert row[header.index("prazo")] == "22/03/2026"
     assert row[header.index("compromissoAnalista")] == "Revisar e protocolar"
     assert row[header.index("necessitaRevisao")] == "nao"
@@ -1555,6 +1612,55 @@ def test_tabular_input_column_mappings_source_to_target_hydrates_prompt_and_outp
     assert row[header.index("resultado")] == "OK"
 
 
+def test_tabular_prompt_placeholders_infer_prompt_fields_when_headers_match(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(
+        FakeProviderClient(
+            modes=["success"],
+            output_text="resultado: OK",
+        )
+    )
+    service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text="Processo: {{NUMERO_PROCESSO}} | Descricao: {{DESCRICAO}}",
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema={
+            "columns": ["numero_processo", "descricao", "resultado"],
+            "structured_output_aliases": {"resultado": ["resultado"]},
+            "ai_output_columns": ["resultado"],
+            "prompt_placeholders": {
+                "numero_processo": "NUMERO_PROCESSO",
+                "descricao": "DESCRICAO",
+            },
+            "status_column": None,
+            "error_column": None,
+        },
+    )
+    csv_payload = "Numero Processo,Descricao\n0001234-56.2026.8.11.0001,Linha de teste\n".encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    assert len(provider_service.client.execute_calls) == 1
+    sent_prompt = provider_service.client.execute_calls[0]["prompt"]
+    assert "0001234-56.2026.8.11.0001" in sent_prompt
+    assert "Linha de teste" in sent_prompt
+    assert "{{NUMERO_PROCESSO}}" not in sent_prompt
+    assert "{{DESCRICAO}}" not in sent_prompt
+
+
 def test_tabular_execution_fails_when_placeholder_is_unresolved(monkeypatch) -> None:
     analysis_request_id = uuid4()
     automation_id = uuid4()
@@ -1737,6 +1843,8 @@ def test_tabular_chooses_sheet_with_meaningful_header(monkeypatch) -> None:
     service.provider_service = provider_service  # type: ignore[assignment]
     service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
         prompt_text="Conteudo: {{CONTEUDO}}"
+        ,
+        **_legacy_tabular_runtime_kwargs(),
     )
 
     workbook = Workbook()
@@ -1774,6 +1882,8 @@ def test_tabular_cost_limit_aborts_execution(monkeypatch) -> None:
     service.provider_service = provider_service  # type: ignore[assignment]
     service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
         prompt_text="Conteudo: {{CONTEUDO}}"
+        ,
+        **_legacy_tabular_runtime_kwargs(),
     )
 
     csv_payload = "conteudo\nlinha 1\nlinha 2\n".encode("utf-8")
@@ -1819,6 +1929,8 @@ def test_tabular_primary_with_text_context_applies_context_to_each_row(monkeypat
     service.provider_service = provider_service  # type: ignore[assignment]
     service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
         prompt_text="Conteudo: {{CONTEUDO}}"
+        ,
+        **_legacy_tabular_runtime_kwargs(),
     )
 
     csv_payload = (
@@ -2525,3 +2637,327 @@ def test_persisted_profile_override_is_applied_and_hard_clamped(monkeypatch) -> 
     assert resolved.persisted_overrides["max_execution_rows"] == 120000
     assert resolved.max_execution_rows == 100000
     assert "max_execution_rows" in resolved.hard_clamped_fields
+
+
+# ---------------------------------------------------------------------------
+# Automação tabular: 16 colunas jurídicas com mapeamento de aliases
+# ---------------------------------------------------------------------------
+
+_SCHEMA_16_COLUNAS = {
+    "columns": [
+        "numero_processo",
+        "id_processo",
+        "id_publicacao",
+        "celula",
+        "valor_da_causa",
+        "tipo_de_acao",
+        "marcacao",
+        "responsavel",
+        "descricao",
+        "categoria",
+        "pensamento",
+        "reclassificacao",
+        "prazo",
+        "compromissoAnalista",
+        "necessitaRevisao",
+        "resumo_do_andamento",
+    ],
+    "structured_output_aliases": {
+        "categoria": ["categoria"],
+        "pensamento": ["pensamento"],
+        "reclassificacao": ["reclassificacao"],
+        "prazo": ["prazo"],
+        "compromissoAnalista": ["compromissoAnalista"],
+        "necessitaRevisao": ["necessitaRevisao"],
+        "resumo_do_andamento": ["resumo_do_andamento", "resumo do andamento"],
+    },
+    "ai_output_columns": [
+        "categoria",
+        "pensamento",
+        "reclassificacao",
+        "prazo",
+        "compromissoAnalista",
+        "necessitaRevisao",
+        "resumo_do_andamento",
+    ],
+    "prompt_placeholders": {
+        "numero_processo": "NUMERO_PROCESSO",
+        "id_processo": "ID_PROCESSO",
+        "id_publicacao": "ID_PUBLICACAO",
+        "celula": "CELULA",
+        "valor_da_causa": "VALOR_DA_CAUSA",
+        "tipo_de_acao": "TIPO_DE_ACAO",
+        "marcacao": "MARCACAO",
+        "responsavel": "RESPONSAVEL",
+        "descricao": "DESCRICAO",
+    },
+    "prompt_field_columns": {
+        "numero_processo": "numero_processo",
+        "id_processo": "id_processo",
+        "id_publicacao": "id_publicacao",
+        "celula": "celula",
+        "valor_da_causa": "valor_da_causa",
+        "tipo_de_acao": "tipo_de_acao",
+        "marcacao": "marcacao",
+        "responsavel": "responsavel",
+        "descricao": "descricao",
+    },
+    "input_column_mappings": {
+        "numero_processo": ["Número Processo", "Numero Processo", "numero_processo"],
+        "id_processo": ["ID Processo", "id_processo"],
+        "id_publicacao": ["ID Publicação", "ID Publicacao", "id_publicacao"],
+        "celula": ["Célula", "Celula", "celula"],
+        "valor_da_causa": ["Valor da Causa", "valor_da_causa"],
+        "tipo_de_acao": ["Tipo de Ação", "Tipo de Acao", "tipo_de_acao"],
+        "marcacao": ["Marcação", "Marcacao", "Prazo Agendado", "marcacao"],
+        "responsavel": ["Responsável Publicação", "Responsavel Publicacao", "responsavel"],
+        "descricao": ["Conteúdo", "Conteudo", "Descrição", "Descricao", "descricao"],
+    },
+    "include_input_columns": False,
+    "row_origin_column": None,
+    "status_column": None,
+    "error_column": None,
+}
+
+_PROMPT_JURIDICO = (
+    "Numero: {{NUMERO_PROCESSO}} | ID: {{ID_PROCESSO}} | Pub: {{ID_PUBLICACAO}} | "
+    "Celula: {{CELULA}} | Valor: {{VALOR_DA_CAUSA}} | Tipo: {{TIPO_DE_ACAO}} | "
+    "Marcacao: {{MARCACAO}} | Responsavel: {{RESPONSAVEL}} | Descricao: {{DESCRICAO}}"
+)
+
+_AI_RESPONSE_7_COLUNAS = (
+    "categoria: Trabalhista\n"
+    "pensamento: Análise concluída\n"
+    "reclassificacao: Sim\n"
+    "prazo: 30 dias\n"
+    "compromissoAnalista: Não\n"
+    "necessitaRevisao: false\n"
+    "resumo_do_andamento: Processo ativo"
+)
+
+
+def test_tabular_coluna_conteudo_acento_hidrata_placeholder_descricao(monkeypatch) -> None:
+    """Coluna 'Conteúdo' (com acento) deve hidratar {{DESCRICAO}} via input_column_mappings."""
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(
+        FakeProviderClient(modes=["success"], output_text=_AI_RESPONSE_7_COLUNAS)
+    )
+    service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text=_PROMPT_JURIDICO,
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema=_SCHEMA_16_COLUNAS,
+    )
+    csv_payload = (
+        "Numero Processo,ID Processo,ID Publicacao,Celula,Valor da Causa,"
+        "Tipo de Acao,Marcacao,Responsavel Publicacao,Conteúdo\n"
+        "0001234,P-001,PUB-999,Trabalhista,R$ 10.000,Reclamatória,Urgente,Ana Silva,Fato jurídico relevante\n"
+    ).encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    sent_prompt = provider_service.client.execute_calls[0]["prompt"]
+    assert "Fato jurídico relevante" in sent_prompt
+    assert "0001234" in sent_prompt
+    assert "{{DESCRICAO}}" not in sent_prompt
+    assert "{{NUMERO_PROCESSO}}" not in sent_prompt
+
+
+def test_tabular_coluna_descricao_sem_acento_hidrata_placeholder_descricao(monkeypatch) -> None:
+    """Coluna 'Descricao' (sem acento) deve hidratar {{DESCRICAO}} via alias normalizado."""
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(
+        FakeProviderClient(modes=["success"], output_text=_AI_RESPONSE_7_COLUNAS)
+    )
+    service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text=_PROMPT_JURIDICO,
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema=_SCHEMA_16_COLUNAS,
+    )
+    csv_payload = (
+        "Numero Processo,ID Processo,ID Publicacao,Celula,Valor da Causa,"
+        "Tipo de Acao,Marcacao,Responsavel Publicacao,Descricao\n"
+        "0009999,P-002,PUB-888,Civel,R$ 5.000,Cobrança,Normal,Carlos Melo,Fato descrito sem acento\n"
+    ).encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    sent_prompt = provider_service.client.execute_calls[0]["prompt"]
+    assert "Fato descrito sem acento" in sent_prompt
+    assert "{{DESCRICAO}}" not in sent_prompt
+
+
+def test_tabular_contrato_16_colunas_sem_colunas_legadas(monkeypatch) -> None:
+    """Output Excel deve ter exatamente 16 colunas na ordem correta, sem colunas legadas."""
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(
+        FakeProviderClient(modes=["success"], output_text=_AI_RESPONSE_7_COLUNAS)
+    )
+    service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text=_PROMPT_JURIDICO,
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema=_SCHEMA_16_COLUNAS,
+    )
+    csv_payload = (
+        "Numero Processo,ID Processo,ID Publicacao,Celula,Valor da Causa,"
+        "Tipo de Acao,Marcacao,Responsavel Publicacao,Conteudo\n"
+        "0001234,P-001,PUB-999,Trabalhista,R$ 10.000,Reclamatória,Urgente,Ana Silva,Fato de teste\n"
+    ).encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    generated = service.file_service.calls[0]
+    workbook = load_workbook(io.BytesIO(generated["content"]))
+    headers = [str(cell or "") for cell in next(workbook.active.iter_rows(min_row=1, max_row=1, values_only=True))]
+
+    expected_columns = list(_SCHEMA_16_COLUNAS["columns"])
+    assert headers == expected_columns, f"Colunas incorretas: {headers}"
+    assert len(headers) == 16
+
+    legacy_columns = {"veredito", "motivo", "classificacao_correta", "trecho_determinante", "resultado"}
+    assert not legacy_columns.intersection(set(headers)), f"Coluna legada encontrada: {legacy_columns.intersection(set(headers))}"
+
+    row = list(workbook.active.iter_rows(min_row=2, max_row=2, values_only=True))[0]
+    row_dict = dict(zip(headers, row))
+    assert str(row_dict.get("numero_processo") or "") == "0001234"
+    assert str(row_dict.get("categoria") or "") == "Trabalhista"
+    assert str(row_dict.get("resumo_do_andamento") or "") == "Processo ativo"
+
+
+def test_tabular_campos_entrada_preservados_apos_resposta_ia(monkeypatch) -> None:
+    """Os 9 campos de entrada não devem ser sobrescritos pela resposta da IA."""
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(
+        FakeProviderClient(modes=["success"], output_text=_AI_RESPONSE_7_COLUNAS)
+    )
+    service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text=_PROMPT_JURIDICO,
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema=_SCHEMA_16_COLUNAS,
+    )
+    csv_payload = (
+        "Numero Processo,ID Processo,ID Publicacao,Celula,Valor da Causa,"
+        "Tipo de Acao,Marcacao,Responsavel Publicacao,Conteudo\n"
+        "PROC-XYZ,P-777,PUB-123,Trabalhista,R$ 99.000,Rescisão,Alta,Maria Costa,Descrição do fato\n"
+    ).encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    generated = service.file_service.calls[0]
+    workbook = load_workbook(io.BytesIO(generated["content"]))
+    headers = [str(cell or "") for cell in next(workbook.active.iter_rows(min_row=1, max_row=1, values_only=True))]
+    row = list(workbook.active.iter_rows(min_row=2, max_row=2, values_only=True))[0]
+    row_dict = dict(zip(headers, row))
+
+    assert str(row_dict.get("numero_processo") or "") == "PROC-XYZ", "numero_processo sobrescrito"
+    assert str(row_dict.get("id_processo") or "") == "P-777", "id_processo sobrescrito"
+    assert str(row_dict.get("descricao") or "") == "Descrição do fato", "descricao sobrescrita"
+    assert str(row_dict.get("responsavel") or "") == "Maria Costa", "responsavel sobrescrito"
+    assert str(row_dict.get("categoria") or "") == "Trabalhista", "categoria ausente"
+    assert str(row_dict.get("resumo_do_andamento") or "") == "Processo ativo", "resumo_do_andamento ausente"
+
+
+def test_tabular_campos_entrada_preservados_quando_ai_output_columns_incorreto(monkeypatch) -> None:
+    """Campos de entrada não devem ser sobrescritos mesmo se ai_output_columns incluir campos de entrada."""
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(
+        FakeProviderClient(modes=["success"], output_text=_AI_RESPONSE_7_COLUNAS)
+    )
+    service.provider_service = provider_service  # type: ignore[assignment]
+
+    schema_ai_cols_errado = {
+        **_SCHEMA_16_COLUNAS,
+        "ai_output_columns": list(_SCHEMA_16_COLUNAS["columns"]),  # ERRADO: inclui os 9 campos de entrada
+    }
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text=_PROMPT_JURIDICO,
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema=schema_ai_cols_errado,
+    )
+    csv_payload = (
+        "Numero Processo,ID Processo,ID Publicacao,Celula,Valor da Causa,"
+        "Tipo de Acao,Marcacao,Responsavel Publicacao,Conteudo\n"
+        "PROC-ABC,P-555,PUB-444,Trabalhista,R$ 50.000,Rescisão,Urgente,João Lima,Fato preservado\n"
+    ).encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    generated = service.file_service.calls[0]
+    workbook = load_workbook(io.BytesIO(generated["content"]))
+    headers = [str(cell or "") for cell in next(workbook.active.iter_rows(min_row=1, max_row=1, values_only=True))]
+    row = list(workbook.active.iter_rows(min_row=2, max_row=2, values_only=True))[0]
+    row_dict = dict(zip(headers, row))
+
+    assert str(row_dict.get("numero_processo") or "") == "PROC-ABC", "numero_processo sobrescrito por ai_output_columns errado"
+    assert str(row_dict.get("descricao") or "") == "Fato preservado", "descricao sobrescrita por ai_output_columns errado"
+    assert str(row_dict.get("id_processo") or "") == "P-555", "id_processo sobrescrito"
+    assert str(row_dict.get("categoria") or "") == "Trabalhista", "categoria da IA ausente"
+    assert str(row_dict.get("resumo_do_andamento") or "") == "Processo ativo", "resumo_do_andamento da IA ausente"

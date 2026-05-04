@@ -355,6 +355,8 @@ class AutomationPromptsExecutionService:
             return "O prompt de teste enviado para execucao e invalido."
         if code == "execution_output_contract_invalid":
             return "Contrato de saida da automacao invalido."
+        if code == "execution_output_contract_required":
+            return "Automacoes tabulares agora exigem contrato de saida explicito com tipo, parser, formatador e schema."
         if code == "execution_output_schema_invalid":
             return "Schema de saida invalido para a automacao."
         if code == "execution_output_contract_incompatible":

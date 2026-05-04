@@ -1573,6 +1573,25 @@ class ExecutionService:
                     )
                 raise
 
+            if (
+                processing_plan.input_type in {ExecutionInputType.TABULAR, ExecutionInputType.TABULAR_WITH_CONTEXT}
+                and resolved_output_contract.source == "fallback_no_output_contract_config"
+            ):
+                self._log_execution_phase(
+                    phase=f"{failure_phase}.missing_contract",
+                    message="Tabular execution was blocked because the automation has no explicit output contract.",
+                    level="error",
+                    execution_id=str(execution_id),
+                    queue_job_id=str(queue_job_id),
+                    automation_id=str(shared_request.automation_id),
+                )
+                raise AppException(
+                    "Tabular automation requires explicit output contract. Configure output_type, result_parser, result_formatter and output_schema.",
+                    status_code=422,
+                    code="execution_output_contract_required",
+                    details={"automation_id": str(shared_request.automation_id)},
+                )
+
             processing_plan = self.strategy_engine.with_output_contract(
                 processing_plan=processing_plan,
                 output_contract=resolved_output_contract,
@@ -2525,6 +2544,15 @@ class ExecutionService:
             detected_placeholders=list(detected_prompt_placeholders),
             prompt_field_columns=list(output_schema.prompt_field_columns.keys()),
         )
+        self._log_execution_phase(
+            phase="execution.pipeline.prompt_strategy.resolved",
+            message="Tabular prompt strategy resolved for row-by-row hydration.",
+            execution_id=str(execution_id),
+            field_order=list(prompt_strategy.field_order),
+            placeholder_tokens=dict(prompt_strategy.placeholders),
+            field_aliases={k: list(v) for k, v in prompt_strategy.field_aliases.items()},
+            detected_prompt_placeholders=list(detected_prompt_placeholders),
+        )
         tabular_context = self.result_normalizer.build_tabular_context(
             input_headers=input_headers,
             output_schema=output_schema,
@@ -2596,6 +2624,18 @@ class ExecutionService:
                 prompt_field_resolution = prompt_strategy.resolve_prompt_fields(row_values=row_values)
                 prompt_fields = prompt_field_resolution.values
                 prompt_field_sources = prompt_field_resolution.sources
+                _unmapped_fields = [f for f in prompt_strategy.field_order if f not in prompt_field_resolution.sources]
+                if _unmapped_fields:
+                    self._log_execution_phase(
+                        phase="execution.pipeline.prompt_field_resolution.incomplete",
+                        message="Some prompt fields could not be resolved from row input — check input_column_mappings.",
+                        level="warning",
+                        execution_id=str(execution_id),
+                        row_index=row_index,
+                        available_headers=list(row_values.keys()),
+                        unmapped_fields=_unmapped_fields,
+                        resolved_sources=dict(prompt_field_resolution.sources),
+                    )
                 prompt_render = prompt_strategy.render_prompt_with_metadata(
                     official_prompt=official_prompt,
                     prompt_fields=prompt_fields,
@@ -2626,6 +2666,16 @@ class ExecutionService:
                     prompt_preview=self._prompt_preview(prompt_input),
                 )
             except Exception as prompt_exc:
+                self._log_execution_phase(
+                    phase="execution.pipeline.prompt_hydration.failed",
+                    message="Prompt hydration failed: unresolved placeholders in row.",
+                    level="warning",
+                    execution_id=str(execution_id),
+                    row_index=row_index,
+                    available_headers=list(row_values.keys()),
+                    resolved_sources=dict(prompt_field_sources),
+                    error=str(prompt_exc),
+                )
                 if debug_row is not None:
                     debug_row["canonical_fields"] = prompt_fields
                     debug_row["prompt_field_sources"] = prompt_field_sources
@@ -2790,7 +2840,9 @@ class ExecutionService:
                 row_stage_of_failure = "spreadsheet_projection"
                 if debug_row is not None:
                     debug_row["stage_of_failure"] = row_stage_of_failure
-                output_row.update(normalized_output)
+                _input_columns = set(output_schema.prompt_field_columns.values())
+                _safe_normalized = {k: v for k, v in normalized_output.items() if k not in _input_columns}
+                output_row.update(_safe_normalized)
                 if debug_row is not None:
                     if json_inspection is not None:
                         debug_row["json_payload_cleaned"] = json_inspection.get("cleaned_payload")

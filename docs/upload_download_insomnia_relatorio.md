@@ -1208,3 +1208,74 @@ Apos correcao do `.env`, e obrigatorio reiniciar o servico. O `kill -HUP` nao re
 | `DB_HOST=host.docker.internal` no Linux | Containers nao resolvem, API falha |
 | Variaveis duplicadas no `.env` | Valor errado pode prevalecer |
 | Reiniciar com `kill -HUP` | Nao recarrega `.env`, mantem config antiga |
+
+## Automacao: criacao automatica de API Token ao criar Integration Token (2026-04-30)
+
+### Contexto
+
+O sistema possui dois tipos de tokens:
+
+```text
+Integration Token  ->  autenticacao Django <-> FastAPI (prefixo ia_int_...)
+API Token          ->  token operacional que aparece no dropdown do Django
+```
+
+Antes dessa mudanca, o API Token precisava ser criado manualmente apos criar o Integration Token.
+
+### Problema
+
+Ao criar um Integration Token, o dropdown do Django nao era populado automaticamente.
+Era necessario fazer uma segunda chamada manual para `POST /api/v1/admin/tokens`.
+
+### Solucao implementada
+
+O handler `create_integration_token` em:
+
+```text
+app/api/routes/admin_tokens.py
+```
+
+Foi alterado para, apos criar o Integration Token, chamar automaticamente `ApiTokenService.create_token()` com o mesmo `name` e `created_by_user_id`.
+
+Comportamento apos a mudanca:
+
+```text
+POST /api/v1/admin/integration-tokens
+  -> cria Integration Token
+  -> cria API Token com mesmo nome automaticamente
+  -> retorna response do Integration Token (sem alteracao no contrato da rota)
+```
+
+### Fluxo de validacao
+
+```text
+1. POST /api/v1/admin/integration-tokens  -> cria ambos os tokens
+2. GET  /api/v1/admin/tokens              -> API Token aparece na listagem
+3. Dropdown do Django                     -> populado automaticamente
+```
+
+### Exemplo de teste via curl
+
+Criar Integration Token (cria API Token automaticamente):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/admin/integration-tokens \
+  -H "Authorization: Bearer <TOKEN_BOOTSTRAP>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "meu-token"}'
+```
+
+Validar que API Token foi criado:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/admin/tokens \
+  -H "Authorization: Bearer <TOKEN_BOOTSTRAP>"
+```
+
+### Status
+
+```text
+Implementado e validado localmente.
+Docker reiniciado apos a mudanca.
+Commit enviado para o repositorio do projeto.
+```
