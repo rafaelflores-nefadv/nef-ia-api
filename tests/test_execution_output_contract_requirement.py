@@ -30,25 +30,19 @@ def test_tabular_execution_requires_explicit_output_contract() -> None:
         ]
     )
 
-    contract = service._resolve_execution_output_contract(
-        automation_id=uuid4(),
-        automation_slug="automacao-sem-contrato",
-        processing_plan=processing_plan,
-        runtime_output_type=None,
-        runtime_result_parser=None,
-        runtime_result_formatter=None,
-        runtime_output_schema=None,
-    )
-
-    assert contract.source == "fallback_no_output_contract_config"
-
-    if (
-        processing_plan.input_type in {ExecutionInputType.TABULAR, ExecutionInputType.TABULAR_WITH_CONTEXT}
-        and contract.source == "fallback_no_output_contract_config"
-    ):
-        exc = AppException(
-            "Tabular automation requires explicit output contract. Configure output_type, result_parser, result_formatter and output_schema.",
-            status_code=422,
-            code="execution_output_contract_required",
+    try:
+        service._resolve_execution_output_contract(
+            automation_id=uuid4(),
+            automation_slug="automacao-sem-contrato",
+            processing_plan=processing_plan,
+            prompt_template=None,
+            runtime_output_type=None,
+            runtime_result_parser=None,
+            runtime_result_formatter=None,
+            runtime_output_schema=None,
         )
+    except AppException as exc:
         assert exc.payload.code == "execution_output_contract_required"
+        return
+
+    raise AssertionError("Expected execution_output_contract_required for tabular execution without explicit contract.")

@@ -150,8 +150,10 @@ class TabularPromptStrategy:
                 if not resolved_value:
                     unresolved_placeholders.append(placeholder)
                     continue
-                pattern = re.compile(r"\{\{\s*" + re.escape(placeholder) + r"\s*\}\}", re.IGNORECASE)
-                rendered = pattern.sub(resolved_value, rendered)
+                double_brace_pattern = re.compile(r"\{\{\s*" + re.escape(placeholder) + r"\s*\}\}", re.IGNORECASE)
+                single_brace_pattern = re.compile(r"(?<!\{)\{\s*" + re.escape(placeholder) + r"\s*\}(?!\})", re.IGNORECASE)
+                rendered = double_brace_pattern.sub(resolved_value, rendered)
+                rendered = single_brace_pattern.sub(resolved_value, rendered)
                 resolved_placeholder_values[placeholder] = resolved_value
                 resolved_placeholders.append(placeholder)
 
@@ -214,8 +216,15 @@ class TabularPromptStrategy:
 
     @staticmethod
     def _detect_placeholders(prompt_text: str) -> tuple[str, ...]:
-        tokens = re.findall(r"\{\{\s*([^{}]+?)\s*\}\}", str(prompt_text or ""))
-        ordered = [str(token).strip() for token in tokens if str(token).strip()]
+        tokens = re.findall(
+            r"(?<!\{)\{([a-zA-Z0-9_\- ]+?)\}(?!\})|\{\{\s*([^{}]+?)\s*\}\}",
+            str(prompt_text or ""),
+        )
+        ordered: list[str] = []
+        for single_brace, double_brace in tokens:
+            token = str(single_brace or double_brace or "").strip()
+            if token:
+                ordered.append(token)
         return tuple(dict.fromkeys(ordered))
 
 

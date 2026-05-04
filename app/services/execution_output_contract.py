@@ -26,6 +26,7 @@ class ExecutionOutputContractResolver:
         input_type: ExecutionInputType,
         automation_id: UUID | None = None,
         automation_slug: str | None = None,
+        prompt_template: str | None = None,
         runtime_output_type: str | None = None,
         runtime_result_parser: str | None = None,
         runtime_result_formatter: str | None = None,
@@ -42,6 +43,22 @@ class ExecutionOutputContractResolver:
             )
         )
         if not has_explicit_contract:
+            if input_type in {ExecutionInputType.TABULAR, ExecutionInputType.TABULAR_WITH_CONTEXT}:
+                raise AppException(
+                    "Output contract is required for tabular automation execution.",
+                    status_code=422,
+                    code="execution_output_contract_required",
+                    details={
+                        "automation_id": str(automation_id) if automation_id else None,
+                        "automation_slug": str(automation_slug or "").strip() or None,
+                        "required_fields": [
+                            "output_type",
+                            "result_parser",
+                            "result_formatter",
+                            "output_schema",
+                        ],
+                    },
+                )
             return ExecutionOutputContract(
                 output_type=default_contract.output_type,
                 parser_strategy=default_contract.parser_strategy,
@@ -71,9 +88,32 @@ class ExecutionOutputContractResolver:
             strict=runtime_output_schema is not None,
         )
 
+        response_json_schema = self._extract_response_json_schema(schema_overrides)
+
+        if input_type in {ExecutionInputType.TABULAR, ExecutionInputType.TABULAR_WITH_CONTEXT}:
+            if not self._has_tabular_schema_definition(
+                overrides=schema_overrides,
+                response_json_schema=response_json_schema,
+            ):
+                raise AppException(
+                    "Output schema must include tabular columns or a JSON Schema with properties for tabular execution.",
+                    status_code=422,
+                    code="missing_columns",
+                    details={
+                        "automation_id": str(automation_id) if automation_id else None,
+                        "automation_slug": str(automation_slug or "").strip() or None,
+                        "hint": "Provide 'columns' in the output_schema payload or send a JSON Schema object with 'required'/'properties'.",
+                    },
+                )
+
         output_schema = self._merge_schema(
-            default_schema=default_contract.output_schema,
+            default_schema=self._default_schema_for_merge(
+                input_type=input_type,
+                explicit_contract=has_explicit_contract,
+            ),
             overrides=schema_overrides,
+            response_json_schema=response_json_schema,
+            prompt_template=prompt_template,
             strict=runtime_output_schema is not None,
         )
         resolved_contract = ExecutionOutputContract(
@@ -98,6 +138,34 @@ class ExecutionOutputContractResolver:
         if input_type in {ExecutionInputType.TABULAR, ExecutionInputType.TABULAR_WITH_CONTEXT}:
             return build_legacy_tabular_output_contract()
         return build_default_text_output_contract()
+
+    @staticmethod
+    def _default_schema_for_merge(
+        *,
+        input_type: ExecutionInputType,
+        explicit_contract: bool,
+    ) -> ExecutionOutputSchema:
+        if input_type not in {ExecutionInputType.TABULAR, ExecutionInputType.TABULAR_WITH_CONTEXT}:
+            return build_default_text_output_contract().output_schema
+        if not explicit_contract:
+            return build_legacy_tabular_output_contract().output_schema
+        legacy_schema = build_legacy_tabular_output_contract().output_schema
+        return ExecutionOutputSchema(
+            columns=(),
+            structured_output_aliases={},
+            prompt_field_columns={},
+            prompt_field_aliases={},
+            prompt_placeholders={},
+            ai_output_columns=(),
+            row_origin_column=None,
+            status_column=None,
+            error_column=None,
+            include_input_columns=False,
+            input_collision_prefix=legacy_schema.input_collision_prefix,
+            worksheet_name=legacy_schema.worksheet_name,
+            file_name_template=legacy_schema.file_name_template,
+            mime_type=legacy_schema.mime_type,
+        )
 
     @staticmethod
     def _parse_output_schema_payload(
@@ -250,6 +318,8 @@ class ExecutionOutputContractResolver:
         *,
         default_schema: ExecutionOutputSchema,
         overrides: dict[str, Any],
+        response_json_schema: dict[str, Any] | None,
+        prompt_template: str | None,
         strict: bool,
     ) -> ExecutionOutputSchema:
         has_explicit_columns = "columns" in overrides or "output_columns" in overrides
@@ -258,21 +328,47 @@ class ExecutionOutputContractResolver:
             if "columns" in overrides
             else overrides.get("output_columns")
         )
+        inferred_columns = self._infer_columns_from_json_schema(response_json_schema)
         columns = self._coerce_columns(
             raw_columns,
-            fallback=default_schema.columns,
+            fallback=inferred_columns or default_schema.columns,
             strict=strict and has_explicit_columns,
         )
+        resolved_columns = tuple(columns)
         structured_output_aliases = self._coerce_structured_aliases(
             overrides.get("structured_output_aliases"),
             fallback=default_schema.structured_output_aliases,
             strict=strict and "structured_output_aliases" in overrides,
         )
+        prompt_placeholders = self._coerce_prompt_placeholders(
+            overrides.get("prompt_placeholders"),
+            fallback=default_schema.prompt_placeholders,
+            strict=strict and "prompt_placeholders" in overrides,
+        )
+        detected_prompt_tokens = self._detect_prompt_placeholders(prompt_template)
+        inferred_prompt_fields = self._infer_prompt_field_columns(
+            columns=resolved_columns,
+            explicit_placeholders=prompt_placeholders,
+            detected_prompt_tokens=detected_prompt_tokens,
+        )
+        prompt_field_columns = self._coerce_prompt_field_columns(
+            overrides.get("prompt_field_columns"),
+            fallback=inferred_prompt_fields or default_schema.prompt_field_columns,
+            strict=strict and "prompt_field_columns" in overrides,
+        )
+
         ai_output_columns = self._coerce_columns(
             overrides.get("ai_output_columns"),
             fallback=default_schema.ai_output_columns,
             strict=strict and "ai_output_columns" in overrides,
         )
+        if "ai_output_columns" not in overrides:
+            inferred_ai_output_columns = tuple(
+                column
+                for column in resolved_columns
+                if column not in set(prompt_field_columns.values())
+            )
+            ai_output_columns = inferred_ai_output_columns or ai_output_columns
         include_input_columns = self._coerce_bool(
             value=overrides.get("include_input_columns"),
             fallback=default_schema.include_input_columns,
@@ -311,44 +407,36 @@ class ExecutionOutputContractResolver:
             fallback=row_origin_fallback,
             strict=strict,
         )
-
-        prompt_field_columns = self._coerce_prompt_field_columns(
-            overrides.get("prompt_field_columns"),
-            fallback=default_schema.prompt_field_columns,
-            strict=strict and "prompt_field_columns" in overrides,
-        )
-        input_column_mappings = self._coerce_input_column_mappings(
-            overrides.get("input_column_mappings"),
-            prompt_field_columns=prompt_field_columns,
-            columns=columns,
-            ai_output_columns=ai_output_columns,
-            strict=strict and "input_column_mappings" in overrides,
-        )
-        if strict and has_explicit_columns and "prompt_field_columns" not in overrides:
+        if strict and has_explicit_columns and "prompt_field_columns" not in overrides and not prompt_field_columns:
             reserved_columns = {
                 column
                 for column in (row_origin_column, status_column, error_column)
                 if column
             }
-            inferred_input_columns = [
-                column
-                for column in columns
-                if column not in set(ai_output_columns) and column not in reserved_columns
-            ]
-            prompt_field_columns = {column: column for column in inferred_input_columns}
-            if input_column_mappings:
-                input_column_mappings = self._coerce_input_column_mappings(
-                    overrides.get("input_column_mappings"),
-                    prompt_field_columns=prompt_field_columns,
-                    columns=columns,
-                    ai_output_columns=ai_output_columns,
-                    strict=strict and "input_column_mappings" in overrides,
-                )
+            prompt_field_columns = {
+                column: column
+                for column in resolved_columns
+                if column not in reserved_columns and column not in set(ai_output_columns)
+            }
+        input_column_mappings = self._coerce_input_column_mappings(
+            overrides.get("input_column_mappings"),
+            prompt_field_columns=prompt_field_columns,
+            columns=resolved_columns,
+            ai_output_columns=ai_output_columns,
+            strict=strict and "input_column_mappings" in overrides,
+        )
 
         prompt_field_aliases = self._coerce_structured_aliases(
             overrides.get("prompt_field_aliases"),
             fallback=default_schema.prompt_field_aliases,
             strict=strict and "prompt_field_aliases" in overrides,
+        )
+        inferred_input_aliases = self._build_default_input_aliases(
+            prompt_field_columns=prompt_field_columns,
+        )
+        prompt_field_aliases = self._merge_alias_maps(
+            base=inferred_input_aliases,
+            overrides=prompt_field_aliases,
         )
         if input_column_mappings:
             prompt_field_aliases = self._merge_alias_maps(
@@ -357,16 +445,25 @@ class ExecutionOutputContractResolver:
             )
             for field_name in input_column_mappings:
                 prompt_field_columns.setdefault(field_name, field_name)
-        prompt_placeholders = self._coerce_prompt_placeholders(
-            overrides.get("prompt_placeholders"),
-            fallback=default_schema.prompt_placeholders,
-            strict=strict and "prompt_placeholders" in overrides,
-        )
+        if "prompt_placeholders" not in overrides:
+            prompt_placeholders = self._infer_prompt_placeholders(
+                existing_placeholders=prompt_placeholders,
+                prompt_field_columns=prompt_field_columns,
+                detected_prompt_tokens=detected_prompt_tokens,
+            )
         if strict and "prompt_field_columns" not in overrides and prompt_placeholders:
             for field_name in prompt_placeholders:
                 prompt_field_columns.setdefault(field_name, field_name)
+        if "structured_output_aliases" not in overrides:
+            structured_output_aliases = self._merge_alias_maps(
+                base=self._build_default_structured_output_aliases(
+                    columns=resolved_columns,
+                    ai_output_columns=ai_output_columns,
+                ),
+                overrides=structured_output_aliases,
+            )
         merged_schema = ExecutionOutputSchema(
-            columns=columns,
+            columns=resolved_columns,
             structured_output_aliases=structured_output_aliases,
             prompt_field_columns=prompt_field_columns,
             prompt_field_aliases=prompt_field_aliases,
@@ -403,6 +500,173 @@ class ExecutionOutputContractResolver:
         )
         self._validate_schema_structure(schema=merged_schema)
         return merged_schema
+
+    @staticmethod
+    def _has_tabular_schema_definition(
+        *,
+        overrides: dict[str, Any],
+        response_json_schema: dict[str, Any] | None,
+    ) -> bool:
+        if "columns" in overrides or "output_columns" in overrides:
+            return True
+        return bool(response_json_schema and response_json_schema.get("properties"))
+
+    @staticmethod
+    def _extract_response_json_schema(overrides: dict[str, Any]) -> dict[str, Any] | None:
+        nested = overrides.get("response_json_schema")
+        if isinstance(nested, dict) and nested.get("type") == "object":
+            return nested
+        if isinstance(overrides.get("properties"), dict):
+            return overrides
+        return None
+
+    @staticmethod
+    def _infer_columns_from_json_schema(response_json_schema: dict[str, Any] | None) -> tuple[str, ...]:
+        if not isinstance(response_json_schema, dict):
+            return ()
+        required = response_json_schema.get("required")
+        if isinstance(required, list):
+            columns = tuple(str(item).strip() for item in required if str(item).strip())
+            if columns:
+                return columns
+        properties = response_json_schema.get("properties")
+        if isinstance(properties, dict):
+            columns = tuple(str(item).strip() for item in properties.keys() if str(item).strip())
+            if columns:
+                return columns
+        return ()
+
+    @classmethod
+    def _detect_prompt_placeholders(cls, prompt_template: str | None) -> tuple[str, ...]:
+        raw_prompt = str(prompt_template or "")
+        if not raw_prompt:
+            return ()
+        tokens = re.findall(r"(?<!\{)\{([a-zA-Z0-9_\- ]+?)\}(?!\})|\{\{\s*([^{}]+?)\s*\}\}", raw_prompt)
+        ordered: list[str] = []
+        for single_brace, double_brace in tokens:
+            token = str(single_brace or double_brace or "").strip()
+            if token:
+                ordered.append(token)
+        return tuple(dict.fromkeys(ordered))
+
+    @classmethod
+    def _infer_prompt_field_columns(
+        cls,
+        *,
+        columns: tuple[str, ...],
+        explicit_placeholders: dict[str, str],
+        detected_prompt_tokens: tuple[str, ...],
+    ) -> dict[str, str]:
+        inferred: dict[str, str] = {}
+        if not detected_prompt_tokens:
+            return inferred
+        for token in detected_prompt_tokens:
+            field_name = cls._resolve_prompt_token_field(
+                token,
+                columns=columns,
+                explicit_placeholders=explicit_placeholders,
+            )
+            if field_name is not None:
+                inferred[field_name] = field_name
+        return inferred
+
+    @classmethod
+    def _infer_prompt_placeholders(
+        cls,
+        *,
+        existing_placeholders: dict[str, str],
+        prompt_field_columns: dict[str, str],
+        detected_prompt_tokens: tuple[str, ...],
+    ) -> dict[str, str]:
+        inferred = dict(existing_placeholders)
+        detected_index = {
+            cls._normalize_mapping_identifier(token): token
+            for token in detected_prompt_tokens
+            if cls._normalize_mapping_identifier(token)
+        }
+        for field_name in prompt_field_columns:
+            token = detected_index.get(cls._normalize_mapping_identifier(field_name))
+            inferred[field_name] = str(token or field_name.upper()).strip()
+        return inferred
+
+    @classmethod
+    def _resolve_prompt_token_field(
+        cls,
+        token: str,
+        *,
+        columns: tuple[str, ...],
+        explicit_placeholders: dict[str, str],
+    ) -> str | None:
+        normalized_token = cls._normalize_mapping_identifier(token)
+        if not normalized_token:
+            return None
+        for field_name, placeholder in explicit_placeholders.items():
+            if cls._normalize_mapping_identifier(placeholder) == normalized_token:
+                return field_name
+        for column in columns:
+            if cls._normalize_mapping_identifier(column) == normalized_token:
+                return column
+        return None
+
+    @classmethod
+    def _build_default_structured_output_aliases(
+        cls,
+        *,
+        columns: tuple[str, ...],
+        ai_output_columns: tuple[str, ...],
+    ) -> dict[str, tuple[str, ...]]:
+        aliases: dict[str, tuple[str, ...]] = {}
+        target_columns = ai_output_columns or columns
+        for column in target_columns:
+            variants = [
+                column,
+                str(column).replace("_", " "),
+            ]
+            aliases[column] = tuple(dict.fromkeys(alias for alias in variants if str(alias).strip()))
+        return aliases
+
+    @classmethod
+    def _build_default_input_aliases(
+        cls,
+        *,
+        prompt_field_columns: dict[str, str],
+    ) -> dict[str, tuple[str, ...]]:
+        aliases: dict[str, tuple[str, ...]] = {}
+        for field_name, column_name in prompt_field_columns.items():
+            variants = [
+                field_name,
+                column_name,
+                str(field_name).replace("_", " "),
+                cls._titleize_identifier(field_name),
+                cls._titleize_identifier(column_name),
+                *cls._common_input_aliases(field_name),
+            ]
+            deduped = tuple(dict.fromkeys(alias for alias in variants if str(alias).strip()))
+            if deduped:
+                aliases[field_name] = deduped
+        return aliases
+
+    @staticmethod
+    def _titleize_identifier(value: Any) -> str:
+        raw = str(value or "").strip().replace("_", " ")
+        if not raw:
+            return ""
+        return " ".join(part.capitalize() for part in raw.split())
+
+    @classmethod
+    def _common_input_aliases(cls, field_name: str) -> tuple[str, ...]:
+        normalized = cls._normalize_mapping_identifier(field_name)
+        common_aliases = {
+            "numero_processo": ("Numero Processo", "Número Processo"),
+            "id_processo": ("ID Processo",),
+            "descricao": ("Conteudo", "Conteúdo", "Descricao", "Descrição"),
+            "celula": ("Celula", "Célula"),
+            "valor_da_causa": ("Valor da Causa",),
+            "tipo_de_acao": ("Tipo de Acao", "Tipo de Ação"),
+            "marcacao": ("Marcacao", "Marcação", "Prazo Agendado"),
+            "responsavel": ("Responsavel Publicacao", "Responsável Publicação"),
+        }
+        return common_aliases.get(normalized, ())
 
     @staticmethod
     def _coerce_columns(
@@ -798,6 +1062,26 @@ class ExecutionOutputContractResolver:
 
     @staticmethod
     def _validate_schema_structure(*, schema: ExecutionOutputSchema) -> None:
+        is_text_like_schema = not any(
+            (
+                schema.columns,
+                schema.structured_output_aliases,
+                schema.prompt_field_columns,
+                schema.prompt_field_aliases,
+                schema.prompt_placeholders,
+                schema.ai_output_columns,
+                schema.status_column,
+                schema.error_column,
+            )
+        )
+        if is_text_like_schema:
+            return
+        if not schema.columns:
+            raise AppException(
+                "Output schema is invalid: columns cannot be empty.",
+                status_code=422,
+                code="execution_output_schema_invalid",
+            )
         duplicates = {
             column
             for column in schema.columns

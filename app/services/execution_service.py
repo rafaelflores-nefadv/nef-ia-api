@@ -1538,12 +1538,25 @@ class ExecutionService:
                     runtime_output_schema,
                 )
             )
+            self._log_execution_phase(
+                phase=f"{failure_phase}.schema_received",
+                message="Runtime output schema payload received for execution.",
+                level="debug",
+                execution_id=str(execution_id),
+                queue_job_id=str(queue_job_id),
+                automation_id=str(shared_request.automation_id),
+                output_type=runtime_output_type,
+                parser_strategy=runtime_result_parser,
+                formatter_strategy=runtime_result_formatter,
+                output_schema_payload=runtime_output_schema,
+            )
 
             try:
                 resolved_output_contract = self._resolve_execution_output_contract(
                     automation_id=shared_request.automation_id,
                     automation_slug=getattr(resolved_runtime, "automation_slug", None),
                     processing_plan=processing_plan,
+                    prompt_template=getattr(resolved_runtime, "prompt_text", None),
                     runtime_output_type=runtime_output_type,
                     runtime_result_parser=runtime_result_parser,
                     runtime_result_formatter=runtime_result_formatter,
@@ -1916,6 +1929,7 @@ class ExecutionService:
         automation_id: UUID | None,
         automation_slug: str | None,
         processing_plan: EngineExecutionPlan,
+        prompt_template: str | None,
         runtime_output_type: str | None,
         runtime_result_parser: str | None,
         runtime_result_formatter: str | None,
@@ -1925,6 +1939,7 @@ class ExecutionService:
             input_type=processing_plan.input_type,
             automation_id=automation_id,
             automation_slug=automation_slug,
+            prompt_template=prompt_template,
             runtime_output_type=runtime_output_type,
             runtime_result_parser=runtime_result_parser,
             runtime_result_formatter=runtime_result_formatter,
@@ -2534,6 +2549,20 @@ class ExecutionService:
         output_schema = output_contract.output_schema
         prompt_strategy = self.tabular_prompt_strategy_resolver.resolve(output_schema=output_schema)
         detected_prompt_placeholders = prompt_strategy.detect_placeholders(str(official_prompt or ""))
+        self._log_execution_phase(
+            phase="execution.pipeline.output_schema.resolved",
+            message="Resolved tabular output schema for execution.",
+            execution_id=str(execution_id),
+            columns=list(output_schema.columns),
+            ai_output_columns=list(output_schema.ai_output_columns),
+            prompt_field_columns=dict(output_schema.prompt_field_columns),
+            prompt_placeholders=dict(output_schema.prompt_placeholders),
+            structured_output_aliases={k: list(v) for k, v in output_schema.structured_output_aliases.items()},
+            include_input_columns=output_schema.include_input_columns,
+            row_origin_column=output_schema.row_origin_column,
+            status_column=output_schema.status_column,
+            error_column=output_schema.error_column,
+        )
         row_retry_count = max(int(retry_count or 0), 0)
         self._log_execution_phase(
             phase="execution.pipeline.prompt_template",
@@ -2556,6 +2585,14 @@ class ExecutionService:
         tabular_context = self.result_normalizer.build_tabular_context(
             input_headers=input_headers,
             output_schema=output_schema,
+        )
+        self._log_execution_phase(
+            phase="execution.pipeline.input_headers.detected",
+            message="Detected input headers and prepared tabular context.",
+            execution_id=str(execution_id),
+            input_headers=list(input_headers),
+            mapped_input_headers=dict(tabular_context.original_header_map),
+            prompt_field_aliases={k: list(v) for k, v in output_schema.prompt_field_aliases.items()},
         )
 
         for row in input_rows:
@@ -2840,9 +2877,11 @@ class ExecutionService:
                 row_stage_of_failure = "spreadsheet_projection"
                 if debug_row is not None:
                     debug_row["stage_of_failure"] = row_stage_of_failure
-                _input_columns = set(output_schema.prompt_field_columns.values())
-                _safe_normalized = {k: v for k, v in normalized_output.items() if k not in _input_columns}
-                output_row.update(_safe_normalized)
+                output_row = self.result_normalizer.project_tabular_row_output(
+                    output_row=output_row,
+                    normalized_output=normalized_output,
+                    output_schema=output_schema,
+                )
                 if debug_row is not None:
                     if json_inspection is not None:
                         debug_row["json_payload_cleaned"] = json_inspection.get("cleaned_payload")
@@ -2853,6 +2892,17 @@ class ExecutionService:
                     debug_row["parsed_output"] = parsed_output
                     debug_row["normalized_output"] = normalized_output
                     debug_row["stage_of_failure"] = ""
+                self._log_execution_phase(
+                    phase="execution.pipeline.output_projection",
+                    message="Projected provider output into the final tabular row.",
+                    level="debug",
+                    execution_id=str(execution_id),
+                    row_index=row_index,
+                    raw_model_output=model_output_text,
+                    parsed_output=parsed_output,
+                    normalized_output=normalized_output,
+                    output_row=dict(output_row),
+                )
                 if output_schema.status_column:
                     output_row[output_schema.status_column] = "ok"
                 if output_schema.error_column:

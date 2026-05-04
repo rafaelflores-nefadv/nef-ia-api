@@ -90,6 +90,7 @@ class FakeExecutionService:
         automation_id=None,
         automation_slug=None,
         processing_plan=None,
+        prompt_template=None,
         runtime_output_type=None,
         runtime_result_parser=None,
         runtime_result_formatter=None,

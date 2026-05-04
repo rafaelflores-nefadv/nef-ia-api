@@ -271,6 +271,7 @@ class PromptTestEngineService:
                 automation_id=None,
                 automation_slug=None,
                 processing_plan=processing_plan,
+                prompt_template=prompt_text,
                 runtime_output_type=str(output_type or "").strip() or None,
                 runtime_result_parser=str(result_parser or "").strip() or None,
                 runtime_result_formatter=str(result_formatter or "").strip() or None,

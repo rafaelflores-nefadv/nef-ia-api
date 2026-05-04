@@ -4,6 +4,7 @@ from decimal import Decimal
 from time import sleep
 from uuid import uuid4
 
+from app.core.exceptions import AppException
 from app.services.prompt_test_async_execution_service import (
     PromptTestAsyncExecutionService,
     PromptTestAsyncStartPayload,
@@ -160,3 +161,60 @@ def test_prompt_test_async_service_failed_status_keeps_real_progress(monkeypatch
     assert terminal_snapshot.progress_percent < 100
     assert terminal_snapshot.total_rows == 20
     assert terminal_snapshot.current_row == 9
+
+
+def test_prompt_test_async_service_exposes_app_exception_code_in_error_message(monkeypatch) -> None:
+    class FakePromptTestEngineService:
+        def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            _ = kwargs
+
+        def execute(self, **kwargs):  # type: ignore[no-untyped-def]
+            callback = kwargs.get("progress_callback")
+            if callback is not None:
+                callback(
+                    PromptTestProgressUpdate(
+                        phase="preparing_input",
+                        progress_percent=12,
+                        status_message="Montando plano.",
+                    )
+                )
+            raise AppException(
+                "Output schema is invalid: malformed JSON payload.",
+                status_code=422,
+                code="execution_output_schema_invalid",
+            )
+
+    monkeypatch.setattr(
+        "app.services.prompt_test_async_execution_service.PromptTestEngineService",
+        FakePromptTestEngineService,
+    )
+
+    service = PromptTestAsyncExecutionService()
+    start_snapshot = service.start_execution(
+        payload=PromptTestAsyncStartPayload(
+            provider_id=str(uuid4()),
+            model_id=str(uuid4()),
+            credential_id=None,
+            prompt_override="prompt",
+            output_type="spreadsheet_output",
+            result_parser="tabular_structured",
+            result_formatter="spreadsheet_tabular",
+            output_schema="{bad-json",
+            upload_file_name="entrada.csv",
+            upload_content=b"conteudo",
+            upload_content_type="text/csv",
+        )
+    )
+
+    terminal_snapshot = None
+    for _ in range(50):
+        snapshot = service.get_snapshot(execution_id=start_snapshot.execution_id)
+        assert snapshot is not None
+        if snapshot.is_terminal:
+            terminal_snapshot = snapshot
+            break
+        sleep(0.02)
+
+    assert terminal_snapshot is not None
+    assert terminal_snapshot.status == "failed"
+    assert "[execution_output_schema_invalid]" in terminal_snapshot.error_message

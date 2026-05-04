@@ -13,11 +13,13 @@ from starlette.datastructures import Headers
 
 from app.db.session import SessionLocal
 from app.db.shared_session import SharedSessionLocal
+from app.core.exceptions import AppException
 from app.services.prompt_test_engine_service import (
     PromptTestEngineResult,
     PromptTestEngineService,
     PromptTestProgressUpdate,
 )
+from app.services.providers.http_client_utils import summarize_provider_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -174,14 +176,33 @@ class PromptTestAsyncExecutionService:
             )
             self._mark_completed(execution_id=execution_id, result=result)
         except Exception as exc:
+            error_message = self._summarize_async_error(exc)
             logger.exception(
                 "Prompt-test async execution failed.",
-                extra={"execution_id": str(execution_id), "phase": "prompt_test.execution.failed"},
+                extra={
+                    "execution_id": str(execution_id),
+                    "phase": "prompt_test.execution.failed",
+                    "provider_id": str(payload.provider_id or "").strip() or None,
+                    "model_id": str(payload.model_id or "").strip() or None,
+                    "credential_id": str(payload.credential_id or "").strip() or None,
+                    "output_type": str(payload.output_type or "").strip() or None,
+                    "result_parser": str(payload.result_parser or "").strip() or None,
+                    "result_formatter": str(payload.result_formatter or "").strip() or None,
+                    "output_schema_payload_type": type(payload.output_schema).__name__
+                    if payload.output_schema is not None
+                    else None,
+                    "upload_file_name": str(payload.upload_file_name or "").strip() or None,
+                    "upload_content_type": str(payload.upload_content_type or "").strip() or None,
+                    "upload_size_bytes": len(payload.upload_content or b""),
+                    "debug_enabled": bool(payload.debug_enabled),
+                    "app_error_code": exc.payload.code if isinstance(exc, AppException) else None,
+                    "error_message": error_message,
+                },
                 exc_info=exc,
             )
             self._mark_failed(
                 execution_id=execution_id,
-                error_message=str(exc) or "Falha inesperada na execucao de teste.",
+                error_message=error_message,
             )
         finally:
             operational_session.close()
@@ -310,6 +331,22 @@ class PromptTestAsyncExecutionService:
                     "error_message": state.error_message,
                 },
             )
+
+    @staticmethod
+    def _summarize_async_error(exc: Exception) -> str:
+        if isinstance(exc, AppException):
+            code = str(exc.payload.code or "").strip()
+            details = exc.payload.details if isinstance(exc.payload.details, dict) else {}
+            if code in {"provider_http_error", "provider_timeout", "provider_network_error"} and details:
+                provider_message = summarize_provider_error_message(details=details)
+                if code:
+                    return f"[{code}] {provider_message}".strip()
+                return provider_message
+            message = str(exc.payload.message or "").strip() or str(exc).strip()
+            if code:
+                return f"[{code}] {message}".strip()
+            return message or "Falha inesperada na execucao de teste."
+        return str(exc).strip() or "Falha inesperada na execucao de teste."
 
     @staticmethod
     def _snapshot_from_state(state: _PromptTestAsyncExecutionState) -> PromptTestAsyncExecutionSnapshot:

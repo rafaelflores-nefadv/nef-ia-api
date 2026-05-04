@@ -304,6 +304,21 @@ class FakeProviderClient:
                     "provider_error_classification": "provider_unsupported_parameter",
                 },
             )
+        if mode == "rate_limit":
+            raise AppException(
+                "Provider HTTP 429: Rate limit exceeded.",
+                status_code=502,
+                code="provider_http_error",
+                details={
+                    "status_code": 429,
+                    "http_status_code": 429,
+                    "provider_error_message": "Rate limit exceeded.",
+                    "provider_error_type": "rate_limit_error",
+                    "provider_error_code": "rate_limit_exceeded",
+                    "provider_error_classification": "provider_rate_limit",
+                    "response_headers_relevantes": {"retry-after": "2"},
+                },
+            )
         if mode == "logic_error":
             raise AppException("Invalid input.", status_code=422, code="invalid_input")
         return ProviderExecutionResult(
@@ -1181,6 +1196,7 @@ def test_tabular_rejects_legacy_xls_extension(monkeypatch) -> None:
     request_file = _build_request_file(analysis_request_id, file_name="input.xls")
     service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
     service.provider_service = FakeProviderService(FakeProviderClient(modes=["success"]))  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(**_legacy_tabular_runtime_kwargs())  # type: ignore[assignment]
     monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: b"legacy")
 
     execution, queue_job = _seed_execution_and_job(
@@ -2343,6 +2359,7 @@ def test_execution_rows_hard_limit_aborts_tabular_execution(monkeypatch) -> None
     service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
     provider_service = FakeProviderService(FakeProviderClient(modes=["success", "success", "success"]))
     service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(**_legacy_tabular_runtime_kwargs())  # type: ignore[assignment]
 
     csv_payload = "conteudo\nlinha 1\nlinha 2\nlinha 3\n".encode("utf-8")
     monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
@@ -2369,6 +2386,7 @@ def test_provider_calls_hard_limit_aborts_tabular_execution(monkeypatch) -> None
     service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
     provider_service = FakeProviderService(FakeProviderClient(modes=["success", "success", "success"]))
     service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(**_legacy_tabular_runtime_kwargs())  # type: ignore[assignment]
 
     csv_payload = "conteudo\nlinha 1\nlinha 2\nlinha 3\n".encode("utf-8")
     monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
@@ -2395,6 +2413,7 @@ def test_tabular_row_size_hard_limit_aborts_execution(monkeypatch) -> None:
     service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
     provider_service = FakeProviderService(FakeProviderClient(modes=["success"]))
     service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(**_legacy_tabular_runtime_kwargs())  # type: ignore[assignment]
 
     csv_payload = "conteudo,campo\nlinha muito grande para o limite hard,valor adicional\n".encode("utf-8")
     monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
@@ -2527,6 +2546,7 @@ def test_profile_rows_limit_can_abort_before_hard_limit(monkeypatch) -> None:
     service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
     provider_service = FakeProviderService(FakeProviderClient(modes=["success", "success", "success"]))
     service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(**_legacy_tabular_runtime_kwargs())  # type: ignore[assignment]
 
     csv_payload = "conteudo\nlinha 1\nlinha 2\nlinha 3\n".encode("utf-8")
     monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
@@ -2556,6 +2576,7 @@ def test_automation_override_profile_allows_heavier_tabular_workload(monkeypatch
     service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
     provider_service = FakeProviderService(FakeProviderClient(modes=["success", "success", "success"]))
     service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(**_legacy_tabular_runtime_kwargs())  # type: ignore[assignment]
 
     csv_payload = "conteudo\nlinha 1\nlinha 2\nlinha 3\n".encode("utf-8")
     monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
@@ -2961,3 +2982,270 @@ def test_tabular_campos_entrada_preservados_quando_ai_output_columns_incorreto(m
     assert str(row_dict.get("id_processo") or "") == "P-555", "id_processo sobrescrito"
     assert str(row_dict.get("categoria") or "") == "Trabalhista", "categoria da IA ausente"
     assert str(row_dict.get("resumo_do_andamento") or "") == "Processo ativo", "resumo_do_andamento da IA ausente"
+
+
+_PURE_JSON_SCHEMA_15_COLUNAS = {
+    "type": "object",
+    "required": [
+        "numero_processo",
+        "id_processo",
+        "descricao",
+        "celula",
+        "valor_da_causa",
+        "tipo_de_acao",
+        "marcacao",
+        "responsavel",
+        "categoria",
+        "pensamento",
+        "reclassificacao",
+        "prazo",
+        "compromissoAnalista",
+        "necessitaRevisao",
+        "resumo_do_andamento",
+    ],
+    "properties": {
+        "numero_processo": {"type": "string"},
+        "id_processo": {"type": "string"},
+        "descricao": {"type": "string"},
+        "celula": {"type": "string"},
+        "valor_da_causa": {"type": "string"},
+        "tipo_de_acao": {"type": "string"},
+        "marcacao": {"type": "string"},
+        "responsavel": {"type": "string"},
+        "categoria": {"type": "string"},
+        "pensamento": {"type": "string"},
+        "reclassificacao": {"type": "string"},
+        "prazo": {"type": "string"},
+        "compromissoAnalista": {"type": "string"},
+        "necessitaRevisao": {"type": "string"},
+        "resumo_do_andamento": {"type": "string"},
+    },
+    "additionalProperties": False,
+}
+
+
+def test_tabular_pure_json_schema_required_infers_columns_and_exact_output(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    service.provider_service = FakeProviderService(  # type: ignore[assignment]
+        FakeProviderClient(
+            modes=["success"],
+            output_text=(
+                "categoria: Trabalhista\n"
+                "pensamento: Analise pronta\n"
+                "reclassificacao: Analise estrategica\n"
+                "prazo: 15\n"
+                "compromissoAnalista: Revisar\n"
+                "necessitaRevisao: sim\n"
+                "resumo_do_andamento: Resumo final"
+            ),
+        )
+    )
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text="Processo {numero_processo} | Descricao {descricao}",
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema=_PURE_JSON_SCHEMA_15_COLUNAS,
+    )
+    csv_payload = (
+        "Numero Processo,ID Processo,Conteudo,Celula,Valor da Causa,Tipo de Acao,Marcacao,Responsavel Publicacao\n"
+        "000123,ID-9,Descricao original,A1,1000,Civel,Urgente,Equipe A\n"
+    ).encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    generated = service.file_service.calls[0]
+    workbook = load_workbook(io.BytesIO(generated["content"]))
+    headers = [str(cell or "") for cell in next(workbook.active.iter_rows(min_row=1, max_row=1, values_only=True))]
+    row = list(workbook.active.iter_rows(min_row=2, max_row=2, values_only=True))[0]
+    row_dict = dict(zip(headers, row))
+
+    assert headers == _PURE_JSON_SCHEMA_15_COLUNAS["required"]
+    assert "status" not in headers
+    assert "erro" not in headers
+    assert "linha_origem" not in headers
+    assert str(row_dict["numero_processo"] or "") == "000123"
+    assert str(row_dict["descricao"] or "") == "Descricao original"
+    assert str(row_dict["categoria"] or "") == "Trabalhista"
+    assert str(row_dict["resumo_do_andamento"] or "") == "Resumo final"
+
+
+def test_tabular_pure_json_schema_properties_order_is_used_when_required_missing(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    service.provider_service = FakeProviderService(  # type: ignore[assignment]
+        FakeProviderClient(modes=["success"], output_text='{"resultado":"OK","observacao":"Tudo certo","extra":"ignorar"}')
+    )
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text="Codigo {{codigo}}",
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema={
+            "type": "object",
+            "properties": {
+                "codigo": {"type": "string"},
+                "resultado": {"type": "string"},
+                "observacao": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    )
+    csv_payload = "Codigo\nABC-1\n".encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    generated = service.file_service.calls[0]
+    workbook = load_workbook(io.BytesIO(generated["content"]))
+    headers = [str(cell or "") for cell in next(workbook.active.iter_rows(min_row=1, max_row=1, values_only=True))]
+    row = list(workbook.active.iter_rows(min_row=2, max_row=2, values_only=True))[0]
+    row_dict = dict(zip(headers, row))
+
+    assert headers == ["codigo", "resultado", "observacao"]
+    assert "extra" not in headers
+    assert str(row_dict["codigo"] or "") == "ABC-1"
+    assert str(row_dict["resultado"] or "") == "OK"
+    assert str(row_dict["observacao"] or "") == "Tudo certo"
+
+
+def test_tabular_single_brace_placeholder_hydrates_prompt(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(FakeProviderClient(modes=["success"], output_text='{"resultado":"OK"}'))
+    service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text="Processo {numero_processo} | Descricao {descricao}",
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema={
+            "type": "object",
+            "required": ["numero_processo", "descricao", "resultado"],
+            "properties": {
+                "numero_processo": {"type": "string"},
+                "descricao": {"type": "string"},
+                "resultado": {"type": "string"},
+            },
+        },
+    )
+    csv_payload = "Numero Processo,Conteudo\nPROC-1,Descricao hidratada\n".encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    sent_prompt = provider_service.client.execute_calls[0]["prompt"]
+    assert "PROC-1" in sent_prompt
+    assert "Descricao hidratada" in sent_prompt
+    assert "{numero_processo}" not in sent_prompt
+    assert "{descricao}" not in sent_prompt
+
+
+def test_tabular_missing_tabular_schema_fails_without_legacy_fallback(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    service.provider_service = FakeProviderService(FakeProviderClient(modes=["success"]))  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text="Prompt sem contrato valido",
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema={"type": "object"},
+    )
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: "Conteudo\nLinha\n".encode("utf-8"))
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.FAILED.value
+    assert "columns or a JSON Schema with properties" in (queue_repo.jobs[queue_job.id].error_message or "")
+    assert len(service.file_service.calls) == 1
+    assert service.file_service.calls[0]["file_type"] == "error"
+
+
+def test_tabular_rate_limit_is_recorded_per_row_without_schema_error(monkeypatch) -> None:
+    analysis_request_id = uuid4()
+    automation_id = uuid4()
+    request_file = _build_request_file(analysis_request_id, file_name="input.csv")
+    service, queue_repo, shared_exec_repo = _build_service(analysis_request_id, automation_id, request_file)
+    provider_service = FakeProviderService(
+        FakeProviderClient(modes=["rate_limit", "success"], output_text='{"resultado":"OK"}')
+    )
+    service.provider_service = provider_service  # type: ignore[assignment]
+    service.runtime_resolver = FakeAutomationRuntimeResolver(  # type: ignore[assignment]
+        prompt_text="Codigo {codigo}",
+        output_type="spreadsheet_output",
+        result_parser="tabular_structured",
+        result_formatter="spreadsheet_tabular",
+        output_schema={
+            "type": "object",
+            "required": ["codigo", "resultado", "status_execucao", "erro_execucao"],
+            "properties": {
+                "codigo": {"type": "string"},
+                "resultado": {"type": "string"},
+                "status_execucao": {"type": "string"},
+                "erro_execucao": {"type": "string"},
+            },
+            "status_column": "status_execucao",
+            "error_column": "erro_execucao",
+        },
+    )
+    csv_payload = "Codigo\nA-1\nA-2\n".encode("utf-8")
+    monkeypatch.setattr(service, "_read_input_file_bytes", lambda **_: csv_payload)
+
+    execution, queue_job = _seed_execution_and_job(
+        shared_exec_repo=shared_exec_repo,
+        queue_repo=queue_repo,
+        analysis_request_id=analysis_request_id,
+        request_file_id=request_file.id,
+    )
+    service.process_execution_job(execution_id=execution.id, queue_job_id=queue_job.id, worker_name="worker")
+
+    assert shared_exec_repo.executions[execution.id].status == ExecutionStatus.COMPLETED.value
+    generated = service.file_service.calls[0]
+    workbook = load_workbook(io.BytesIO(generated["content"]))
+    headers = [str(cell or "") for cell in next(workbook.active.iter_rows(min_row=1, max_row=1, values_only=True))]
+    rows = list(workbook.active.iter_rows(min_row=2, values_only=True))
+    first_row = dict(zip(headers, rows[0]))
+    second_row = dict(zip(headers, rows[1]))
+
+    assert str(first_row["codigo"] or "") == "A-1"
+    assert str(first_row["status_execucao"] or "") == "erro"
+    assert "rate limit" in str(first_row["erro_execucao"] or "").lower()
+    assert "schema" not in str(first_row["erro_execucao"] or "").lower()
+    assert str(second_row["codigo"] or "") == "A-2"
+    assert str(second_row["status_execucao"] or "") == "ok"
+    assert str(second_row["resultado"] or "") == "OK"

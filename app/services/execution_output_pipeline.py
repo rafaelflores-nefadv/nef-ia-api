@@ -150,6 +150,27 @@ class ExecutionResultNormalizer:
         return normalized
 
     @staticmethod
+    def project_tabular_row_output(
+        *,
+        output_row: dict[str, Any],
+        normalized_output: dict[str, str],
+        output_schema: ExecutionOutputSchema,
+    ) -> dict[str, Any]:
+        projected = dict(output_row)
+        schema_columns = set(output_schema.columns)
+        input_columns = set(output_schema.prompt_field_columns.values())
+        for key, value in normalized_output.items():
+            if key not in schema_columns:
+                continue
+            if key in input_columns:
+                continue
+            normalized_value = str(value or "").strip()
+            if not normalized_value and str(projected.get(key) or "").strip():
+                continue
+            projected[key] = normalized_value
+        return projected
+
+    @staticmethod
     def _normalize_tabular_cell_value(value: Any) -> str:
         if value is None:
             return ""
