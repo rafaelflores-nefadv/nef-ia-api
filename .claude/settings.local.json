@@ -5,7 +5,10 @@
       "Bash(pip install *)",
       "Bash(docker compose *)",
       "Bash(python -m pytest tests/test_execution_service.py::test_tabular_coluna_conteudo_acento_hidrata_placeholder_descricao tests/test_execution_service.py::test_tabular_coluna_descricao_sem_acento_hidrata_placeholder_descricao tests/test_execution_service.py::test_tabular_contrato_16_colunas_sem_colunas_legadas tests/test_execution_service.py::test_tabular_campos_entrada_preservados_apos_resposta_ia -v)",
-      "Bash(python -m pytest tests/test_execution_service.py tests/test_execution_output_contract_requirement.py -q)"
+      "Bash(python -m pytest tests/test_execution_service.py tests/test_execution_output_contract_requirement.py -q)",
+      "Bash(python -m alembic upgrade 20260505_0015)",
+      "Bash(docker exec *)",
+      "Bash(python -c \"content = open\\('docs/upload_download_insomnia_relatorio.md', encoding='utf-8'\\).read\\(\\); print\\(len\\(content.splitlines\\(\\)\\), 'linhas'\\)\")"
     ]
   }
 }

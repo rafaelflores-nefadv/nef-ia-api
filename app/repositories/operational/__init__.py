@@ -7,6 +7,7 @@ from app.repositories.operational.external_execution_context_repository import (
     ExternalExecutionContextRepository,
 )
 from app.repositories.operational.execution_file_repository import ExecutionFileRepository
+from app.repositories.operational.execution_explanation_repository import ExecutionExplanationRepository
 from app.repositories.operational.execution_input_file_repository import ExecutionInputFileRepository
 from app.repositories.operational.metrics_repository import MetricsRepository
 from app.repositories.operational.provider_credentials_repository import ProviderCredentialRepository
@@ -17,6 +18,7 @@ from app.repositories.operational.request_file_repository import RequestFileRepo
 from app.repositories.operational.token_repository import ApiTokenRepository, IntegrationTokenRepository
 from app.repositories.operational.user_repository import AdminUserRepository
 from app.repositories.operational.usage_repository import ProviderUsageRepository
+from app.repositories.operational.system_explanation_prompt_repository import SystemExplanationPromptRepository
 
 __all__ = [
     "ApiTokenRepository",
@@ -27,6 +29,7 @@ __all__ = [
     "ProviderModelRepository",
     "RequestFileRepository",
     "ExecutionFileRepository",
+    "ExecutionExplanationRepository",
     "ExecutionInputFileRepository",
     "QueueJobRepository",
     "AuditLogRepository",
@@ -35,4 +38,5 @@ __all__ = [
     "MetricsRepository",
     "ProviderUsageRepository",
     "AdminUserRepository",
+    "SystemExplanationPromptRepository",
 ]

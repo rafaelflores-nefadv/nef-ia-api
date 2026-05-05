@@ -18,6 +18,7 @@ from app.db.session import get_operational_session
 from app.db.shared_session import get_shared_session
 from app.schemas.external_execution import (
     ExternalExecuteAutomationRequest,
+    ExternalExecutionExplanationResponse,
     ExternalExecutePromptRequest,
     ExternalExecutionFileListResponse,
     ExternalExecutionFileResponse,
@@ -302,6 +303,7 @@ def download_execution_files_archive(
 @router.get("/executions/{execution_id}/result", response_model=ExternalExecutionResultResponse)
 def get_execution_result(
     execution_id: UUID,
+    request: Request,
     token_scope: TokenScope = Depends(get_current_token_scope),
     operational_session: Session = Depends(get_operational_session),
     shared_session: Session = Depends(get_shared_session),
@@ -317,9 +319,93 @@ def get_execution_result(
     )
     return ExternalExecutionResultResponse(
         execution_id=result.execution_id,
+        status=result.status,
+        data_analyzed=result.data_analyzed,
         result=result.result,
+        simple_explanation=result.simple_explanation,
         source_file_id=result.source_file_id,
         source_mime_type=result.source_mime_type,
+        result_download_url=str(request.url_for("download_execution_result_file", execution_id=str(execution_id))),
+        debug_download_url=None,
+    )
+
+
+@router.get("/executions/{execution_id}/explanation", response_model=ExternalExecutionExplanationResponse)
+def get_execution_explanation(
+    execution_id: UUID,
+    token_scope: TokenScope = Depends(get_current_token_scope),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> ExternalExecutionExplanationResponse:
+    service = ExternalExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    explanation = service.get_execution_explanation_in_scope(
+        token_id=token_scope.token_id,
+        execution_id=execution_id,
+    )
+    return ExternalExecutionExplanationResponse(
+        execution_id=execution_id,
+        simple_explanation=explanation,
+    )
+
+
+@router.get("/executions/{execution_id}/debug", response_model=ExternalExecutionExplanationResponse)
+def get_execution_debug_blocked(
+    execution_id: UUID,
+    _: TokenScope = Depends(get_current_token_scope),
+) -> ExternalExecutionExplanationResponse:
+    raise AppException(
+        "Technical debug is available only through authorized admin channels.",
+        status_code=403,
+        code="debug_access_denied",
+    )
+
+
+@router.get("/executions/{execution_id}/download-result", name="download_execution_result_file")
+def download_execution_result_file(
+    execution_id: UUID,
+    token_scope: TokenScope = Depends(get_current_token_scope),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> FileResponse:
+    service = ExternalExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    files = service.get_execution_files_in_scope(
+        token_id=token_scope.token_id,
+        execution_id=execution_id,
+    )
+    result_file = next((item for item in files if str(item.file_type or "").strip().lower() == "output"), None)
+    if result_file is None:
+        raise AppException(
+            "Execution result file not found.",
+            status_code=404,
+            code="execution_result_file_not_found",
+        )
+    _, downloadable = service.download_file_in_scope(
+        token_id=token_scope.token_id,
+        token=token_scope.token,
+        file_id=result_file.file_id,
+    )
+    return FileResponse(
+        downloadable.absolute_path,
+        media_type=downloadable.mime_type or "application/octet-stream",
+        filename=downloadable.file_name,
+    )
+
+
+@router.get("/executions/{execution_id}/download-debug", name="download_execution_debug_file")
+def download_execution_debug_file(
+    execution_id: UUID,
+    _: TokenScope = Depends(get_current_token_scope),
+) -> FileResponse:
+    raise AppException(
+        "Technical debug is available only through authorized admin channels.",
+        status_code=403,
+        code="debug_access_denied",
     )
 
 
@@ -492,3 +578,54 @@ def get_automation_execution(
         resource_type="automation",
     )
     return _to_response(item)
+
+
+@router.get("/automations/executions/{execution_id}/result", response_model=ExternalExecutionResultResponse)
+def get_automation_execution_result(
+    execution_id: UUID,
+    request: Request,
+    token_scope: TokenScope = Depends(get_current_token_scope),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> ExternalExecutionResultResponse:
+    service = ExternalExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    result = service.get_execution_structured_result_in_scope(
+        token_id=token_scope.token_id,
+        token=token_scope.token,
+        execution_id=execution_id,
+    )
+    return ExternalExecutionResultResponse(
+        execution_id=result.execution_id,
+        status=result.status,
+        data_analyzed=result.data_analyzed,
+        result=result.result,
+        simple_explanation=result.simple_explanation,
+        source_file_id=result.source_file_id,
+        source_mime_type=result.source_mime_type,
+        result_download_url=str(request.url_for("download_execution_result_file", execution_id=str(execution_id))),
+        debug_download_url=None,
+    )
+
+
+@router.get("/automations/executions/{execution_id}/explanation", response_model=ExternalExecutionExplanationResponse)
+def get_automation_execution_explanation(
+    execution_id: UUID,
+    token_scope: TokenScope = Depends(get_current_token_scope),
+    operational_session: Session = Depends(get_operational_session),
+    shared_session: Session = Depends(get_shared_session),
+) -> ExternalExecutionExplanationResponse:
+    service = ExternalExecutionService(
+        operational_session=operational_session,
+        shared_session=shared_session,
+    )
+    explanation = service.get_execution_explanation_in_scope(
+        token_id=token_scope.token_id,
+        execution_id=execution_id,
+    )
+    return ExternalExecutionExplanationResponse(
+        execution_id=execution_id,
+        simple_explanation=explanation,
+    )

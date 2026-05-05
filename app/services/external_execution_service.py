@@ -4,17 +4,20 @@ import csv
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import UploadFile
+from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from app.core.constants import ExecutionStatus
 from app.core.exceptions import AppException
 from app.models.operational import DjangoAiApiToken, DjangoAiApiTokenPermission
 from app.repositories.operational import (
+    ExecutionExplanationRepository,
     ExecutionFileRepository,
     ExecutionInputFileRepository,
     ExternalExecutionContextRecord,
@@ -70,9 +73,14 @@ class ExternalExecutionFileResolution:
 @dataclass(slots=True)
 class ExternalExecutionStructuredResult:
     execution_id: UUID
-    result: Any | None
+    status: ExecutionStatus | None = None
+    data_analyzed: Any | None = None
+    result: Any | None = None
+    simple_explanation: dict[str, str] | None = None
     source_file_id: UUID | None = None
     source_mime_type: str | None = None
+    result_download_url: str | None = None
+    debug_download_url: str | None = None
 
 
 class ExternalExecutionService:
@@ -82,6 +90,7 @@ class ExternalExecutionService:
         self.contexts = ExternalExecutionContextRepository(operational_session)
         self.queue_jobs = QueueJobRepository(operational_session)
         self.execution_files = ExecutionFileRepository(operational_session)
+        self.execution_explanations = ExecutionExplanationRepository(operational_session)
         self.execution_inputs = ExecutionInputFileRepository(operational_session)
         self.request_files = RequestFileRepository(operational_session)
         self.shared_analysis = SharedAnalysisRepository(shared_session)
@@ -242,6 +251,7 @@ class ExternalExecutionService:
         *,
         token_id: UUID,
         execution_id: UUID,
+        include_debug: bool = False,
     ) -> list[ExternalExecutionFileView]:
         context = self._get_execution_context_in_scope(
             token_id=token_id,
@@ -251,6 +261,8 @@ class ExternalExecutionService:
         items: list[ExternalExecutionFileView] = []
         output_files = self.execution_files.list_by_execution_id(context.execution_id)
         for item in output_files:
+            if str(item.file_type or "").strip().lower() == "debug" and not include_debug:
+                continue
             items.append(
                 ExternalExecutionFileView(
                     file_id=item.id,
@@ -302,9 +314,16 @@ class ExternalExecutionService:
         *,
         token_id: UUID,
         file_id: UUID,
+        allow_debug_access: bool = False,
     ) -> ExternalExecutionFileResolution:
         execution_file = self.execution_files.get_by_id(file_id)
         if execution_file is not None:
+            if str(execution_file.file_type or "").strip().lower() == "debug" and not allow_debug_access:
+                raise AppException(
+                    "Technical debug is available only through authorized admin channels.",
+                    status_code=403,
+                    code="debug_access_denied",
+                )
             context = self._get_execution_context_in_scope(
                 token_id=token_id,
                 execution_id=execution_file.execution_id,
@@ -373,8 +392,13 @@ class ExternalExecutionService:
         token_id: UUID,
         token: DjangoAiApiToken,
         file_id: UUID,
+        allow_debug_access: bool = False,
     ) -> tuple[ExternalExecutionFileView, DownloadableFile]:
-        resolved = self.get_file_in_scope(token_id=token_id, file_id=file_id)
+        resolved = self.get_file_in_scope(
+            token_id=token_id,
+            file_id=file_id,
+            allow_debug_access=allow_debug_access,
+        )
         permissions = self._build_scoped_permissions(
             token=token,
             automation_id=resolved.automation_id,
@@ -404,13 +428,29 @@ class ExternalExecutionService:
             execution_id=execution_id,
             resource_type=None,
         )
+        execution = self.shared_executions.get_by_id(execution_id)
+        data_analyzed = self._get_execution_input_data_in_scope(
+            token_id=token_id,
+            token=token,
+            execution_id=execution_id,
+        )
+        simple_explanation = self.get_execution_explanation_in_scope(
+            token_id=token_id,
+            execution_id=execution_id,
+        )
         output_files = [
             file_item
             for file_item in self.execution_files.list_by_execution_id(execution_id)
             if str(file_item.file_type or "").strip().lower() == "output"
         ]
         if not output_files:
-            return ExternalExecutionStructuredResult(execution_id=execution_id, result=None)
+            return ExternalExecutionStructuredResult(
+                execution_id=execution_id,
+                status=self._parse_status(execution.status if execution is not None else None),
+                data_analyzed=data_analyzed,
+                result=None,
+                simple_explanation=simple_explanation,
+            )
 
         for file_item in sorted(output_files, key=lambda item: item.created_at or datetime.min, reverse=True):
             parsed = self._try_parse_structured_output_file(
@@ -423,11 +463,36 @@ class ExternalExecutionService:
             if parsed is not None:
                 return ExternalExecutionStructuredResult(
                     execution_id=execution_id,
+                    status=self._parse_status(execution.status if execution is not None else None),
+                    data_analyzed=data_analyzed,
                     result=parsed,
+                    simple_explanation=simple_explanation,
                     source_file_id=file_item.id,
                     source_mime_type=file_item.mime_type,
                 )
-        return ExternalExecutionStructuredResult(execution_id=execution_id, result=None)
+        return ExternalExecutionStructuredResult(
+            execution_id=execution_id,
+            status=self._parse_status(execution.status if execution is not None else None),
+            data_analyzed=data_analyzed,
+            result=None,
+            simple_explanation=simple_explanation,
+        )
+
+    def get_execution_explanation_in_scope(
+        self,
+        *,
+        token_id: UUID,
+        execution_id: UUID,
+    ) -> dict[str, str] | None:
+        self._get_execution_context_in_scope(
+            token_id=token_id,
+            execution_id=execution_id,
+            resource_type=None,
+        )
+        item = self.execution_explanations.get_by_execution_id(execution_id)
+        if item is None or not isinstance(item.simple_explanation, dict):
+            return None
+        return {str(key): str(value or "") for key, value in item.simple_explanation.items()}
 
     def _try_parse_structured_output_file(
         self,
@@ -440,11 +505,12 @@ class ExternalExecutionService:
     ) -> Any | None:
         extension = Path(str(file_name or "")).suffix.lower()
         normalized_mime = str(mime_type or "").strip().lower()
-        if extension not in {".json", ".csv", ".txt"} and normalized_mime not in {
+        if extension not in {".json", ".csv", ".txt", ".xlsx"} and normalized_mime not in {
             "application/json",
             "text/csv",
             "application/csv",
             "text/plain",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         }:
             return None
 
@@ -469,6 +535,24 @@ class ExternalExecutionService:
             text_payload = payload.decode("utf-8", errors="replace")
             reader = csv.DictReader(text_payload.splitlines())
             return [dict(item) for item in reader]
+        if extension == ".xlsx" or normalized_mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+            try:
+                workbook = load_workbook(filename=BytesIO(payload), read_only=True, data_only=True)
+                sheet = workbook.active
+                rows = list(sheet.iter_rows(values_only=True))
+            except Exception:
+                return None
+            if not rows:
+                return []
+            headers = [str(cell or "").strip() for cell in rows[0]]
+            return [
+                {
+                    headers[index]: raw_row[index]
+                    for index in range(min(len(headers), len(raw_row)))
+                    if headers[index]
+                }
+                for raw_row in rows[1:]
+            ]
 
         text_payload = payload.decode("utf-8", errors="replace").strip()
         if not text_payload:
@@ -733,11 +817,83 @@ class ExternalExecutionService:
                 continue
             extension = Path(str(file_item.file_name or "")).suffix.lower()
             normalized_mime = str(file_item.mime_type or "").strip().lower()
-            if extension in {".json", ".csv"}:
+            if extension in {".json", ".csv", ".xlsx"}:
                 return True
-            if normalized_mime in {"application/json", "text/csv", "application/csv"}:
+            if normalized_mime in {
+                "application/json",
+                "text/csv",
+                "application/csv",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }:
                 return True
         return False
+
+    def _get_execution_input_data_in_scope(
+        self,
+        *,
+        token_id: UUID,
+        token: DjangoAiApiToken,
+        execution_id: UUID,
+    ) -> Any | None:
+        input_links = self.execution_inputs.list_by_execution_id(execution_id)
+        if not input_links:
+            return None
+        primary_link = sorted(
+            input_links,
+            key=lambda item: (
+                0 if str(getattr(item, "role", "")).strip().lower() == "primary" else 1,
+                int(getattr(item, "order_index", 0)),
+            ),
+        )[0]
+        resolved = self.get_file_in_scope(token_id=token_id, file_id=primary_link.request_file_id)
+        permissions = self._build_scoped_permissions(
+            token=token,
+            automation_id=resolved.automation_id,
+            allow_file_upload=False,
+        )
+        downloadable = self.file_service.get_request_file_for_download(
+            file_id=primary_link.request_file_id,
+            token_permissions=permissions,
+        )
+        with open(downloadable.absolute_path, "rb") as handle:
+            payload = handle.read()
+        return self._parse_input_payload(
+            payload=payload,
+            file_name=downloadable.file_name,
+            mime_type=downloadable.mime_type,
+        )
+
+    @staticmethod
+    def _parse_input_payload(*, payload: bytes, file_name: str, mime_type: str | None) -> Any | None:
+        extension = Path(str(file_name or "")).suffix.lower()
+        normalized_mime = str(mime_type or "").strip().lower()
+        if extension == ".json" or normalized_mime == "application/json":
+            try:
+                return json.loads(payload.decode("utf-8"))
+            except json.JSONDecodeError:
+                return payload.decode("utf-8", errors="replace")
+        if extension == ".csv" or normalized_mime in {"text/csv", "application/csv"}:
+            text_payload = payload.decode("utf-8", errors="replace")
+            return [dict(item) for item in csv.DictReader(text_payload.splitlines())]
+        if extension == ".xlsx" or normalized_mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+            try:
+                workbook = load_workbook(filename=BytesIO(payload), read_only=True, data_only=True)
+                sheet = workbook.active
+                rows = list(sheet.iter_rows(values_only=True))
+            except Exception:
+                return None
+            if not rows:
+                return []
+            headers = [str(cell or "").strip() for cell in rows[0]]
+            return [
+                {
+                    headers[index]: raw_row[index]
+                    for index in range(min(len(headers), len(raw_row)))
+                    if headers[index]
+                }
+                for raw_row in rows[1:]
+            ]
+        return payload.decode("utf-8", errors="replace").strip() or None
 
     @staticmethod
     def _build_scoped_permissions(

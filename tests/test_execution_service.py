@@ -458,6 +458,13 @@ def _build_service(
     service.runtime_resolver = FakeAutomationRuntimeResolver()  # type: ignore[assignment]
     service.file_service = FakeFileService()  # type: ignore[assignment]
     service.usage_service = FakeUsageService()  # type: ignore[assignment]
+    service.execution_explanations = SimpleNamespace(
+        items={},
+        upsert_simple_explanation=lambda execution_id, simple_explanation: SimpleNamespace(
+            execution_id=execution_id,
+            simple_explanation=simple_explanation,
+        ),
+    )  # type: ignore[assignment]
     return service, queue_repo, shared_exec_repo
 
 

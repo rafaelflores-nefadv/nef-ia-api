@@ -62,6 +62,16 @@ class ExternalExecutionFileListResponse(BaseModel):
 
 class ExternalExecutionResultResponse(BaseModel):
     execution_id: UUID
+    status: ExecutionStatus | None = None
+    data_analyzed: Any | None = None
     result: Any | None = None
+    simple_explanation: dict[str, str] | None = None
     source_file_id: UUID | None = None
     source_mime_type: str | None = None
+    result_download_url: str | None = None
+    debug_download_url: str | None = None
+
+
+class ExternalExecutionExplanationResponse(BaseModel):
+    execution_id: UUID
+    simple_explanation: dict[str, str] | None = None

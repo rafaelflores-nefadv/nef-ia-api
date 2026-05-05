@@ -31,9 +31,11 @@ from app.models.operational import (
 from app.repositories.operational import (
     AuditLogRepository,
     AutomationExecutionSettingsRepository,
+    ExecutionExplanationRepository,
     ExecutionInputFileRepository,
     QueueJobRepository,
     RequestFileRepository,
+    SystemExplanationPromptRepository,
 )
 from app.repositories.shared import SharedAnalysisRepository, SharedExecutionRepository
 from app.services.execution_engine import (
@@ -53,6 +55,11 @@ from app.services.execution_engine import (
 )
 from app.services.execution_output_contract import ExecutionOutputContractResolver
 from app.services.execution_output_pipeline import ExecutionResultFormatter, ExecutionResultNormalizer
+from app.services.execution_ai_explanation_service import ExecutionAIExplanationService
+from app.services.execution_simple_explanation_service import (
+    CONTROLLED_INVALID_JSON_MESSAGE,
+    ExecutionSimpleExplanationService,
+)
 from app.services.execution_tabular_prompt_strategy import TabularPromptStrategyResolver
 from app.services.execution_observability import (
     ExecutionErrorDiagnostic,
@@ -196,6 +203,12 @@ class ProcessedOutput:
     models_used: set[str]
     provider_calls: int
     processing_summary: dict[str, Any]
+    data_analyzed: Any | None = None
+    result_payload: Any | None = None
+    technical_debug: Any | None = None
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    simple_explanation: dict[str, str] | None = None
     auxiliary_files: list["GeneratedExecutionFile"] = field(default_factory=list)
 
 
@@ -263,6 +276,7 @@ class ExecutionService:
         self.request_files = RequestFileRepository(operational_session)
         self.execution_inputs = ExecutionInputFileRepository(operational_session)
         self.execution_profile_settings = AutomationExecutionSettingsRepository(operational_session)
+        self.execution_explanations = ExecutionExplanationRepository(operational_session)
         self.queue_jobs = QueueJobRepository(operational_session)
         self.audit_logs = AuditLogRepository(operational_session)
         self.shared_analysis = SharedAnalysisRepository(shared_session)
@@ -289,6 +303,9 @@ class ExecutionService:
         self.result_formatter = ExecutionResultFormatter()
         self.tabular_prompt_strategy_resolver = TabularPromptStrategyResolver()
         self.output_policy = ExecutionOutputPolicy()
+        self.simple_explanation_service = ExecutionSimpleExplanationService()
+        self.ai_explanation_service = ExecutionAIExplanationService()
+        self.system_explanation_prompts = SystemExplanationPromptRepository(operational_session)
 
     def _log_execution_phase(
         self,
@@ -1693,6 +1710,10 @@ class ExecutionService:
                     content=auxiliary_file.content,
                     mime_type=auxiliary_file.mime_type,
                 )
+            self.execution_explanations.upsert_simple_explanation(
+                execution_id=execution_id,
+                simple_explanation=processed_output.simple_explanation,
+            )
             self._enforce_execution_time_profile_limit(
                 execution_id=execution_id,
                 execution_started_at=execution_started_at,
@@ -1744,6 +1765,7 @@ class ExecutionService:
                         }
                         for item in processed_output.auxiliary_files
                     ],
+                    "simple_explanation": processed_output.simple_explanation,
                     "execution_profile": execution_profile.name if execution_profile else None,
                     "execution_profile_source": execution_profile.source if execution_profile else None,
                     "execution_profile_source_details": execution_profile.source_details if execution_profile else None,
@@ -2435,6 +2457,33 @@ class ExecutionService:
                 debug_chunks=debug_chunks,
                 merged_output=merged_output,
             )
+        _text_data_analyzed = {"content_preview": file_content[:4000]}
+        _text_debug = {"chunks": debug_chunks}
+        simple_explanation = self.simple_explanation_service.generate_simple_debug_explanation(
+            data_analyzed=_text_data_analyzed,
+            prompt_used=official_prompt,
+            final_result=merged_output,
+            technical_debug=_text_debug,
+            warnings=[],
+            errors=[],
+            status=ExecutionStatus.COMPLETED.value,
+        )
+        _system_prompt = self.system_explanation_prompts.get_active_prompt()
+        if _system_prompt:
+            _translated_context = self.simple_explanation_service.build_translated_debug_context(
+                data_analyzed=_text_data_analyzed,
+                final_result=merged_output,
+                technical_debug=_text_debug,
+                warnings=[],
+                errors=[],
+            )
+            _ai_explanation = self.ai_explanation_service.generate(
+                translated_context=_translated_context,
+                system_prompt=_system_prompt,
+                runtime=runtime,
+            )
+            if _ai_explanation is not None:
+                simple_explanation = _ai_explanation
         return ProcessedOutput(
             content=formatted_output.content,
             file_name=formatted_output.file_name,
@@ -2454,6 +2503,10 @@ class ExecutionService:
                 "output_contract_source": output_contract.source,
                 "execution_profile": execution_profile.name,
             },
+            data_analyzed=_text_data_analyzed,
+            result_payload=merged_output,
+            technical_debug=_text_debug if debug_chunks else None,
+            simple_explanation=simple_explanation,
             auxiliary_files=auxiliary_files,
         )
 
@@ -2544,6 +2597,8 @@ class ExecutionService:
         models_used: set[str] = set()
         output_rows: list[dict[str, Any]] = []
         debug_rows: list[dict[str, Any]] = []
+        execution_warnings: list[str] = []
+        execution_errors: list[str] = []
         successful_rows = 0
         failed_rows = 0
         output_schema = output_contract.output_schema
@@ -2874,6 +2929,21 @@ class ExecutionService:
                     parsed_output=parsed_output,
                     output_schema=output_schema,
                 )
+                parse_error = str(json_inspection.get("parse_error") or "").strip() if json_inspection is not None else ""
+                post_processed = self.simple_explanation_service.apply_post_response_validations(
+                    row_values=row_values,
+                    normalized_output=normalized_output,
+                    json_parse_error=parse_error or None,
+                )
+                normalized_output = post_processed.normalized_output
+                execution_warnings.extend(post_processed.warnings)
+                execution_errors.extend(post_processed.errors)
+                if post_processed.errors:
+                    raise AppException(
+                        CONTROLLED_INVALID_JSON_MESSAGE,
+                        status_code=422,
+                        code="provider_invalid_json_output",
+                    )
                 row_stage_of_failure = "spreadsheet_projection"
                 if debug_row is not None:
                     debug_row["stage_of_failure"] = row_stage_of_failure
@@ -2886,9 +2956,12 @@ class ExecutionService:
                     if json_inspection is not None:
                         debug_row["json_payload_cleaned"] = json_inspection.get("cleaned_payload")
                         debug_row["json_payload_parsed"] = json_inspection.get("parsed_json")
-                        parse_error = str(json_inspection.get("parse_error") or "").strip()
                         if parse_error:
                             debug_row["warnings"] = [*list(debug_row.get("warnings") or []), parse_error]
+                    if post_processed.warnings:
+                        debug_row["warnings"] = [*list(debug_row.get("warnings") or []), *post_processed.warnings]
+                    if post_processed.errors:
+                        debug_row["errors"] = [*list(debug_row.get("errors") or []), *post_processed.errors]
                     debug_row["parsed_output"] = parsed_output
                     debug_row["normalized_output"] = normalized_output
                     debug_row["stage_of_failure"] = ""
@@ -2966,6 +3039,7 @@ class ExecutionService:
                     output_row[output_schema.status_column] = "erro"
                 if output_schema.error_column:
                     output_row[output_schema.error_column] = error_summary
+                execution_errors.append(error_summary)
                 failed_rows += 1
                 logger.warning(
                     "Failed to process tabular row; execution will continue for remaining rows.",
@@ -3038,6 +3112,32 @@ class ExecutionService:
                 debug_rows=debug_rows,
                 retry_count=row_retry_count,
             )
+        _tab_data_analyzed = [row.get("values") for row in input_rows]
+        simple_explanation = self.simple_explanation_service.generate_simple_debug_explanation(
+            data_analyzed=_tab_data_analyzed,
+            prompt_used=official_prompt,
+            final_result=output_rows,
+            technical_debug=debug_rows,
+            warnings=execution_warnings,
+            errors=execution_errors,
+            status=ExecutionStatus.COMPLETED.value if failed_rows < total_rows else ExecutionStatus.FAILED.value,
+        )
+        _system_prompt = self.system_explanation_prompts.get_active_prompt()
+        if _system_prompt:
+            _translated_context = self.simple_explanation_service.build_translated_debug_context(
+                data_analyzed=_tab_data_analyzed,
+                final_result=output_rows,
+                technical_debug=debug_rows,
+                warnings=execution_warnings,
+                errors=execution_errors,
+            )
+            _ai_explanation = self.ai_explanation_service.generate(
+                translated_context=_translated_context,
+                system_prompt=_system_prompt,
+                runtime=runtime,
+            )
+            if _ai_explanation is not None:
+                simple_explanation = _ai_explanation
         logger.info(
             "Tabular execution completed.",
             extra={
@@ -3073,6 +3173,12 @@ class ExecutionService:
                 "output_contract_source": output_contract.source,
                 "execution_profile": execution_profile.name,
             },
+            data_analyzed=_tab_data_analyzed,
+            result_payload=output_rows,
+            technical_debug=debug_rows if debug_rows else None,
+            warnings=execution_warnings,
+            errors=execution_errors,
+            simple_explanation=simple_explanation,
             auxiliary_files=auxiliary_files,
         )
 

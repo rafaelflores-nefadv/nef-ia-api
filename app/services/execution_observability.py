@@ -74,6 +74,7 @@ _ERROR_CATEGORY_RULES: tuple[tuple[set[str], str], ...] = (
             "execution_formatter_strategy_invalid",
             "tabular_parser_invalid_output",
             "prompt_placeholder_unresolved",
+            "provider_invalid_json_output",
         },
         "response_parse",
     ),

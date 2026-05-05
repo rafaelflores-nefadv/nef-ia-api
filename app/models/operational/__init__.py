@@ -1,4 +1,6 @@
 from app.models.operational.audit import DjangoAiAuditLog
+from app.models.operational.execution_explanation import DjangoAiExecutionExplanation
+from app.models.operational.system_explanation_prompt import DjangoAiSystemExplanationPrompt
 from app.models.operational.external_execution import DjangoAiExternalExecutionContext
 from app.models.operational.execution_profile import DjangoAiAutomationExecutionSetting
 from app.models.operational.auth import DjangoAiRole, DjangoAiUser
@@ -34,8 +36,10 @@ __all__ = [
     "DjangoAiRequestFile",
     "DjangoAiExecutionFile",
     "DjangoAiExecutionInputFile",
+    "DjangoAiExecutionExplanation",
     "DjangoAiExternalExecutionContext",
     "DjangoAiAutomationExecutionSetting",
     "DjangoAiQueueJob",
     "DjangoAiAuditLog",
+    "DjangoAiSystemExplanationPrompt",
 ]

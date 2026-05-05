@@ -142,6 +142,7 @@ def build_service(tmp_path: Path) -> tuple[ExternalExecutionService, dict]:
     bag["input_links"] = []
     bag["request_files"] = {}
     bag["downloads"] = {}
+    bag["execution_explanations"] = {}
 
     service.contexts = bag["contexts"]  # type: ignore[assignment]
     service.queue_jobs = SimpleNamespace(get_latest_by_execution_id=lambda eid: bag["queues"].get(eid))  # type: ignore[assignment]
@@ -165,6 +166,9 @@ def build_service(tmp_path: Path) -> tuple[ExternalExecutionService, dict]:
         list_by_execution_id=lambda eid: [x for x in bag["input_links"] if x.execution_id == eid],
         list_by_request_file_id=lambda fid: [x for x in bag["input_links"] if x.request_file_id == fid],
     )  # type: ignore[assignment]
+    service.execution_explanations = SimpleNamespace(
+        get_by_execution_id=lambda execution_id: bag["execution_explanations"].get(execution_id)
+    )  # type: ignore[assignment]
     service.request_files = SimpleNamespace(get_by_id=lambda fid: bag["request_files"].get(fid))  # type: ignore[assignment]
     service.file_service = SimpleNamespace(
         upload_request_file=lambda **_: SimpleNamespace(id=uuid4()),
@@ -174,6 +178,12 @@ def build_service(tmp_path: Path) -> tuple[ExternalExecutionService, dict]:
     )  # type: ignore[assignment]
     service.execution_service = SimpleNamespace(create_execution=lambda **kwargs: _create_execution(bag, kwargs))  # type: ignore[assignment]
     return service, bag
+
+
+def _case_dir() -> Path:
+    root = Path(".tmp") / "external_execution_service_tests" / uuid4().hex
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def _create_request(bag: dict, automation_id: UUID) -> FakeAnalysisRequest:
@@ -208,8 +218,8 @@ def _raise_not_found(code: str):  # type: ignore[no-untyped-def]
     raise AppException("Not found.", status_code=404, code=code)
 
 
-def test_execute_automation_json_creates_analysis_request(tmp_path: Path) -> None:
-    service, bag = build_service(tmp_path)
+def test_execute_automation_json_creates_analysis_request() -> None:
+    service, bag = build_service(_case_dir())
     token_id = uuid4()
     automation_id = uuid4()
     bag["automation"] = TokenOwnedAutomationRecord(
@@ -240,8 +250,8 @@ def test_execute_automation_json_creates_analysis_request(tmp_path: Path) -> Non
     assert len(bag["shared_requests"]) == 1
 
 
-def test_list_executions_respects_scope(tmp_path: Path) -> None:
-    service, bag = build_service(tmp_path)
+def test_list_executions_respects_scope() -> None:
+    service, bag = build_service(_case_dir())
     token_a = uuid4()
     token_b = uuid4()
     now = datetime.now(timezone.utc)
@@ -257,8 +267,8 @@ def test_list_executions_respects_scope(tmp_path: Path) -> None:
     assert items[0].execution_id == e1
 
 
-def test_execution_detail_flags(tmp_path: Path) -> None:
-    service, bag = build_service(tmp_path)
+def test_execution_detail_flags() -> None:
+    service, bag = build_service(_case_dir())
     token_id = uuid4()
     eid = uuid4()
     now = datetime.now(timezone.utc)
@@ -273,8 +283,8 @@ def test_execution_detail_flags(tmp_path: Path) -> None:
     assert detail.has_structured_result is True
 
 
-def test_list_execution_files(tmp_path: Path) -> None:
-    service, bag = build_service(tmp_path)
+def test_list_execution_files() -> None:
+    service, bag = build_service(_case_dir())
     token_id = uuid4()
     eid = uuid4()
     now = datetime.now(timezone.utc)
@@ -293,8 +303,8 @@ def test_list_execution_files(tmp_path: Path) -> None:
     assert {f.file_id for f in files} == {out_id, in_id}
 
 
-def test_file_out_of_scope_blocked(tmp_path: Path) -> None:
-    service, bag = build_service(tmp_path)
+def test_file_out_of_scope_blocked() -> None:
+    service, bag = build_service(_case_dir())
     token_a = uuid4()
     token_b = uuid4()
     eid = uuid4()
@@ -307,8 +317,8 @@ def test_file_out_of_scope_blocked(tmp_path: Path) -> None:
         service.get_file_in_scope(token_id=token_a, file_id=file_id)
 
 
-def test_download_file_in_scope(tmp_path: Path) -> None:
-    service, bag = build_service(tmp_path)
+def test_download_file_in_scope() -> None:
+    service, bag = build_service(_case_dir())
     token_id = uuid4()
     eid = uuid4()
     file_id = uuid4()
@@ -316,7 +326,7 @@ def test_download_file_in_scope(tmp_path: Path) -> None:
     bag["output_files"][file_id] = FakeOutputFile(
         id=file_id, execution_id=eid, file_type="output", file_name="r.json", file_size=10, mime_type="application/json", checksum="x", created_at=datetime.now(timezone.utc)
     )
-    p = tmp_path / "r.json"
+    p = _case_dir() / "r.json"
     p.write_text('{\"ok\":true}', encoding="utf-8")
     bag["downloads"][file_id] = SimpleNamespace(absolute_path=str(p), file_name="r.json", mime_type="application/json", checksum="x")
 
@@ -329,8 +339,8 @@ def test_download_file_in_scope(tmp_path: Path) -> None:
     assert downloadable.file_name == "r.json"
 
 
-def test_structured_result_json_and_empty(tmp_path: Path) -> None:
-    service, bag = build_service(tmp_path)
+def test_structured_result_json_and_empty() -> None:
+    service, bag = build_service(_case_dir())
     token_id = uuid4()
     eid = uuid4()
     file_id = uuid4()
@@ -338,7 +348,7 @@ def test_structured_result_json_and_empty(tmp_path: Path) -> None:
     bag["output_files"][file_id] = FakeOutputFile(
         id=file_id, execution_id=eid, file_type="output", file_name="res.json", file_size=20, mime_type="application/json", checksum=None, created_at=datetime.now(timezone.utc)
     )
-    pj = tmp_path / "res.json"
+    pj = _case_dir() / "res.json"
     pj.write_text('{\"items\":[1,2]}', encoding="utf-8")
     bag["downloads"][file_id] = SimpleNamespace(absolute_path=str(pj), file_name="res.json", mime_type="application/json", checksum=None)
 
@@ -358,6 +368,136 @@ def test_structured_result_json_and_empty(tmp_path: Path) -> None:
         execution_id=eid,
     )
     assert empty.result is None
+
+
+def test_structured_result_xlsx_and_explanation() -> None:
+    from openpyxl import Workbook
+
+    case_dir = _case_dir()
+    service, bag = build_service(case_dir)
+    token_id = uuid4()
+    eid = uuid4()
+    file_id = uuid4()
+    request_file_id = uuid4()
+    analysis_request_id = uuid4()
+    bag["contexts"].create(
+        execution_id=eid,
+        token_id=token_id,
+        analysis_request_id=analysis_request_id,
+        resource_type="automation",
+        automation_id=uuid4(),
+    )
+    bag["shared_executions"][eid] = FakeExecution(
+        id=eid,
+        analysis_request_id=analysis_request_id,
+        status="completed",
+        created_at=datetime.now(timezone.utc),
+    )
+    bag["output_files"][file_id] = FakeOutputFile(
+        id=file_id,
+        execution_id=eid,
+        file_type="output",
+        file_name="resultado.xlsx",
+        file_size=20,
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        checksum=None,
+        created_at=datetime.now(timezone.utc),
+    )
+    bag["request_files"][request_file_id] = FakeRequestFile(
+        id=request_file_id,
+        file_name="entrada.xlsx",
+        file_size=5,
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        checksum=None,
+        created_at=datetime.now(timezone.utc),
+        analysis_request_id=analysis_request_id,
+    )
+    bag["input_links"].append(
+        FakeInputLink(
+            execution_id=eid,
+            request_file_id=request_file_id,
+            role="primary",
+            order_index=0,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+
+    wb_result = Workbook()
+    ws_result = wb_result.active
+    ws_result.append(["descricao", "categoria"])
+    ws_result.append(["Publicação analisada", "Análise pendente da CTR"])
+    result_path = case_dir / "resultado.xlsx"
+    wb_result.save(result_path)
+
+    wb_input = Workbook()
+    ws_input = wb_input.active
+    ws_input.append(["descricao"])
+    ws_input.append(["Publicação analisada"])
+    input_path = case_dir / "entrada.xlsx"
+    wb_input.save(input_path)
+
+    bag["downloads"][file_id] = SimpleNamespace(
+        absolute_path=str(result_path),
+        file_name="resultado.xlsx",
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        checksum=None,
+    )
+    bag["downloads"][request_file_id] = SimpleNamespace(
+        absolute_path=str(input_path),
+        file_name="entrada.xlsx",
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        checksum=None,
+    )
+    bag["execution_explanations"][eid] = SimpleNamespace(
+        simple_explanation={
+            "summary": "A automação analisou a publicação informada.",
+            "reason": "Não houve comando processual claro.",
+            "input_issue": "A descrição estava incompleta.",
+            "recommendation": "Envie a publicação completa.",
+        }
+    )
+
+    parsed = service.get_execution_structured_result_in_scope(
+        token_id=token_id,
+        token=SimpleNamespace(id=token_id),  # type: ignore[arg-type]
+        execution_id=eid,
+    )
+    assert parsed.status == ExecutionStatus.COMPLETED
+    assert isinstance(parsed.data_analyzed, list)
+    assert parsed.result == [{"descricao": "Publicação analisada", "categoria": "Análise pendente da CTR"}]
+    assert parsed.simple_explanation is not None
+    assert parsed.simple_explanation["summary"] == "A automação analisou a publicação informada."
+
+
+def test_debug_file_is_hidden_and_blocked_in_external_scope() -> None:
+    service, bag = build_service(_case_dir())
+    token_id = uuid4()
+    eid = uuid4()
+    debug_file_id = uuid4()
+    bag["contexts"].create(
+        execution_id=eid,
+        token_id=token_id,
+        analysis_request_id=uuid4(),
+        resource_type="automation",
+        automation_id=uuid4(),
+    )
+    bag["output_files"][debug_file_id] = FakeOutputFile(
+        id=debug_file_id,
+        execution_id=eid,
+        file_type="debug",
+        file_name="debug.xlsx",
+        file_size=10,
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        checksum=None,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    files = service.get_execution_files_in_scope(token_id=token_id, execution_id=eid)
+    assert files == []
+
+    with pytest.raises(AppException) as exc_info:
+        service.get_file_in_scope(token_id=token_id, file_id=debug_file_id)
+    assert exc_info.value.payload.code == "debug_access_denied"
 
 
 def test_payload_forbids_manual_owner() -> None:

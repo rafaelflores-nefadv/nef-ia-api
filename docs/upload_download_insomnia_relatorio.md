@@ -1279,3 +1279,376 @@ Implementado e validado localmente.
 Docker reiniciado apos a mudanca.
 Commit enviado para o repositorio do projeto.
 ```
+
+## Explicacao simplificada com IA: Prompt 2 (2026-05-05)
+
+### Contexto
+
+Cada execucao de automacao gera um resultado estruturado (planilha ou JSON) e um debug tecnico interno.
+O debug tecnico e protegido e nunca exposto diretamente ao usuario.
+
+Para que o usuario entenda o motivo do resultado sem ver o debug tecnico, foi implementado um segundo
+processamento de linguagem natural chamado Prompt 2.
+
+### O que e o Prompt 2
+
+O Prompt 2 e um prompt interno, fixo, gerenciado exclusivamente pelo time de desenvolvimento.
+O usuario nao tem acesso, nao visualiza e nao edita esse prompt.
+
+Responsabilidade unica:
+
+```text
+Receber o resultado da execucao + contexto legivel do debug
+e retornar um texto simples explicando o motivo do resultado ao usuario.
+```
+
+Regras que o Prompt 2 deve seguir:
+
+```text
+- Linguagem simples, sem termos tecnicos de sistema
+- Nao culpar o sistema nem a inteligencia artificial
+- Se o resultado ficou pendente, explicar que depende das informacoes enviadas
+- Se houver inconsistencia, orientar a revisar a publicacao antes de reprocessar
+- Ser direto e objetivo
+```
+
+### Fluxo completo apos a mudanca
+
+```text
+Execucao principal (Prompt 1 do usuario)
+  -> resultado estruturado (planilha/JSON) + debug tecnico
+
+ExecutionSimpleExplanationService.build_translated_debug_context()
+  -> traduz o debug tecnico em texto legivel (sem expor codigos internos)
+
+SystemExplanationPromptRepository.get_active_prompt()
+  -> busca o texto do Prompt 2 ativo no banco
+
+ExecutionAIExplanationService.generate()
+  -> chama a IA com o contexto traduzido + Prompt 2
+  -> retorna explicacao em linguagem natural
+
+upsert_simple_explanation()
+  -> persiste a explicacao na tabela django_ai_execution_explanations
+
+Se a chamada de IA falhar:
+  -> fallback automatico para explicacao por regras (ja existia antes)
+  -> usuario nunca recebe null
+```
+
+### Arquivos criados
+
+```text
+app/models/operational/system_explanation_prompt.py
+  - Model da tabela django_ai_system_explanation_prompts
+  - Campos: id, prompt_text, is_active, created_at, updated_at
+
+alembic/versions/20260505_0015_add_system_explanation_prompts.py
+  - Migration para criar a tabela
+  - Revisao: 20260505_0015
+  - Depende de: 20260505_0014
+
+app/repositories/operational/system_explanation_prompt_repository.py
+  - Metodo get_active_prompt() -> str | None
+  - Retorna o texto do prompt ativo ou None se nao houver
+
+app/services/execution_ai_explanation_service.py
+  - Recebe: translated_context + system_prompt + runtime
+  - Chama runtime.client.execute_prompt() com max_tokens=1024, temperature=0.2
+  - Faz parse da resposta (JSON ou texto livre)
+  - Retorna dict com chaves: summary, reason, input_issue, recommendation
+  - Retorna None se a chamada falhar (fallback de regras e usado)
+```
+
+### Arquivos modificados
+
+```text
+app/models/operational/__init__.py
+  - Exporta DjangoAiSystemExplanationPrompt
+
+app/repositories/operational/__init__.py
+  - Exporta SystemExplanationPromptRepository
+
+app/services/execution_simple_explanation_service.py
+  - Adicionado build_translated_debug_context()
+    Traduz debug tecnico + resultado em texto estruturado legivel para o Prompt 2
+  - Adicionado _WARNING_READABLE: dicionario de traducao de tokens internos
+
+app/services/execution_service.py
+  - Import de ExecutionAIExplanationService
+  - Import de SystemExplanationPromptRepository
+  - __init__: instancia ai_explanation_service e system_explanation_prompts
+  - Pipeline textual (linha ~2460): tenta IA apos fallback de regras
+  - Pipeline tabular (linha ~3115): tenta IA apos fallback de regras
+```
+
+### Como o contexto traduzido e montado
+
+O metodo `build_translated_debug_context()` monta um texto com tres secoes:
+
+```text
+Dados analisados:
+  - processo: 1234567-89.2024.8.00.0000
+  - descricao: Publicacao sem detalhes claros
+
+Resultado gerado:
+  - reclassificacao: Analise pendente da CTR
+  - compromissoAnalista: nao identificado
+  - prazo: nao identificado
+
+Situacao identificada:
+  - resultado classificado como analise pendente
+  - as informacoes analisadas nao trouxeram elementos suficientes para definir o encaminhamento com seguranca
+```
+
+Esse texto nunca contem codigos internos, stack traces, nomes de modelos nem tokens tecnicos.
+
+### Como ativar o Prompt 2
+
+Apos rodar a migration, inserir uma linha na tabela com `is_active = true`:
+
+```sql
+INSERT INTO django_ai_system_explanation_prompts (id, prompt_text, is_active)
+VALUES (
+  gen_random_uuid(),
+  'Voce e um assistente juridico especializado em explicar resultados de analise de publicacoes processuais de forma simples e objetiva.
+
+Com base no contexto abaixo, escreva uma explicacao clara para um advogado sobre o motivo do resultado gerado.
+
+Regras:
+- Use linguagem simples, sem termos tecnicos de sistema
+- Nao culpe o sistema nem a inteligencia artificial
+- Se o resultado ficou pendente, explique que depende das informacoes enviadas
+- Se houver inconsistencia, oriente a revisar a publicacao antes de reprocessar
+- Seja direto e objetivo
+
+Retorne um JSON com exatamente estas chaves:
+{
+  "summary": "resumo do que foi analisado (1 frase)",
+  "reason": "motivo do resultado (1-2 frases)",
+  "input_issue": "qual problema foi identificado na entrada, se houver (1 frase, ou vazio se nao houver)",
+  "recommendation": "o que o usuario deve fazer (1 frase)"
+}',
+  true
+);
+```
+
+Enquanto nao houver nenhuma linha ativa, o sistema usa automaticamente o fallback de regras.
+Nao ha quebra de comportamento existente.
+
+### Como aplicar a migration
+
+```bash
+python -m alembic upgrade 20260505_0015
+```
+
+Ou para subir ate o head:
+
+```bash
+python -m alembic upgrade head
+```
+
+### Como testar no Insomnia
+
+Header obrigatorio em todos os requests:
+
+```text
+Authorization: Bearer ia_live_SEU_TOKEN_AQUI
+```
+
+Resultado completo com explicacao:
+
+```text
+GET /api/v1/external/executions/{execution_id}/result
+```
+
+Resposta esperada:
+
+```json
+{
+  "execution_id": "...",
+  "status": "completed",
+  "data_analyzed": [...],
+  "result": [...],
+  "simple_explanation": {
+    "summary": "A automacao analisou o item informado.",
+    "reason": "O resultado foi marcado como analise pendente porque nao foram encontrados elementos suficientes para identificar um comando processual claro.",
+    "input_issue": "As informacoes analisadas nao trouxeram elementos suficientes para definir o encaminhamento com seguranca.",
+    "recommendation": "Para obter um resultado mais preciso, envie a descricao completa da publicacao e destaque o comando processual esperado quando ele existir."
+  }
+}
+```
+
+Apenas a explicacao:
+
+```text
+GET /api/v1/external/executions/{execution_id}/explanation
+```
+
+Execucao de teste validada:
+
+```text
+execution_id=e171ae17-8ce8-4fa4-b28d-85a006dbeb7b
+```
+
+### Seguranca garantida
+
+```text
+- Debug tecnico nunca chega ao Prompt 2: passa sempre pelo tradutor antes
+- O campo debug_download_url e sempre null nas respostas publicas
+- GET /executions/{id}/debug retorna 403 debug_access_denied para tokens externos
+- GET /executions/{id}/download-debug retorna 403 debug_access_denied para tokens externos
+- Arquivos do tipo debug sao filtrados da listagem padrao de arquivos
+- O Prompt 2 fica em tabela interna sem nenhum endpoint de leitura para tokens externos
+```
+
+### Comportamento em caso de falha do Prompt 2
+
+```text
+Se get_active_prompt() retornar None (nenhum prompt ativo):
+  -> usa explicacao por regras (fallback)
+
+Se a chamada de IA lancar excecao:
+  -> loga warning
+  -> usa explicacao por regras (fallback)
+
+Se a IA retornar resposta impossivel de parsear:
+  -> loga warning
+  -> usa explicacao por regras (fallback)
+
+Em nenhum caso o usuario recebe null no campo simple_explanation.
+```
+
+### Status
+
+```text
+Implementado.
+Migration criada: 20260505_0015_add_system_explanation_prompts.
+Nenhuma linha ativa na tabela ainda: fallback de regras em uso ate ativacao.
+Para ativar: rodar a migration e inserir prompt com is_active=true.
+```
+
+## Aplicacao das migrations e ativacao do Prompt 2 (2026-05-05)
+
+### Problema encontrado
+
+Ao tentar rodar a migration localmente pelo Windows:
+
+```text
+psycopg.OperationalError: failed to resolve host 'postgres': [Errno 11001] getaddrinfo failed
+```
+
+Causa: o Alembic leu a variavel `DB_HOST=postgres` do `.env`, que e o nome do servico Docker.
+Esse hostname so resolve dentro da rede Docker — nao no host Windows.
+
+### Solucao
+
+A migration deve ser rodada sempre dentro do container da API, onde `postgres` resolve corretamente.
+
+### Migrations aplicadas
+
+Comando executado:
+
+```bash
+docker exec nef-ia-api-oficial-api-1 python -m alembic upgrade 20260505_0015
+```
+
+Resultado:
+
+```text
+Running upgrade 20260323_0013 -> 20260505_0014, add execution explanations table
+Running upgrade 20260505_0014 -> 20260505_0015, add system explanation prompts table
+```
+
+Duas migrations foram aplicadas na mesma execucao pois `0014` tambem estava pendente.
+
+Estado final do banco:
+
+```text
+20260505_0015 (head)
+```
+
+### Banco de dados correto
+
+O nome do banco operacional da API e `nef_ia`, nao `nef-ia-api`.
+
+Bancos existentes no Postgres do Docker:
+
+```text
+nef_ia         <- banco da API FastAPI (operational)
+nef_ia_django  <- banco do Django
+postgres       <- banco padrao do Postgres
+```
+
+### Prompt 2 inserido e ativado
+
+Comando executado:
+
+```bash
+docker exec nef-ia-api-oficial-postgres-1 psql -U postgres -d nef_ia -c "INSERT ..."
+```
+
+Registro criado:
+
+```text
+id:         9802409e-cf70-4d15-b5a9-0748bcbe726a
+is_active:  true
+created_at: 2026-05-05 14:46:29 UTC
+```
+
+Texto do prompt inserido (resumo):
+
+```text
+Voce e um assistente juridico especializado em explicar resultados de analise
+de publicacoes processuais de forma simples e objetiva.
+
+Regras:
+- Linguagem simples, sem termos tecnicos
+- Nao mencionar erros ou falhas do sistema
+- Nao culpar a inteligencia artificial
+- Se pendente, explicar que depende das informacoes da publicacao
+- Se inconsistente, orientar a revisar a publicacao
+- Retornar JSON com: summary, reason, input_issue, recommendation
+```
+
+### Como atualizar o prompt no futuro
+
+Para trocar o texto do Prompt 2 sem deploy:
+
+```sql
+-- Desativar o atual
+UPDATE django_ai_system_explanation_prompts SET is_active = false;
+
+-- Inserir o novo
+INSERT INTO django_ai_system_explanation_prompts (id, prompt_text, is_active)
+VALUES (gen_random_uuid(), 'novo texto do prompt', true);
+```
+
+Executar dentro do container:
+
+```bash
+docker exec nef-ia-api-oficial-postgres-1 psql -U postgres -d nef_ia -c "..."
+```
+
+A mudanca entra em vigor imediatamente na proxima execucao, sem reiniciar a API.
+
+### Regra importante para migrations neste projeto
+
+Sempre rodar migrations dentro do container da API:
+
+```bash
+docker exec nef-ia-api-oficial-api-1 python -m alembic upgrade head
+```
+
+Nunca rodar pelo terminal do host Windows — o host nao resolve o hostname `postgres`.
+
+### Status atual
+
+```text
+Migration 20260505_0014: aplicada
+Migration 20260505_0015: aplicada
+Alembic head: 20260505_0015
+Prompt 2: ativo (id=9802409e-cf70-4d15-b5a9-0748bcbe726a)
+Sistema: gerando explicacao via IA nas proximas execucoes
+Fallback de regras: ativo automaticamente se a chamada de IA falhar
+```
